@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@layer base, starlight, theme, components, utilities;
+@import '@astrojs/starlight-tailwind';
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* Dark-first broadcast control room theme */
+:root {
+	--sl-color-accent-low: #082f49;
+	--sl-color-accent: #0284c7;
+	--sl-color-accent-high: #7dd3fc;
+	--sl-color-white: #f8fafc;
+	--sl-color-gray-1: #e2e8f0;
+	--sl-color-gray-2: #94a3b8;
+	--sl-color-gray-3: #64748b;
+	--sl-color-gray-4: #475569;
+	--sl-color-gray-5: #1e293b;
+	--sl-color-gray-6: #0f172a;
+	--sl-color-black: #020617;
+	--sl-font-system: 'Inter', system-ui, sans-serif;
+	--sl-font-system-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Override Starlight defaults for landing page */
+[data-has-hero] .page {
+	background: var(--sl-color-black);
+}

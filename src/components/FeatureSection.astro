@@ -1,0 +1,55 @@
+---
+const features = [
+  {
+    icon: '{}',
+    title: 'Pure Rust, Zero Dependencies',
+    description: 'The entire stack — SRT protocol, WebRTC (str0m), RTMP, FEC, encryption — is implemented in native Rust. No C/C++ libraries, no system dependencies, no OpenSSL.',
+  },
+  {
+    icon: '7x',
+    title: 'Seven Protocols, One Gateway',
+    description: 'SRT, RTP, UDP, RTMP/RTMPS, RTSP, HLS, and WebRTC (WHIP/WHEP). Each flow has one input fanning out to any number of outputs — independently and without cross-output interference.',
+  },
+  {
+    icon: 'FEC',
+    title: 'Broadcast Standards',
+    description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge, TR-101290 transport stream analysis, SMPTE RP 2129 trust boundary metrics, and VSF TR-07 JPEG XS awareness.',
+  },
+  {
+    icon: '\u2295',
+    title: 'End-to-End Encryption',
+    description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest.',
+  },
+  {
+    icon: 'IS',
+    title: 'NMOS Integration',
+    description: 'IS-04 Discovery & Registration and IS-05 Connection Management for seamless integration with existing broadcast control systems and NMOS registries.',
+  },
+  {
+    icon: 'AI',
+    title: 'AI-Assisted Configuration',
+    description: 'Built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows. Supports OpenAI, Anthropic, and Gemini providers.',
+  },
+];
+---
+
+<section id="features" class="py-24 lg:py-32">
+  <div class="mx-auto max-w-7xl px-6">
+    <div class="text-center">
+      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Built for Broadcast</h2>
+      <p class="mt-4 text-lg text-slate-400">Professional-grade features for mission-critical media transport.</p>
+    </div>
+
+    <div class="mt-16 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+      {features.map((f) => (
+        <div class="group rounded-xl border border-slate-800 bg-gradient-to-b from-slate-800/40 to-slate-900/20 p-6 transition hover:border-sky-800/40 hover:shadow-lg hover:shadow-sky-900/10">
+          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-950 text-sm font-bold text-sky-400 ring-1 ring-sky-800/40">
+            {f.icon}
+          </div>
+          <h3 class="mt-4 text-lg font-semibold text-white">{f.title}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-slate-400">{f.description}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

@@ -11,8 +11,8 @@ bilbycast-manager handles several categories of sensitive data:
 
 - **User passwords** -- hashed with Argon2id, never stored in plaintext
 - **JWT session tokens** -- signed with HMAC-SHA256 using `BILBYCAST_JWT_SECRET`
-- **Node secrets** -- encrypted at rest with AES-256-GCM using a key derived from `BILBYCAST_MASTER_KEY`
-- **AI API keys** -- encrypted at rest with AES-256-GCM (same derived key)
+- **Node secrets** -- encrypted at rest using envelope encryption (AES-256-GCM with per-secret DEKs wrapped by domain-specific KEKs derived from `BILBYCAST_MASTER_KEY`)
+- **AI API keys** -- encrypted at rest using envelope encryption (same scheme, separate domain key)
 - **Configuration** -- non-secret settings stored in plaintext TOML
 
 All cryptographic secrets are loaded from environment variables at startup. The server refuses to start if secrets are missing, empty, too short (< 16 characters), or contain known weak/default values.
@@ -28,7 +28,7 @@ Two secrets are **required** and must be set before starting the server:
 | Variable              | Purpose                                           |
 |-----------------------|---------------------------------------------------|
 | `BILBYCAST_JWT_SECRET`| HMAC key for signing/verifying JWT session tokens  |
-| `BILBYCAST_MASTER_KEY`| Passphrase for deriving the AES-256-GCM encryption key |
+| `BILBYCAST_MASTER_KEY`| Passphrase for deriving domain-specific encryption keys (envelope encryption) |
 
 Generate them with:
 
@@ -40,20 +40,33 @@ These must **never** appear in `config/default.toml` or be committed to version 
 
 ### Key Derivation
 
-The `BILBYCAST_MASTER_KEY` passphrase is run through HKDF-SHA256 to produce a 32-byte AES key:
+The `BILBYCAST_MASTER_KEY` passphrase is run through HKDF-SHA256 to produce domain-specific Key Encryption Keys (KEKs):
 
 1. **Extract**: `HMAC-SHA256(salt, passphrase)` where salt = `bilbycast-manager-master-key-v1`
-2. **Expand**: `HMAC-SHA256(PRK, "aes-256-gcm-encryption" || 0x01)`
+2. **Expand**: `HMAC-SHA256(PRK, domain_info || 0x01)` — one per domain
 
-This produces a uniformly distributed 256-bit key suitable for AES-256-GCM.
+Four domains are used for key separation: `kek:node-secret`, `kek:ai-key`, `kek:tunnel`, `hmac:registration-token`. A compromised key in one domain does not affect others.
 
-### Stored Secrets Encryption
+### Stored Secrets Encryption (Envelope Encryption)
 
-Node secrets and AI API keys are encrypted before being written to the SQLite database:
+All secrets are encrypted using **envelope encryption** before storage:
 
-- **Algorithm**: AES-256-GCM (authenticated encryption)
-- **Nonce**: 12 bytes, randomly generated per encryption operation
-- **Storage format**: Base64-encoded concatenation of `nonce (12 bytes) || ciphertext`
+1. A random 32-byte Data Encryption Key (DEK) is generated per encryption operation
+2. The plaintext is encrypted with the DEK using AES-256-GCM
+3. The DEK is wrapped (encrypted) with the domain-specific KEK using AES-256-GCM
+4. Both are stored together: `"v1:" + Base64(dek_nonce || encrypted_dek || data_nonce || ciphertext)`
+
+**Key versioning**: The `"v1:"` prefix identifies the envelope format. Legacy data (no prefix) from before envelope encryption is decrypted transparently for backward compatibility.
+
+### Master Key Rotation
+
+The master encryption key can be rotated via the CLI without data loss:
+
+```bash
+BILBYCAST_NEW_MASTER_KEY=$(openssl rand -hex 32) bilbycast-manager rotate-master-key
+```
+
+This re-encrypts all secrets in the database under the new key in a single atomic transaction. The server must be stopped during rotation. After rotation, update `BILBYCAST_MASTER_KEY` to the new value and restart.
 
 ### .env File Permissions
 
@@ -178,7 +191,7 @@ Failed authentication attempts are tracked per identifier (node_id or token pref
 
 ### Node Secrets at Rest
 
-Node secrets are encrypted with AES-256-GCM before storage in the database. The encryption key is derived from `BILBYCAST_MASTER_KEY` via HKDF-SHA256 (see above).
+Node secrets are encrypted using envelope encryption (random DEK wrapped with the `node-secret` domain KEK) before storage in the database. See "Stored Secrets Encryption" above for details.
 
 ---
 
@@ -329,7 +342,7 @@ Tunnel management endpoints enforce role-based access:
 
 ### Tunnel End-to-End Encryption
 
-Tunnel data is encrypted between edge nodes using ChaCha20-Poly1305 (AEAD) with a 32-byte shared key. The manager generates a random `tunnel_encryption_key` per tunnel, encrypts it at rest with AES-256-GCM (same master key as node secrets), and pushes it to both edge nodes. The relay server is stateless and has no access to encryption keys -- it forwards opaque encrypted traffic by tunnel UUID. Even if an attacker connects to the relay and guesses a tunnel UUID, they cannot decrypt traffic or inject valid packets (AEAD authentication tag verification will fail).
+Tunnel data is encrypted between edge nodes using ChaCha20-Poly1305 (AEAD) with a 32-byte shared key. The manager generates a random `tunnel_encryption_key` per tunnel, encrypts it at rest using envelope encryption (tunnel domain KEK), and pushes it to both edge nodes. The relay server is stateless and has no access to encryption keys -- it forwards opaque encrypted traffic by tunnel UUID. Even if an attacker connects to the relay and guesses a tunnel UUID, they cannot decrypt traffic or inject valid packets (AEAD authentication tag verification will fail).
 
 ### Node API Data Protection
 
@@ -341,7 +354,7 @@ The `registration_token` field is excluded from all node API responses to preven
 
 AI provider API keys (OpenAI, Anthropic, etc.) are:
 
-- Encrypted with AES-256-GCM before storage in the database
+- Encrypted using envelope encryption (AI key domain KEK) before storage in the database
 - Displayed as masked values (asterisks) in the UI
 - Decrypted only when needed to make API calls to the provider
 
@@ -369,7 +382,7 @@ The following security features are not currently present:
 
 3. **Use a reverse proxy** -- place the server behind nginx or similar for additional protection (request size limits, IP filtering).
 
-4. **Rotate secrets periodically** -- generate new `BILBYCAST_JWT_SECRET` and `BILBYCAST_MASTER_KEY` values. Rotating `JWT_SECRET` invalidates all active sessions. Rotating `MASTER_KEY` requires re-encrypting stored node secrets and API keys.
+4. **Rotate secrets periodically** -- generate new `BILBYCAST_JWT_SECRET` and `BILBYCAST_MASTER_KEY` values. Rotating `JWT_SECRET` invalidates all active sessions. Rotating `MASTER_KEY` is done via `bilbycast-manager rotate-master-key` (set `BILBYCAST_NEW_MASTER_KEY` in the environment, run the command, then update `BILBYCAST_MASTER_KEY` to the new value). This re-encrypts all stored secrets atomically.
 
 5. **Back up the database** -- the SQLite database contains encrypted secrets, user accounts, and event history.
 

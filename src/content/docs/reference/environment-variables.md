@@ -10,7 +10,8 @@ sidebar:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `BILBYCAST_JWT_SECRET` | Yes | 64-char hex string (32 bytes) for JWT signing |
-| `BILBYCAST_MASTER_KEY` | Yes | 64-char hex string (32 bytes) for AES-256-GCM encryption at rest |
+| `BILBYCAST_MASTER_KEY` | Yes | 64-char hex string (32 bytes) for envelope encryption at rest (derives per-domain KEKs via HKDF) |
+| `BILBYCAST_NEW_MASTER_KEY` | No | New master key for `rotate-master-key` CLI command (rotation only) |
 | `BILBYCAST_TLS_CERT` | Conditional | TLS certificate PEM path (file-based TLS mode) |
 | `BILBYCAST_TLS_KEY` | Conditional | TLS private key PEM path (file-based TLS mode) |
 | `BILBYCAST_TLS_MODE` | No | `"direct"` (default) or `"behind_proxy"` |

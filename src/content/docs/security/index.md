@@ -112,9 +112,13 @@ All sensitive data is encrypted before storage using **AES-256-GCM**:
 | AI API keys | `api_key_enc` | AES-256-GCM |
 | Registration tokens | `registration_token` | HMAC-SHA256 hash (one-way) |
 
-**Key derivation**: HKDF-SHA256 from `BILBYCAST_MASTER_KEY` with salt `"bilbycast-manager-master-key-v1"`. The master key must be a 64-character hex string (32 bytes). Weak values are rejected at startup.
+**Envelope encryption**: Each secret is encrypted with a random 32-byte Data Encryption Key (DEK) using AES-256-GCM. The DEK is then wrapped with a domain-specific Key Encryption Key (KEK), also via AES-256-GCM. This limits the blast radius if any single key is compromised.
 
-**Nonce management**: 12 random bytes per encryption operation, prepended to ciphertext.
+**Domain separation**: KEKs are derived via HKDF-SHA256 from `BILBYCAST_MASTER_KEY` (salt: `"bilbycast-manager-master-key-v1"`) with domain-specific info strings: `kek:node-secret`, `kek:ai-key`, `kek:tunnel`, `hmac:registration-token`. A compromised key in one domain does not affect others.
+
+**Key versioning**: Ciphertext is prefixed with `"v1:"` to identify the envelope format. Legacy blobs (no prefix) from pre-envelope versions are decrypted transparently using an undifferentiated legacy key.
+
+**Storage format**: `"v1:" + Base64(dek_nonce[12] || encrypted_dek[48] || data_nonce[12] || ciphertext)`. The master key must be a 64-character hex string (32 bytes). Weak values are rejected at startup.
 
 ### Edge Node Secrets
 
@@ -161,6 +165,8 @@ Direct mode tunnels (edge-to-edge, no relay) use a per-tunnel PSK (pre-shared ke
 
 ## Secret Rotation
 
+### Node Secret Rotation
+
 Node authentication secrets can be rotated via the manager API:
 
 ```
@@ -176,6 +182,25 @@ POST /api/v1/nodes/{id}/rotate-secret
 6. Old secret is immediately invalidated
 
 **Requirements**: The node must have an active WebSocket connection. The endpoint requires Admin role.
+
+### Master Key Rotation
+
+The master encryption key can be rotated using the CLI:
+
+```bash
+BILBYCAST_NEW_MASTER_KEY=$(openssl rand -hex 32) bilbycast-manager rotate-master-key
+```
+
+**Flow**:
+1. Stop the manager server
+2. Set `BILBYCAST_NEW_MASTER_KEY` in the environment
+3. Run `bilbycast-manager rotate-master-key`
+4. All encrypted secrets (node secrets, AI API keys, tunnel keys/PSKs/bind secrets) are decrypted with the old key and re-encrypted with the new key in a single atomic SQLite transaction
+5. Update `BILBYCAST_MASTER_KEY` to the new value in your `.env` file
+6. Remove `BILBYCAST_NEW_MASTER_KEY` from the environment
+7. Restart the server
+
+**Note**: Pending registration tokens (HMAC hashes) are invalidated during rotation because the HMAC key changes. Regenerate tokens for any pending nodes after rotation.
 
 ## Access Control
 

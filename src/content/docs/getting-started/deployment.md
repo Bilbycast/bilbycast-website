@@ -7,7 +7,77 @@ sidebar:
 
 This guide covers deploying the full bilbycast stack: manager, relay, and edge nodes.
 
-## Build Order
+## Download Pre-built Binaries
+
+Pre-built Linux binaries are available for x86_64 and aarch64 (ARM64). These commands always download the latest release.
+
+### Edge (Media Gateway)
+
+```bash
+curl -fsSL -o bilbycast-edge \
+  https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux
+chmod +x bilbycast-edge
+```
+
+Verify checksum:
+```bash
+curl -fsSL -o bilbycast-edge.sha256 \
+  https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux.sha256
+sha256sum -c bilbycast-edge.sha256
+```
+
+### Relay (NAT Traversal)
+
+```bash
+curl -fsSL -o bilbycast-relay \
+  https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux
+chmod +x bilbycast-relay
+```
+
+Verify checksum:
+```bash
+curl -fsSL -o bilbycast-relay.sha256 \
+  https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux.sha256
+sha256sum -c bilbycast-relay.sha256
+```
+
+### Manager (Control Plane)
+
+The manager is distributed as a tarball containing the binary, database migrations, and default configuration. Currently available for x86_64 only.
+
+```bash
+curl -fsSL -o bilbycast-manager.tar.gz \
+  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
+tar xzf bilbycast-manager.tar.gz
+```
+
+Verify checksum:
+```bash
+curl -fsSL -o bilbycast-manager.tar.gz.sha256 \
+  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
+sha256sum -c bilbycast-manager.tar.gz.sha256
+```
+
+### Appear X API Gateway
+
+```bash
+curl -fsSL -o bilbycast-appear-x-api-gateway \
+  https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/bilbycast-appear-x-api-gateway-$(uname -m)-linux
+chmod +x bilbycast-appear-x-api-gateway
+```
+
+Verify checksum:
+```bash
+curl -fsSL -o bilbycast-appear-x-api-gateway.sha256 \
+  https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/bilbycast-appear-x-api-gateway-$(uname -m)-linux.sha256
+sha256sum -c bilbycast-appear-x-api-gateway.sha256
+```
+
+:::note
+`$(uname -m)` automatically detects your architecture (`x86_64` or `aarch64`). All binaries are statically linked (musl) with no runtime dependencies.
+:::
+
+## Build from Source (Alternative)
 
 Build in this order — bilbycast-srt must be present before bilbycast-edge can compile:
 

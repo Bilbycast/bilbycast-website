@@ -1403,3 +1403,49 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | GET | `/x-nmos/connection/v1.1/single/receivers/{id}/active` | No | - | NMOS IS-05: Get active params |
 | GET | `/x-nmos/connection/v1.1/single/receivers/{id}/transporttype` | No | - | NMOS IS-05: Get transport type |
 | GET | `/x-nmos/connection/v1.1/single/receivers/{id}/constraints` | No | - | NMOS IS-05: Get constraints |
+| GET | `/x-nmos/channelmapping/v1.0/` | No | - | NMOS IS-08: Channel mapping root |
+| GET | `/x-nmos/channelmapping/v1.0/io` | No | - | NMOS IS-08: List inputs/outputs (ST 2110-30/-31 audio) |
+| GET | `/x-nmos/channelmapping/v1.0/map/active` | No | - | NMOS IS-08: Active channel map (persisted to disk) |
+| GET | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Staged channel map (in-memory) |
+| POST | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Stage a new channel map (1024 outputs × 64 ch limit) |
+| POST | `/x-nmos/channelmapping/v1.0/map/activate` | No | - | NMOS IS-08: Activate the staged map and persist |
+
+## NMOS IS-04 / IS-05 / IS-08 (Phase 1)
+
+### Multi-essence resources
+
+ST 2110-30/-31 inputs are reported as `urn:x-nmos:format:audio` sources/flows/receivers; ST 2110-40 inputs are reported as `urn:x-nmos:format:data`. Older mux flows continue to report `urn:x-nmos:format:mux` so existing NMOS controllers see no behavioural change.
+
+### BCP-004 receiver capabilities
+
+Audio receivers (`InputConfig::St2110_30` / `St2110_31`) include a `caps` block with a `media_types` list and a `constraint_sets` list keyed by `urn:x-nmos:cap:format:*` URNs:
+
+```json
+{
+  "caps": {
+    "media_types": ["audio/L16", "audio/L24"],
+    "constraint_sets": [{
+      "urn:x-nmos:cap:format:media_type": { "enum": ["audio/L16", "audio/L24"] },
+      "urn:x-nmos:cap:format:sample_rate": { "enum": [{ "numerator": 48000 }] },
+      "urn:x-nmos:cap:format:channel_count": { "enum": [2] },
+      "urn:x-nmos:cap:format:sample_depth": { "enum": [24] }
+    }]
+  }
+}
+```
+
+ST 2110-40 receivers advertise `media_types: ["video/smpte291"]`. Non-ST-2110 receivers continue to advertise the historical `video/MP2T` shape.
+
+### PTP clock advertisement
+
+When any flow on the node sets `clock_domain`, the IS-04 `/self` resource includes a single PTP clock entry (`name: "clk0"`, `ref_type: "ptp"`, `version: "IEEE1588-2008"`). Sources whose flow has `clock_domain` set reference this clock by name. The `locked` field is reported as `false` until live PTP integration lands; `FlowStats.ptp_state.lock_state` carries the real view.
+
+### IS-08 audio channel mapping
+
+The IS-08 endpoints expose every ST 2110-30/-31 audio input and output under `/io`. The active map is persisted to `<config_dir>/nmos_channel_map.json` (next to `config.json`) and reloaded on startup. The endpoints support the standard PUT/POST + activate workflow. Bilbycast does not currently re-route channels internally — the map is a passthrough — but the endpoints exist so external NMOS controllers can stage and activate maps.
+
+Bounds: at most 1024 outputs per map, at most 64 channels per output. A controller exceeding these limits receives a `413 PAYLOAD_TOO_LARGE` response.
+
+### mDNS-SD discovery
+
+On startup the edge registers `_nmos-node._tcp.local.` via the pure-Rust `mdns-sd` crate. Failures (no multicast on the selected interface, daemon errors) are logged once and swallowed; flow startup is never blocked.

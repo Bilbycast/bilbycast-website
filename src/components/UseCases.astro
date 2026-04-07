@@ -12,13 +12,23 @@ const useCases = [
   },
   {
     title: 'Facility Integration',
-    description: 'Bridge compressed media flows into existing broadcast facilities. NMOS IS-04/IS-05 integration lets your control systems discover and manage Bilbycast edge nodes alongside other IP infrastructure.',
+    description: 'Bridge compressed media flows into existing broadcast facilities. NMOS IS-04/IS-05/IS-08 and BCP-004 receiver capability sets let your control systems discover and manage Bilbycast edge nodes alongside other IP infrastructure.',
     icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17l-1.42-.88a6 6 0 119.8-7.6M20.47 13.73l1.42.88a6 6 0 01-9.8 7.6M6.42 8.83a6 6 0 01.88-1.42m7.29 7.29a6 6 0 01-.88 1.42" /></svg>`,
   },
   {
     title: 'Cloud Distribution',
     description: 'Fan out to RTMP (YouTube/Twitch), HLS, and WebRTC (WHEP) simultaneously from a single input. Each output runs independently with no cross-output interference.',
     icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" /></svg>`,
+  },
+  {
+    title: 'Audio Gateway',
+    description: 'Bridge SMPTE ST 2110-30/-31 broadcast audio to AES67, SRT, or generic IP transports. Hot-reload IS-08 channel maps without restarting flows. Ship 48 kHz LPCM as SMPTE 302M-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware decoders.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>`,
+  },
+  {
+    title: 'Multi-Vendor Broadcast Plant',
+    description: 'Manage Bilbycast edges, third-party encoders, and Appear X gateways from a single UI. The driver-aware action system lets the AI assistant create flows on any registered device using the same interface.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>`,
   },
 ];
 ---

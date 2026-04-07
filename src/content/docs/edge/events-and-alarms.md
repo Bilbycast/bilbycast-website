@@ -245,7 +245,22 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 | `tunnel` | 8 | Tunnel connection state |
 | `manager` | 3 | Manager WebSocket connection |
 | `config` | 2 | Configuration changes |
+| `ptp` | — | SMPTE ST 2110 PTP slave clock state changes (Phase 1) |
+| `network_leg` | — | SMPTE 2022-7 Red/Blue per-leg loss / recovery (Phase 1) |
+| `nmos` | — | NMOS IS-04 / IS-05 / IS-08 controller activity (Phase 1) |
+| `scte104` | — | SCTE-104 splice events parsed from ST 2110-40 ANC (Phase 1) |
 | **Total** | **51** | |
+
+### Phase 1 ST 2110 categories
+
+| Category | Typical severity | Triggers |
+|----------|------------------|----------|
+| `ptp` | info / warning / critical | `ptp_lock_acquired`, `ptp_lock_lost`, `ptp_holdover`, `ptp_unavailable` |
+| `network_leg` | warning / critical | `red_leg_lost`, `blue_leg_lost`, `leg_recovered`, `both_legs_lost` |
+| `nmos` | info | NMOS controller IS-05 activations, IS-08 channel-map changes |
+| `scte104` | info | Cue-out / cue-in / cancel splice messages parsed from ANC |
+
+The four categories are declared up-front in `src/manager/events.rs` so the manager UI's category icons and filter dropdown render them as soon as the first event arrives. Producers wire them in step 9 of the Phase 1 plan.
 
 ### By Severity
 

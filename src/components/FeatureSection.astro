@@ -6,9 +6,9 @@ const features = [
     description: 'Forward any TCP or UDP traffic through encrypted QUIC tunnels between edge nodes. Monitor devices, control equipment, or extend your network — all managed from the bilbycast-manager UI.',
   },
   {
-    icon: '7x',
-    title: 'Seven Protocols, One Gateway',
-    description: 'SRT, RTP, UDP, RTMP/RTMPS, RTSP, HLS, and WebRTC (WHIP/WHEP). Each flow has one input fanning out to any number of outputs — independently and without cross-output interference.',
+    icon: '11+',
+    title: 'Eleven Protocols, One Gateway',
+    description: 'SRT, RTP, UDP, RTMP/RTMPS, RTSP, HLS, WebRTC (WHIP/WHEP), and SMPTE ST 2110-30/-31/-40. Each flow has one input fanning out to any number of outputs — independently and without cross-output interference.',
   },
   {
     icon: 'FEC',
@@ -21,14 +21,29 @@ const features = [
     description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Built entirely in Rust for memory safety, small binaries, and simple deployment — no C/C++ dependencies or OpenSSL.',
   },
   {
-    icon: 'IS',
+    icon: '\u266B',
+    title: 'Audio Gateway',
+    description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (pure-Rust rubato). IS-08 channel maps hot-reload without restarting flows. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware.',
+  },
+  {
+    icon: 'NMOS',
     title: 'NMOS Integration',
-    description: 'IS-04 Discovery & Registration and IS-05 Connection Management for seamless integration with existing broadcast control systems and NMOS registries.',
+    description: 'IS-04 Discovery & Registration, IS-05 Connection Management, IS-08 Audio Channel Mapping, and BCP-004 receiver capability sets. Best-effort PTP integration via external ptp4l. Seamless drop-in to existing NMOS facilities.',
+  },
+  {
+    icon: 'MPTS',
+    title: 'MPTS / SPTS Handling',
+    description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, and HLS. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow.',
   },
   {
     icon: 'AI',
     title: 'AI-Assisted Configuration',
-    description: 'Built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows. Supports OpenAI, Anthropic, and Gemini providers.',
+    description: 'Built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows via a driver-aware action system. Supports OpenAI, Anthropic, and Gemini providers — credentials stripped before any LLM context.',
+  },
+  {
+    icon: 'EXT',
+    title: 'Extensible Device Drivers',
+    description: 'Bring third-party broadcast devices into the bilbycast manager via lightweight API gateway sidecars. Reference implementation for Appear X encoder/gateway platforms — same WebSocket protocol, same UI, same AI actions.',
   },
 ];
 ---

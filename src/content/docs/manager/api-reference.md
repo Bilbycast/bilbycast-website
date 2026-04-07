@@ -48,6 +48,40 @@ State-changing requests (POST, PUT, PATCH, DELETE) to authenticated endpoints al
 
 ---
 
+## SMPTE ST 2110 (Phase 1)
+
+All endpoints require an authenticated session and are gated per-node by the `HealthPayload.capabilities` advertisement — older edges that don't ship ST 2110 simply leave the field absent and the manager UI hides the controls. Mutating endpoints require the `Operator` role plus `auth.can_access_node()` and CSRF.
+
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET    | `/api/v1/nodes/{id}/ptp` | any auth | Cached PTP state from `ptp_state_cache`. Returns `{"lock_state":"unavailable"}` when no row exists. |
+| GET    | `/api/v1/nodes/{id}/nmos` | any auth | Live NMOS state via WS `get_nmos_state` command. |
+| GET    | `/api/v1/nodes/{id}/flows/{flow_id}/sdp/{essence}` | any auth | SDP document for one essence (`audio`, `video`, `anc`) of a ST 2110 flow. |
+| GET    | `/api/v1/nodes/{id}/flows/{flow_id}/channel-map` | any auth | IS-08 active audio channel map. |
+| PUT    | `/api/v1/nodes/{id}/flows/{flow_id}/channel-map` | Operator | Stage + activate a new channel map (50 KB payload limit). |
+| GET    | `/api/v1/nodes/{id}/flow-groups` | any auth | List flow groups (essence bundles) tracked for the node. |
+| POST   | `/api/v1/nodes/{id}/flow-groups` | Operator | Create a flow group (50 KB limit, push status tracked). |
+| PUT    | `/api/v1/nodes/{id}/flow-groups/{gid}` | Operator | Update an existing flow group. |
+| DELETE | `/api/v1/nodes/{id}/flow-groups/{gid}` | Operator | Delete a flow group. |
+
+### Error responses
+
+| Status | When |
+|--------|------|
+| 400 | Validation failure (missing `flow_group.id`, oversized `essence`/`flow_id`) |
+| 401 | No valid session |
+| 403 | Insufficient role, missing CSRF on a mutating call, or no node access |
+| 413 | Payload exceeds size limit |
+| 422 | Edge rejected the underlying WebSocket command |
+| 502 | Node not currently connected |
+| 504 | WebSocket command timed out |
+
+All mutating endpoints fire-and-forget audit log via `db::audit::log_audit()` matching the existing pattern. Stats ingestion in `ws/node_hub.rs` writes inbound `FlowStats.ptp_state` to the `ptp_state_cache` table on receipt so the PTP card renders immediately on page load.
+
+See `bilbycast-manager/docs/st2110.md` for the full operator guide.
+
+---
+
 ## Events
 
 | Method | Path                        | Description                        |
@@ -124,7 +158,7 @@ Message types from nodes: `stats`, `health`, `event`, `config_response`, `comman
 
 Message types from manager: `ping`, `command`, `register_ack`, `auth_ok`, `auth_error`.
 
-**Edge commands** (via `POST /api/v1/nodes/{id}/command`): `get_config`, `update_config`, `create_flow`, `update_flow`, `delete_flow`, `start_flow`, `stop_flow`, `restart_flow`, `add_output`, `remove_output`.
+**Edge commands** (via `POST /api/v1/nodes/{id}/command`): `get_config`, `update_config`, `create_flow`, `update_flow`, `delete_flow`, `start_flow`, `stop_flow`, `restart_flow`, `add_output`, `remove_output`. **SMPTE ST 2110 (Phase 1):** `get_nmos_state`, `get_ptp_state`, `get_sdp_document`, `add_flow_group`, `update_flow_group`, `remove_flow_group`, `add_essence_flow`, `remove_essence_flow`, `get_audio_channel_map`, `set_audio_channel_map`. The new variants are dispatched via the existing string-based match — older edges fall through to the catch-all `Unknown command` arm and the manager surfaces the failure as a 422. NO `WS_PROTOCOL_VERSION` bump.
 
 **Relay commands** (via `POST /api/v1/nodes/{id}/command`): `get_config`, `disconnect_edge` (requires `edge_id`), `close_tunnel` (requires `tunnel_id`), `list_tunnels`, `list_edges`, `authorize_tunnel` (requires `tunnel_id`, `ingress_token`, `egress_token` — pre-authorizes HMAC-SHA256 bind tokens for a tunnel), `revoke_tunnel` (requires `tunnel_id` — removes bind authorization).
 

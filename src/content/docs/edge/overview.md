@@ -18,6 +18,9 @@ bilbycast-edge is a media transport gateway that bridges multiple protocols for 
 | **RTSP** | Yes | — | Pull H.264/H.265 from IP cameras; TCP/UDP transport |
 | **HLS** | — | Yes | Segment-based ingest; HEVC/HDR support |
 | **WebRTC** | Yes | Yes | WHIP/WHEP; H.264 + Opus; browser compatible |
+| **SMPTE ST 2110-30** | Yes | Yes | Linear PCM (L16/L24), 48k/96k, 1–16 channels, PM/AM packet times, SMPTE 2022-7 Red/Blue |
+| **SMPTE ST 2110-31** | Yes | Yes | AES3 transparent (Dolby E, etc.) — same wire framing as -30, preserves user/status/parity bits |
+| **SMPTE ST 2110-40** | Yes | Yes | RFC 8331 ancillary data (SCTE-104, SMPTE 12M timecode, CEA-608/708 captions) |
 
 All protocol implementations are native Rust — no C library dependencies.
 
@@ -25,12 +28,15 @@ All protocol implementations are native Rust — no C library dependencies.
 
 - **SMPTE 2022-1 FEC** — Forward Error Correction for RTP and SRT
 - **SMPTE 2022-7 hitless redundancy** — Dual-leg input merging for seamless failover
-- **NMOS IS-04/IS-05** — Broadcast control system integration
+- **SMPTE ST 2110 (Phase 1)** — Broadcast-audio essences (-30 PCM, -31 AES3) and broadcast-data ancillary (-40), with PTP integration via external `ptp4l` and SMPTE 2022-7 Red/Blue dual-network support
+- **NMOS IS-04 / IS-05 / IS-08 + BCP-004** — Broadcast control system integration with multi-essence audio/data resources, audio channel mapping, and BCP-004 receiver capability constraint sets
+- **mDNS-SD discovery** — Best-effort `_nmos-node._tcp` registration for automatic NMOS controller discovery
 - **TR-101290 analysis** — Transport stream quality monitoring
 - **RP 2129 trust boundary** — Inter-arrival time, PDV, source filtering metrics
 - **WebRTC via str0m** — Pure Rust WebRTC stack, WHIP/WHEP support
-- **Media analysis** — Codec, resolution, frame rate, audio format detection
-- **Thumbnail generation** — Optional per-flow JPEG thumbnails (requires ffmpeg)
+- **Media analysis** — Per-program PID breakdown for MPTS inputs (codec, resolution, frame rate, audio format) surfaced in the manager UI
+- **MPTS ↔ SPTS** — Full multi-program transport stream passthrough on UDP/RTP/SRT/HLS, with per-output `program_number` down-selection to extract any single program as a rewritten SPTS. RTMP/WebRTC outputs and thumbnails lock onto a chosen program deterministically
+- **Thumbnail generation** — Optional per-flow JPEG thumbnails (requires ffmpeg). Flow-level `thumbnail_program_number` picks which MPTS program the preview shows
 
 ## Deployment Options
 

@@ -56,6 +56,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - SMPTE 2022-1 FEC encode
   - DSCP/QoS marking (default: 46 Expedited Forwarding)
   - Multicast with interface selection
+  - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
 
 ### UDP (Raw MPEG-TS)
 - **Direction:** Output
@@ -66,6 +67,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - TS sync detection and packet alignment
   - DSCP/QoS marking
   - Compatible with ffplay, VLC, multicast distribution
+  - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
 
 ### SRT (Secure Reliable Transport)
 - **Direction:** Output
@@ -79,6 +81,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - SMPTE 2022-7 hitless redundancy duplication (dual-leg output)
   - Non-blocking mpsc bridge prevents TCP backpressure from affecting other outputs
   - Automatic reconnection
+  - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
 
 ### RTMP/RTMPS
 - **Direction:** Output only (publish)
@@ -90,10 +93,12 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Automatic AVC sequence header (SPS/PPS) and AAC config generation
   - Reconnection with configurable delay and max attempts
   - Non-blocking: uses mpsc bridge pattern, never blocks other outputs
+  - **MPTS-aware:** on an MPTS input, selects program by `program_number` or (default) locks onto the lowest-numbered program in the PAT
 - **Limitations:**
   - Output only. RTMP input (ingest from OBS etc.) is not implemented.
   - Only H.264 video and AAC audio. HEVC/VP9 not supported via RTMP.
   - RTMPS (TLS) uses the `tls` feature (enabled by default).
+  - Single-program by spec — only one program can be published per output.
 
 ### HLS Ingest
 - **Direction:** Output only
@@ -105,6 +110,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Configurable segment duration (0.5-10 seconds)
   - Optional Bearer token authentication
   - Async HTTP upload, non-blocking to other outputs
+  - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number` — filtered segments carry a rewritten single-program TS
 - **Limitations:**
   - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
   - Uses a minimal built-in HTTP client (not a full HTTP/2 client).
@@ -124,6 +130,35 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Input only (no RTSP server mode)
   - AAC audio is passed through as ADTS in MPEG-TS
 
+### SMPTE ST 2110-30 / -31 — Broadcast Audio
+- **Direction:** Input and Output
+- **Transport:** RTP over UDP, unicast or multicast (typically multicast)
+- **Payloads:**
+  - **ST 2110-30** — Linear PCM (L16, L24) per AES67 / RFC 3190
+  - **ST 2110-31** — AES3 transparent (Dolby E, Dolby Digital, AAC, etc.) — same wire framing as -30, preserves user bits / channel status / validity / parity bits
+- **Sample rates:** 48 000 Hz, 96 000 Hz
+- **Bit depths:** 16, 24
+- **Channel counts:** 1, 2, 4, 8, 16
+- **Packet times:** PM (1 ms, default) and AM (125 µs)
+- **Features:**
+  - Hand-rolled RFC 3190 packetizer / depacketizer with full L16/L24 round-trip tests
+  - SMPTE 2022-7 Red/Blue dual-network bind via `redundancy` block — opens both legs and dedupes via the existing hitless merger
+  - Optional source-IP allow-list (single-leg only)
+  - DSCP/QoS marking on egress (default: 46 EF)
+  - PTP integration via external `ptp4l` management socket — best-effort, falls back to `unavailable` when the daemon is missing
+  - Per-flow `clock_domain` field (0–127) wires the PTP state into the stats snapshot
+- **NMOS:** Sources/flows/senders/receivers reported with `urn:x-nmos:format:audio`. Receiver caps include BCP-004 constraint sets for media_type, sample_rate, channel_count, and sample_depth. Audio inputs and outputs are exposed under IS-08 `/io` for channel mapping.
+
+### SMPTE ST 2110-40 — Ancillary Data
+- **Direction:** Input and Output
+- **Transport:** RTP over UDP per RFC 8331
+- **Features:**
+  - Hand-rolled bit reader/writer for the RFC 8331 frame format
+  - SMPTE 2022-7 Red/Blue dual-network support
+  - Built-in parsers for SCTE-104 splice events, SMPTE 12M-2 ATC timecode, and CEA-608/708 caption summaries
+  - DSCP/QoS marking on egress
+- **NMOS:** Resources reported with `urn:x-nmos:format:data`. Receivers advertise `media_types: ["video/smpte291"]`.
+
 ### WebRTC (WHIP/WHEP)
 - **Direction:** Input and Output
 - **Transport:** UDP (ICE-lite/DTLS/SRTP) via `str0m` pure-Rust WebRTC stack
@@ -135,9 +170,18 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - **WHEP input** (client): Pull media from external WHEP servers
 - **Video:** H.264 only (RFC 6184 RTP packetization/depacketization)
 - **Audio:** Opus passthrough. Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RTP/UDP outputs. AAC sources going to WebRTC output automatically fall back to video-only (no C-library transcoding).
+- **MPTS-aware outputs:** on an MPTS input, WHIP/WHEP outputs select program by `program_number` or (default) lock onto the lowest-numbered program in the PAT. Single-program by spec.
 - **Interoperability:** Compatible with OBS, browsers, Cloudflare, LiveKit, and other standard WHIP/WHEP implementations.
 - **Security:** Bearer token authentication on WHIP/WHEP endpoints, DTLS/SRTP encryption, ICE-lite for server modes.
 - **NAT traversal:** Configurable `public_ip` and optional `stun_server` for ICE candidate advertisement.
+
+## MPEG-TS Program Handling
+
+### MPTS / SPTS Support
+- **All TS-carrying inputs** (UDP, RTP, SRT) accept both **SPTS** (single-program) and **MPTS** (multi-program) transport streams. Non-TS inputs (RTMP, RTSP, WebRTC) synthesise a single-program TS internally.
+- **TS-native outputs** (UDP, RTP, SRT, HLS) pass the full MPTS through by default. Each output may opt into a per-program filter via `program_number`, which rewrites the PAT to a single-program form and drops packets for every PID that isn't part of the selected program. FEC (2022-1) and hitless redundancy (2022-7) protect the filtered bytes, so receivers see a valid SPTS.
+- **Re-muxing outputs** (RTMP, WebRTC) and the **thumbnail generator** honour the same `program_number` field to select which program's elementary streams to extract. The default (unset) locks onto the lowest `program_number` in the PAT for deterministic behaviour.
+- **Per-output scope:** one flow can fan an MPTS out to multiple outputs, each locked onto a different program, while a sibling output forwards the full MPTS unchanged.
 
 ## Monitoring and Analysis
 
@@ -145,6 +189,12 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 - Priority 1: Sync byte, continuity counter, PAT/PMT presence
 - Priority 2: TEI, PCR discontinuity, PCR accuracy
 - Runs as independent broadcast subscriber (zero jitter impact)
+
+### MPEG-TS Program Analysis
+- Parses PAT and every PMT from the input broadcast channel
+- Reports **per-program stream breakdown** in the manager UI: each program's video PIDs (codec, resolution, frame rate, profile, level) and audio PIDs (codec, sample rate, channels, language)
+- Handles PAT/PMT version bumps and programs coming/going mid-stream
+- `program_count` in stats reflects the number of programs advertised in the PAT
 
 ### VSF TR-07 Awareness
 - Auto-detects JPEG XS (stream type 0x61) in PMT

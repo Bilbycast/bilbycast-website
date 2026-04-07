@@ -34,6 +34,7 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [RTMP Output](#rtmp-output)
   - [HLS Output](#hls-output)
   - [WebRTC Output](#webrtc-output)
+- [MPTS → SPTS filtering](#mpts--spts-filtering)
 - [SMPTE 2022-1 FEC Configuration](#smpte-2022-1-fec-configuration)
 - [SMPTE 2022-7 SRT Redundancy](#smpte-2022-7-srt-redundancy)
 - [SRT Connection Modes](#srt-connection-modes)
@@ -420,6 +421,7 @@ Each flow defines one input source fanning out to one or more output destination
 | `enabled` | boolean | No | `true` | Whether to auto-start this flow on startup or creation. |
 | `media_analysis` | boolean | No | `true` | Enable media content analysis (codec, resolution, frame rate detection). |
 | `thumbnail` | boolean | No | `true` | Enable thumbnail generation (requires ffmpeg). |
+| `thumbnail_program_number` | integer | No | `null` | When the input is an MPTS, render the thumbnail from this MPEG-TS program only. `null` lets ffmpeg pick the first program it finds. Must be `> 0` if set. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 | `bandwidth_limit` | object | No | `null` | Per-flow bandwidth monitoring (RP 2129). See [Bandwidth Limit](#bandwidth-limit). |
 | `input` | object | Yes | - | Input source configuration (RTP, UDP, SRT, RTMP, RTSP, WebRTC, or WHEP). |
 | `outputs` | array | Yes | - | Output destination configurations. Can be empty. Output IDs must be unique within the flow. |
@@ -674,11 +676,13 @@ Sends RTP-wrapped MPEG-TS packets to a unicast or multicast destination. Support
 | `interface_addr` | string | No | `null` | Network interface IP for multicast send. Must be same address family as `dest_addr`. |
 | `fec_encode` | object | No | `null` | SMPTE 2022-1 FEC encode parameters. See [FEC Configuration](#smpte-2022-1-fec-configuration). |
 | `dscp` | integer | No | `46` | DSCP value for QoS marking (RP 2129 C10). Range 0-63. Default 46 = Expedited Forwarding (RFC 4594). |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Applied before FEC, so the receiver's FEC protects the filtered SPTS. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 **Validation rules:**
 - `id` cannot be empty.
 - `dest_addr`, `bind_addr`, and `interface_addr` must all use the same address family.
 - `dscp` must be 0-63.
+- `program_number` must be `> 0` if set (program_number 0 is reserved for the NIT).
 
 ### UDP Output
 
@@ -703,11 +707,13 @@ Sends raw MPEG-TS over UDP without RTP headers. Datagrams are TS-aligned (7×188
 | `bind_addr` | string | No | `"0.0.0.0:0"` | Source bind address. Must be same address family as `dest_addr`. |
 | `interface_addr` | string | No | `null` | Network interface IP for multicast send. |
 | `dscp` | integer | No | `46` | DSCP value for QoS marking. Range 0-63. |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 **Validation rules:**
 - `id` cannot be empty.
 - `dest_addr` must be a valid socket address.
 - `dscp` must be 0-63.
+- `program_number` must be `> 0` if set.
 
 ### SRT Output
 
@@ -748,6 +754,7 @@ Sends RTP encapsulated in SRT.
 | `aes_key_len` | integer | No | `16` | AES key length: 16, 24, or 32. |
 | `crypto_mode` | string | No | `null` | Cipher mode: `"aes-ctr"` (default) or `"aes-gcm"`. |
 | `redundancy` | object | No | `null` | SMPTE 2022-7 redundancy for a second SRT output leg. |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Applied once and mirrored to both legs when 2022-7 is enabled. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 ### RTMP Output
 
@@ -774,6 +781,7 @@ Publishes to an RTMP/RTMPS server (e.g., Twitch, YouTube Live, Facebook Live). D
 | `stream_key` | string | Yes | - | Stream key for authentication with the RTMP server. Cannot be empty. |
 | `reconnect_delay_secs` | integer | No | `5` | Seconds to wait before reconnecting after a failure. Must be > 0. |
 | `max_reconnect_attempts` | integer | No | `null` (unlimited) | Maximum reconnection attempts. When `null`, reconnects indefinitely. |
+| `program_number` | integer | No | `null` | MPTS program selector. `null` = lock onto the lowest program_number in the PAT (deterministic default); `Some(N)` = extract elementary streams from program N only. RTMP is single-program by spec, so this only changes *which* program is published. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 **Limitations:**
 - Output only. RTMP input is not supported.
@@ -804,6 +812,7 @@ Segments MPEG-2 TS data and uploads via HTTP for HLS ingest (e.g., YouTube HLS).
 | `segment_duration_secs` | float | No | `2.0` | Target segment duration in seconds. Range: 0.5-10.0. |
 | `auth_token` | string | No | `null` | Bearer token sent with each HTTP upload request. |
 | `max_segments` | integer | No | `5` | Maximum segments in the rolling playlist. Range: 1-30. |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = each segment carries the full MPTS; `Some(N)` = each segment carries only program N as a rewritten single-program TS. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 **Limitations:**
 - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
@@ -851,8 +860,60 @@ Viewers POST an SDP offer to `/api/v1/flows/{flow_id}/whep` and receive an SDP a
 | `max_viewers` | integer | No | `10` | Max concurrent viewers (WHEP server mode only, 1-100). |
 | `public_ip` | string | No | `null` | Public IP for ICE candidates (NAT traversal). |
 | `video_only` | boolean | No | `false` | Only send video (audio omitted). AAC sources automatically fall back to video-only. |
+| `program_number` | integer | No | `null` | MPTS program selector. `null` = lock onto the lowest program_number in the PAT (deterministic default); `Some(N)` = extract elementary streams from program N only. WebRTC is single-program by spec, so this only changes *which* program is sent. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 **Audio:** Opus passthrough only. Opus flows natively on WebRTC paths. AAC sources fall back to video-only automatically (no C-library transcoding available).
+
+---
+
+## MPTS → SPTS filtering
+
+All outputs — and the thumbnail generator — accept an optional `program_number` selector for down-selecting an MPTS (Multi-Program Transport Stream) input to a single program. Whether the filter rewrites TS bytes or just picks which elementary streams to extract depends on the output type.
+
+### Behaviour matrix
+
+| Output | `program_number = null` (default) | `program_number = N` |
+|--------|-----------------------------------|----------------------|
+| **UDP / RTP / SRT / HLS** (TS-native) | full MPTS passthrough (current behaviour) | PAT rewritten to a single-program form; only program N's PMT, ES, and PCR PIDs survive. FEC (2022-1) and hitless redundancy (2022-7) operate on the filtered bytes. |
+| **RTMP / WebRTC** (re-muxing) | lock onto the lowest `program_number` in the PAT (deterministic — replaces the old "first PMT seen" race) | extract elementary streams from program N's PMT only |
+| **Thumbnail generator** (`thumbnail_program_number` on `FlowConfig`) | ffmpeg picks the first program it finds | TS is pre-filtered so ffmpeg only sees program N |
+
+### Rules
+
+- **`program_number` is per-output.** One flow can run three outputs in parallel — one forwarding full MPTS to an archive, one filtered to program 1, and another to program 2 — all sharing the same broadcast channel.
+- **`program_number = 0` is rejected** at config load and on manager commands. Program number 0 is reserved for the NIT in the MPEG-TS specification and never identifies a real program.
+- **Disappearing programs** (selected program not in the PAT, or a PAT version bump removes it): the output emits nothing until the program reappears. The filter automatically recovers on the next PAT that re-advertises the target.
+- **SPTS inputs** are unaffected — there's only one program, so `program_number = 1` (or whatever it is) filters to the same stream that was already there.
+
+### Example — 2-program MPTS fanning out to three destinations
+
+```json
+{
+  "id": "mpts-flow",
+  "name": "Dual-program feed",
+  "thumbnail_program_number": 1,
+  "input": { "type": "udp", "bind_addr": "0.0.0.0:5020" },
+  "outputs": [
+    {
+      "type": "udp", "id": "archive", "name": "Archive full MPTS",
+      "dest_addr": "10.0.0.5:6000"
+    },
+    {
+      "type": "udp", "id": "prog1-viewer", "name": "Program 1 → ffplay",
+      "dest_addr": "127.0.0.1:6001",
+      "program_number": 1
+    },
+    {
+      "type": "rtmp", "id": "prog2-rtmp", "name": "Program 2 → CDN",
+      "dest_url": "rtmp://live.example.com/app",
+      "stream_key": "my-key",
+      "program_number": 2
+    }
+  ]
+}
+```
+
+The archive receives the full MPTS. The `prog1-viewer` UDP output sends only program 1 as a rewritten SPTS (PAT lists one entry, program 1's PMT + ES PIDs). The RTMP output publishes program 2's elementary streams. The manager UI thumbnail shows a frame from program 1.
 
 ---
 
@@ -1298,6 +1359,142 @@ Use `POST /api/v1/config/reload` to re-read both `config.json` and `secrets.json
           "interface_addr": "::1"
         }
       ]
+    }
+  ]
+}
+```
+
+## SMPTE ST 2110 (Phase 1)
+
+bilbycast-edge supports SMPTE **ST 2110-30** (linear PCM L16/L24),
+**ST 2110-31** (AES3 transparent for Dolby E and similar), and **ST 2110-40**
+(RFC 8331 ancillary data including SCTE-104, SMPTE 12M timecode, and
+CEA-608/708 captions). Video essences (ST 2110-22 JPEG XS, ST 2110-20
+uncompressed) are reserved for Phase 2 and Phase 3.
+
+PTP integration is best-effort and reads from an external `ptp4l` daemon's
+management Unix socket — no PTP daemon ships in the edge. SMPTE 2022-7
+Red/Blue dual-network operation is opt-in via the `redundancy` block on
+each ST 2110 input/output.
+
+### Flow-level fields
+
+Both fields are optional and backward-compatible — existing configs
+deserialize unchanged.
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `clock_domain` | u8 | IEEE 1588 PTP domain (0–127). Setting this on a flow makes the edge spawn a PTP state reporter and surface lock state through `FlowStats.ptp_state`. |
+| `flow_group_id` | string | Logical bundle id; multiple essence flows on a single edge can share a group so the manager treats them as one unit. |
+
+### ST 2110-30 / -31 audio input
+
+```json
+{
+  "id": "studio-a-stereo",
+  "name": "Studio A — stereo",
+  "enabled": true,
+  "clock_domain": 0,
+  "input": {
+    "type": "st2110_30",
+    "bind_addr": "239.0.0.10:5000",
+    "interface_addr": "10.0.0.5",
+    "sample_rate": 48000,
+    "bit_depth": 24,
+    "channels": 2,
+    "packet_time_us": 1000,
+    "payload_type": 97,
+    "redundancy": {
+      "addr": "239.1.0.10:5000",
+      "interface_addr": "10.1.0.5"
+    }
+  },
+  "outputs": []
+}
+```
+
+`type: "st2110_31"` uses an identical struct — only the depacketizer
+label changes. AES3 transparency preserves user bits, channel status,
+validity, and parity bits.
+
+### ST 2110-30 / -31 audio output
+
+```json
+{
+  "type": "st2110_30",
+  "id": "monitor-out",
+  "name": "Loopback to monitor",
+  "dest_addr": "239.2.0.10:5000",
+  "dscp": 46,
+  "sample_rate": 48000,
+  "bit_depth": 24,
+  "channels": 2,
+  "packet_time_us": 1000,
+  "payload_type": 97,
+  "redundancy": {
+    "addr": "239.3.0.10:5000",
+    "interface_addr": "10.1.0.5"
+  }
+}
+```
+
+### ST 2110-40 ancillary input/output
+
+```json
+{
+  "id": "anc-flow",
+  "name": "ANC (timecode + SCTE-104)",
+  "enabled": true,
+  "clock_domain": 0,
+  "input": {
+    "type": "st2110_40",
+    "bind_addr": "239.0.0.20:5000",
+    "payload_type": 100
+  },
+  "outputs": [
+    {
+      "type": "st2110_40",
+      "id": "anc-out",
+      "name": "ANC loopback",
+      "dest_addr": "239.2.0.20:5000",
+      "dscp": 46,
+      "payload_type": 100
+    }
+  ]
+}
+```
+
+### Validation limits
+
+| Field | Allowed values |
+|-------|----------------|
+| `sample_rate` | `48000`, `96000` |
+| `bit_depth` | `16`, `24` |
+| `channels` | `1`, `2`, `4`, `8`, `16` |
+| `packet_time_us` | `125` (AM), `1000` (PM) |
+| `payload_type` | `96`–`127` |
+| `clock_domain` | `0`–`127` |
+| `dscp` | `0`–`63` (default `46` / EF) |
+
+Combining `allowed_sources` with `redundancy` is rejected by validation —
+the merger path doesn't expose per-packet `src` and the dual-leg path
+won't silently bypass the source filter.
+
+### Flow groups (essence bundles)
+
+A flow group binds multiple per-essence flows into a single logical unit
+sharing a PTP `clock_domain`. The schema lives at the top level of the
+config:
+
+```json
+{
+  "version": 1,
+  "flow_groups": [
+    {
+      "id": "studio-a-program",
+      "name": "Studio A program",
+      "clock_domain": 0,
+      "flow_ids": ["studio-a-stereo", "anc-flow"]
     }
   ]
 }

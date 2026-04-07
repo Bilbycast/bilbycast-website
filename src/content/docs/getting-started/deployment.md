@@ -162,6 +162,35 @@ To connect to the manager, create a node entry in the manager UI (device type: r
 
 ## 3. Deploy Edge Nodes
 
+### Optional system dependencies
+
+The edge binary itself is statically linked (musl) and has no runtime library dependencies, but two **optional** features depend on external system tools. Install them only if you need the feature:
+
+| Tool | Required for | What happens without it |
+|---|---|---|
+| `ffmpeg` | Per-flow thumbnail generation (`thumbnail: true` on a flow). The edge spawns `ffmpeg` as a subprocess every ~10 s, pipes ~3 s of buffered TS into it, and reads back a 320×180 JPEG which it forwards to the manager via the `thumbnail` WebSocket message. | Thumbnails are detected as unavailable at startup; flows with `thumbnail: true` still run normally, but no preview images appear in the manager UI. |
+| `linuxptp` (`ptp4l`) | SMPTE ST 2110-30 / -31 / -40 essence flows that need PTP timing. The edge polls `ptp4l`'s management socket (default `/var/run/ptp4l`) to read lock state — it does **not** run a PTP slave in-process. See [PTP Integration](/edge/ptp/) for the operational details. | Any flow with `clock_domain` set still starts and runs, but reports `ptp_state: "unavailable"` in stats and the NMOS IS-04 `/self` clock resource shows `locked: false`. Receivers that require PTP lock will reject connections. Skip this entirely if you're not running ST 2110 essence flows — `rtp_audio`, SRT, RTP/MP2T, RTMP, RTSP, HLS, WebRTC, and the `audio_302m` transport mode have no PTP requirement. |
+
+Install on Debian / Ubuntu:
+
+```bash
+sudo apt install ffmpeg          # only if you want thumbnails
+sudo apt install linuxptp        # only if you run ST 2110 essence flows
+```
+
+Install on RHEL / Fedora:
+
+```bash
+sudo dnf install ffmpeg          # via RPM Fusion
+sudo dnf install linuxptp
+```
+
+If you're running ST 2110, also configure `ptp4l` with your domain and NIC, then start it as a systemd service. A worked example is in [PTP Integration](/edge/ptp/#wiring-it-up).
+
+Both dependencies are detected at edge startup and logged. If you add `ffmpeg` later, restart the edge to pick it up.
+
+### Configure the edge
+
 Create a node entry in the manager, then configure the edge:
 
 **config.json:**

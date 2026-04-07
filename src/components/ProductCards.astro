@@ -2,27 +2,33 @@
 const products = [
   {
     name: 'bilbycast-edge',
-    description: 'Media transport gateway bridging SRT, RTP, UDP, RTMP, RTSP, HLS, and WebRTC with FEC, hitless redundancy, and TCP/UDP port forwarding over encrypted QUIC tunnels.',
+    description: 'Media transport gateway bridging SRT, RTP, UDP, RTMP, RTSP, HLS, WebRTC, and SMPTE ST 2110-30/-31/-40 with FEC, hitless redundancy, and TCP/UDP port forwarding over encrypted QUIC tunnels.',
     link: '/edge/overview/',
     color: 'sky',
   },
   {
     name: 'bilbycast-manager',
-    description: 'Web-based management UI and API with real-time topology visualization, AI-assisted configuration, and device driver extensibility.',
+    description: 'Web-based management UI and API with real-time topology visualization, AI-assisted flow configuration, and a driver-aware action system that extends to third-party broadcast devices.',
     link: '/manager/overview/',
     color: 'violet',
   },
   {
     name: 'bilbycast-relay',
-    description: 'Stateless QUIC relay enabling IP tunneling between NAT\'d edge nodes with end-to-end ChaCha20-Poly1305 encryption.',
+    description: 'Stateless QUIC relay enabling IP tunneling between NAT\'d edge nodes with end-to-end ChaCha20-Poly1305 encryption and per-tunnel HMAC bind tokens.',
     link: '/relay/overview/',
     color: 'emerald',
   },
   {
     name: 'bilbycast-srt',
-    description: 'Pure Rust SRT protocol implementation — wire-compatible with libsrt v1.5.5. Full encryption, FEC, Stream ID, and 80+ stats counters.',
+    description: 'Pure Rust SRT protocol implementation — wire-compatible with libsrt v1.5.5. AES-CTR/GCM, FEC (row, staircase, 2D), Stream ID, and 80+ stats counters.',
     link: '/srt/overview/',
     color: 'amber',
+  },
+  {
+    name: 'bilbycast-appear-x-api-gateway',
+    description: 'Reference API gateway sidecar — bridges Appear X encoder/gateway platforms into the bilbycast manager via the same WebSocket protocol. Template for adding any third-party broadcast device.',
+    link: '/appear-x-gateway/overview/',
+    color: 'rose',
   },
 ];
 
@@ -31,6 +37,7 @@ const colorMap: Record<string, { ring: string; bg: string; text: string }> = {
   violet:  { ring: 'ring-violet-800/40',  bg: 'bg-violet-950',  text: 'text-violet-400' },
   emerald: { ring: 'ring-emerald-800/40', bg: 'bg-emerald-950', text: 'text-emerald-400' },
   amber:   { ring: 'ring-amber-800/40',   bg: 'bg-amber-950',   text: 'text-amber-400' },
+  rose:    { ring: 'ring-rose-800/40',    bg: 'bg-rose-950',    text: 'text-rose-400' },
 };
 ---
 
@@ -38,7 +45,7 @@ const colorMap: Record<string, { ring: string; bg: string; text: string }> = {
   <div class="mx-auto max-w-7xl px-6">
     <div class="text-center">
       <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">The Suite</h2>
-      <p class="mt-4 text-lg text-slate-400">Four components that work together for complete media transport infrastructure.</p>
+      <p class="mt-4 text-lg text-slate-400">Five components that work together for complete media transport infrastructure.</p>
     </div>
 
     <div class="mt-16 grid gap-6 sm:grid-cols-2">

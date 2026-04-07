@@ -1,12 +1,16 @@
 ---
 const protocols = [
-  { name: 'SRT', input: true, output: true, features: 'AES encryption, Stream ID, FEC, 2022-7 hitless redundancy' },
-  { name: 'RTP', input: true, output: true, features: 'SMPTE 2022-1 FEC, unicast/multicast, DSCP QoS' },
-  { name: 'UDP', input: true, output: true, features: 'Raw MPEG-TS, unicast/multicast' },
-  { name: 'RTMP/RTMPS', input: true, output: true, features: 'H.264/AAC, publish from OBS/ffmpeg, TLS' },
+  { name: 'SRT', input: true, output: true, features: 'AES-CTR/GCM, Stream ID, FEC, 2022-7 hitless redundancy, SMPTE 302M audio mode' },
+  { name: 'RTP', input: true, output: true, features: 'SMPTE 2022-1 FEC, unicast/multicast, DSCP QoS, 2022-7 redundancy' },
+  { name: 'UDP', input: true, output: true, features: 'Raw MPEG-TS, unicast/multicast, SMPTE 302M audio mode' },
+  { name: 'RTMP/RTMPS', input: false, output: true, features: 'H.264/AAC, publish to Twitch/YouTube/Facebook, TLS' },
   { name: 'RTSP', input: true, output: false, features: 'Pull H.264/H.265 from IP cameras, TCP/UDP' },
-  { name: 'HLS', input: false, output: true, features: 'Segment-based ingest, HEVC/HDR support' },
-  { name: 'WebRTC', input: true, output: true, features: 'WHIP/WHEP, H.264 + Opus, browser-compatible' },
+  { name: 'HLS', input: false, output: true, features: 'Segment-based ingest, HEVC/HDR support, MPTS filtering' },
+  { name: 'WebRTC', input: true, output: true, features: 'WHIP/WHEP, H.264 + Opus, browser-compatible, str0m pure-Rust' },
+  { name: 'ST 2110-30', input: true, output: true, features: 'PCM L16/L24, AES67 / RFC 3190, PTP, 2022-7 Red/Blue, IS-08' },
+  { name: 'ST 2110-31', input: true, output: true, features: 'AES3 transparent (Dolby E, Dolby Digital, etc.), bit-exact passthrough' },
+  { name: 'ST 2110-40', input: true, output: true, features: 'RFC 8331 ancillary — SCTE-104, ATC timecode, CEA-608/708' },
+  { name: 'rtp_audio', input: true, output: true, features: 'Generic RFC 3551 PCM over RTP (no PTP required), 302M-capable output' },
 ];
 ---
 

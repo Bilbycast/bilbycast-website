@@ -7,7 +7,7 @@ sidebar:
 
 ## Overview
 
-bilbycast-edge is a pure-Rust media gateway supporting multiple transport protocols for professional broadcast and streaming workflows. All protocol implementations are native Rust with no C library dependencies.
+bilbycast-edge is a pure-Rust media gateway supporting multiple transport protocols for professional broadcast and streaming workflows. All protocol implementations are native Rust with no C library dependencies. The compressed-audio egress path (`audio_encode`) is the one exception: it invokes ffmpeg at runtime via a subprocess, never linked.
 
 ## Input Protocols
 
@@ -45,6 +45,27 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Retransmission bandwidth capping (Token Bucket shaper via `max_rexmit_bw`)
   - SMPTE 2022-7 hitless redundancy merge (dual-leg input)
   - Automatic reconnection
+  - **`transport_mode: "audio_302m"`** (deferred — see [Audio Gateway — Limitations](/edge/audio-gateway/#limitations-and-deferred-items)): demux SMPTE 302M LPCM-in-MPEG-TS from `ffmpeg -c:a s302m`, `srt-live-transmit`, or hardware encoders, and republish as RTP audio packets onto the broadcast channel
+
+### `rtp_audio` (RFC 3551 PCM over RTP, no PTP)
+- **Direction:** Input and Output
+- **Transport:** UDP unicast or multicast, IPv4 and IPv6
+- **Payload:** Big-endian L16 or L24 PCM in standard RFC 3551 RTP
+- **Why it exists:** Wire-identical to SMPTE ST 2110-30 but with relaxed
+  constraints — sample rates 32 / 44.1 / 48 / 88.2 / 96 kHz, no PTP
+  requirement, no RFC 7273 timing reference, no NMOS `clock_domain`
+  advertising. Use this for radio contribution feeds over the public
+  internet, talkback between studios that don't share a PTP fabric, and
+  ffmpeg / OBS / GStreamer interop where ST 2110-30's PTP assumption
+  is overkill.
+- **Features:**
+  - Same `transcode` block as ST 2110-30 outputs (sample-rate / bit-depth
+    / channel routing — see [Audio Gateway](/edge/audio-gateway/))
+  - SMPTE 2022-7 dual-leg redundancy
+  - Source IP allow-list filtering
+  - **Output also supports** `transport_mode: "audio_302m"` to wrap the
+    audio as SMPTE 302M-in-MPEG-TS inside RFC 2250 RTP/MP2T (PT 33)
+    — useful for hardware decoders that consume MPEG-TS over RTP
 
 ## Output Protocols
 
@@ -68,6 +89,13 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - DSCP/QoS marking
   - Compatible with ffplay, VLC, multicast distribution
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
+  - **`transport_mode: "audio_302m"`**: when the upstream input is an audio
+    essence, run the per-output transcode + SMPTE 302M packetizer +
+    TsMuxer pipeline and emit 7×188-byte MPEG-TS chunks containing
+    48 kHz LPCM (16/20/24 bit, 2/4/6/8 channels) as plain UDP datagrams.
+    Useful for legacy hardware decoders that consume raw MPEG-TS over
+    UDP. Mutually exclusive with `program_number`. See
+    [Audio Gateway](/edge/audio-gateway/) for the full pipeline.
 
 ### SRT (Secure Reliable Transport)
 - **Direction:** Output
@@ -82,11 +110,21 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Non-blocking mpsc bridge prevents TCP backpressure from affecting other outputs
   - Automatic reconnection
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
+  - **`transport_mode: "audio_302m"`**: when the upstream input is an
+    audio essence, run the per-output transcode (force 48 kHz, even
+    channels, 16/20/24-bit) + SMPTE 302M packetizer + TsMuxer (BSSD
+    registration descriptor in PMT) + 1316-byte chunk bundling
+    pipeline. Interoperable with `ffmpeg -c:a s302m`,
+    `srt-live-transmit`, and broadcast hardware decoders that expect
+    302M LPCM in MPEG-TS over SRT. Mutually exclusive with
+    `packet_filter`, `program_number`, and 2022-7 redundancy. See
+    [Audio Gateway](/edge/audio-gateway/) for the full pipeline,
+    interop tests, and worked use cases.
 
 ### RTMP/RTMPS
-- **Direction:** Output only (publish)
+- **Direction:** Input (publish) and Output (publish)
 - **Transport:** TCP (RTMP) or TLS over TCP (RTMPS)
-- **Use case:** Delivering to Twitch, YouTube Live, Facebook Live
+- **Use case:** Delivering to Twitch, YouTube Live, Facebook Live; ingesting from OBS, Wirecast, ffmpeg
 - **Features:**
   - Pure Rust RTMP protocol implementation (handshake, chunking, AMF0)
   - Demuxes H.264 and AAC from MPEG-2 TS, muxes into FLV
@@ -94,13 +132,13 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Reconnection with configurable delay and max attempts
   - Non-blocking: uses mpsc bridge pattern, never blocks other outputs
   - **MPTS-aware:** on an MPTS input, selects program by `program_number` or (default) locks onto the lowest-numbered program in the PAT
+  - **Optional `audio_encode` block (Phase B):** runs the input AAC through the ffmpeg-sidecar encoder so the operator can normalise bitrate / sample rate / channel count or upgrade to HE-AAC v1/v2 (`aac_lc`, `he_aac_v1`, `he_aac_v2`). Same-codec passthrough fast path skips both decoder and encoder when the source is already AAC-LC and no overrides are set. Requires ffmpeg in PATH at runtime; outputs without `audio_encode` keep working without ffmpeg installed. See [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc).
 - **Limitations:**
-  - Output only. RTMP input (ingest from OBS etc.) is not implemented.
   - Only H.264 video and AAC audio. HEVC/VP9 not supported via RTMP.
   - RTMPS (TLS) uses the `tls` feature (enabled by default).
   - Single-program by spec — only one program can be published per output.
 
-### HLS Ingest
+### HLS Egress
 - **Direction:** Output only
 - **Transport:** HTTP PUT/POST over TCP
 - **Use case:** YouTube HLS ingest (supports HEVC/HDR content)
@@ -111,6 +149,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Optional Bearer token authentication
   - Async HTTP upload, non-blocking to other outputs
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number` — filtered segments carry a rewritten single-program TS
+  - **Optional `audio_encode` block (Phase B):** each segment is piped through `ffmpeg -i pipe:0 -c:v copy -c:a {codec} -f mpegts pipe:1` before HTTP PUT. Allowed codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3`. Per-segment fork rather than a long-lived encoder because HLS segments are 2-6 s and ffmpeg startup is small relative to that — also lets MP2/AC-3 work without a new TS muxer. Requires ffmpeg in PATH; the output refuses to start if ffmpeg is missing and emits a Critical `audio_encode` event.
 - **Limitations:**
   - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
   - Uses a minimal built-in HTTP client (not a full HTTP/2 client).
@@ -130,34 +169,43 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Input only (no RTSP server mode)
   - AAC audio is passed through as ADTS in MPEG-TS
 
-### SMPTE ST 2110-30 / -31 — Broadcast Audio
+### SMPTE ST 2110-30 / -31 (PCM / AES3 audio)
 - **Direction:** Input and Output
-- **Transport:** RTP over UDP, unicast or multicast (typically multicast)
-- **Payloads:**
-  - **ST 2110-30** — Linear PCM (L16, L24) per AES67 / RFC 3190
-  - **ST 2110-31** — AES3 transparent (Dolby E, Dolby Digital, AAC, etc.) — same wire framing as -30, preserves user bits / channel status / validity / parity bits
-- **Sample rates:** 48 000 Hz, 96 000 Hz
-- **Bit depths:** 16, 24
-- **Channel counts:** 1, 2, 4, 8, 16
-- **Packet times:** PM (1 ms, default) and AM (125 µs)
+- **Transport:** RFC 3551 RTP/UDP, multicast or unicast, with
+  IGMP/MLD multicast group join and interface selection
+- **Payload:** Big-endian L16/L24 PCM (-30) or AES3 sub-frames (-31,
+  always 24-bit, transparent to Dolby E and AES3 user/channel-status
+  bits)
+- **Wire constraints:** sample_rate 48000 / 96000 Hz; bit_depth 16 or
+  24; channels 1, 2, 4, 8, 16; packet_time 125 / 250 / 333 / 500 / 1000
+  / 4000 µs; payload_type 96–127
+- **PTP:** best-effort PTP slave via the external `ptp4l` daemon's
+  management Unix socket. PTP state surfaces through stats; no
+  in-process PTP daemon ships with the edge.
 - **Features:**
-  - Hand-rolled RFC 3190 packetizer / depacketizer with full L16/L24 round-trip tests
-  - SMPTE 2022-7 Red/Blue dual-network bind via `redundancy` block — opens both legs and dedupes via the existing hitless merger
-  - Optional source-IP allow-list (single-leg only)
-  - DSCP/QoS marking on egress (default: 46 EF)
-  - PTP integration via external `ptp4l` management socket — best-effort, falls back to `unavailable` when the daemon is missing
-  - Per-flow `clock_domain` field (0–127) wires the PTP state into the stats snapshot
-- **NMOS:** Sources/flows/senders/receivers reported with `urn:x-nmos:format:audio`. Receiver caps include BCP-004 constraint sets for media_type, sample_rate, channel_count, and sample_depth. Audio inputs and outputs are exposed under IS-08 `/io` for channel mapping.
+  - SMPTE 2022-7 dual-network ("Red"/"Blue") bind on input and output,
+    with hitless merge on input via `engine::st2110::redblue::RedBluePair`
+  - Source IP allow-list filtering (single-leg only)
+  - **Per-output PCM transcode** (`transcode` block): sample-rate / bit-depth
+    / channel-routing conversion via the lock-free `engine::audio_transcode`
+    stage. IS-08 channel-map activations propagate without flow restart
+    via a `tokio::sync::watch` channel — see
+    [Audio Gateway](/edge/audio-gateway/) for the full feature set,
+    presets, and worked examples.
+  - **Compressed-audio ingress (Phase A):** when the upstream flow input is AAC-LC in MPEG-TS (carried over RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` (pure-Rust `symphonia-codec-aac`) turns it into f32 planar PCM so ST 2110-30 / -31 outputs — and the `srt` / `udp` / `rtp_audio` 302M output modes — can carry it without ffmpeg. Rejects HE-AAC, AAC-Main, and multichannel AAC with an `audio_decode` Critical event.
+- **NMOS:** advertised as `urn:x-nmos:format:audio` in IS-04, with
+  BCP-004 receiver caps reflecting the configured sample rate, channel
+  count, and sample depth
 
-### SMPTE ST 2110-40 — Ancillary Data
+### SMPTE ST 2110-40 (ancillary data)
 - **Direction:** Input and Output
-- **Transport:** RTP over UDP per RFC 8331
+- **Transport:** RFC 8331 RTP/UDP
+- **Payload:** Bit-packed RFC 8331 ANC (SCTE-104 ad markers, SMPTE 12M
+  timecode, CEA-608/708 captions, AFD, CDP)
 - **Features:**
-  - Hand-rolled bit reader/writer for the RFC 8331 frame format
-  - SMPTE 2022-7 Red/Blue dual-network support
-  - Built-in parsers for SCTE-104 splice events, SMPTE 12M-2 ATC timecode, and CEA-608/708 caption summaries
-  - DSCP/QoS marking on egress
-- **NMOS:** Resources reported with `urn:x-nmos:format:data`. Receivers advertise `media_types: ["video/smpte291"]`.
+  - Same SMPTE 2022-7 dual-network and source allow-list options as -30/-31
+  - SCTE-104 messages auto-detected and emitted as `scte104` events
+- **NMOS:** advertised as `urn:x-nmos:format:data` in IS-04. Receivers advertise `media_types: ["video/smpte291"]`.
 
 ### WebRTC (WHIP/WHEP)
 - **Direction:** Input and Output
@@ -169,7 +217,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - **WHEP output** (server): Serve browser viewers — endpoint at `/api/v1/flows/{id}/whep`
   - **WHEP input** (client): Pull media from external WHEP servers
 - **Video:** H.264 only (RFC 6184 RTP packetization/depacketization)
-- **Audio:** Opus passthrough. Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RTP/UDP outputs. AAC sources going to WebRTC output automatically fall back to video-only (no C-library transcoding).
+- **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RTP/UDP outputs. **Without `audio_encode`, AAC sources going to a WebRTC output automatically fall back to video-only.** Setting an `audio_encode` block (codec: `opus`) enables the Phase B chain: input AAC-LC is decoded in-process via the Phase A `engine::audio_decode::AacDecoder` and re-encoded as Opus via the Phase B ffmpeg-sidecar `engine::audio_encode::AudioEncoder`, then written to the WebRTC audio MID via str0m. This is the marquee Phase A+B chain — **AAC RTMP contribution → Opus WebRTC distribution** — all inside one bilbycast-edge process with no external transcoder. Requires `video_only=false` and ffmpeg in PATH.
 - **MPTS-aware outputs:** on an MPTS input, WHIP/WHEP outputs select program by `program_number` or (default) lock onto the lowest-numbered program in the PAT. Single-program by spec.
 - **Interoperability:** Compatible with OBS, browsers, Cloudflare, LiveKit, and other standard WHIP/WHEP implementations.
 - **Security:** Bearer token authentication on WHIP/WHEP endpoints, DTLS/SRTP encryption, ICE-lite for server modes.
@@ -189,6 +237,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 - Priority 1: Sync byte, continuity counter, PAT/PMT presence
 - Priority 2: TEI, PCR discontinuity, PCR accuracy
 - Runs as independent broadcast subscriber (zero jitter impact)
+- Skipped automatically for non-TS inputs (ST 2110-30/-31/-40, `rtp_audio`, WebRTC)
 
 ### MPEG-TS Program Analysis
 - Parses PAT and every PMT from the input broadcast channel
@@ -207,6 +256,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 - Filtered PDV (CMAX): peak-to-peak filtered metric
 - Source IP filtering (C5), payload type filtering (U4), rate limiting (C7)
 - DSCP/QoS marking (C10)
+- Per-flow bandwidth monitoring for trust boundary enforcement
 - Flow health derivation (M6): Healthy/Warning/Error/Critical
 
 ## Cargo Features
@@ -217,10 +267,6 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 | `webrtc` | Enable WebRTC WHIP/WHEP input and output via `str0m` | **Yes** |
 
 All features are enabled by default. A plain `cargo build --release` includes everything.
-
-## Configuration Examples
-
-See the `config_examples/` directory for JSON configuration examples for each protocol type.
 
 ## Architecture Notes
 

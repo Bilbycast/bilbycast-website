@@ -859,10 +859,11 @@ Viewers POST an SDP offer to `/api/v1/flows/{flow_id}/whep` and receive an SDP a
 | `bearer_token` | string | No | `null` | Bearer token for authentication. |
 | `max_viewers` | integer | No | `10` | Max concurrent viewers (WHEP server mode only, 1-100). |
 | `public_ip` | string | No | `null` | Public IP for ICE candidates (NAT traversal). |
-| `video_only` | boolean | No | `false` | Only send video (audio omitted). AAC sources automatically fall back to video-only. |
+| `video_only` | boolean | No | `false` | Only send video. When set, any `audio_encode` block is rejected at validation (an audio MID is required in the SDP to carry Opus). |
 | `program_number` | integer | No | `null` | MPTS program selector. `null` = lock onto the lowest program_number in the PAT (deterministic default); `Some(N)` = extract elementary streams from program N only. WebRTC is single-program by spec, so this only changes *which* program is sent. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
+| `audio_encode` | object | No | `null` | Optional Phase B `audio_encode` block (codec: `opus`). When absent, Opus sources are carried natively and **AAC sources automatically fall back to video-only** because WebRTC does not carry AAC. When present, the input AAC-LC is decoded via the Phase A `engine::audio_decode::AacDecoder` and re-encoded as Opus via the ffmpeg-sidecar `engine::audio_encode::AudioEncoder` — see [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc). |
 
-**Audio:** Opus passthrough only. Opus flows natively on WebRTC paths. AAC sources fall back to video-only automatically (no C-library transcoding available).
+**Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths. AAC contribution sources need an `audio_encode: { codec: "opus" }` block to be carried as Opus; without it, AAC sources fall back to video-only.
 
 ---
 
@@ -1479,6 +1480,43 @@ validity, and parity bits.
 Combining `allowed_sources` with `redundancy` is rejected by validation —
 the merger path doesn't expose per-packet `src` and the dual-leg path
 won't silently bypass the source filter.
+
+### Audio gateway extensions
+
+Every audio output (`st2110_30`, `st2110_31`, `rtp_audio`) accepts an optional `transcode` block for sample-rate / bit-depth / channel-routing conversion via the pure-Rust `rubato` SRC. IS-08 channel maps hot-reload without a flow restart. Full field reference, presets, and worked examples live in [Audio Gateway](/edge/audio-gateway/).
+
+The `rtp_audio` input/output type is wire-identical to ST 2110-30 (same RFC 3551 RTP + L16/L24 PCM payload) with relaxed constraints — sample rates 32 / 44.1 / 48 / 88.2 / 96 kHz, **no PTP requirement**, no `clock_domain`. Use it for WAN contribution, talkback, and ffmpeg/OBS interop.
+
+`srt`, `udp`, and `rtp_audio` outputs accept `transport_mode: "audio_302m"` to ship 48 kHz LPCM as SMPTE 302M-in-MPEG-TS. Mutually exclusive with `packet_filter` (SRT), `program_number`, and SRT `redundancy`.
+
+**Phase A compressed-audio ingress:** when a flow input carries AAC-LC in MPEG-TS (RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into PCM so ST 2110-30/-31, `rtp_audio`, and the SMPTE 302M outputs can consume it without ffmpeg. AAC-LC mono/stereo only; HE-AAC / AAC-Main / multichannel are rejected.
+
+**Phase B `audio_encode` block on RTMP / HLS / WebRTC outputs:**
+
+```json
+{
+  "type": "rtmp",
+  "id": "yt-rtmp",
+  "dest_url": "rtmps://a.rtmps.youtube.com/live2",
+  "stream_key": "...",
+  "audio_encode": {
+    "codec": "aac_lc",
+    "bitrate_kbps": 96
+  }
+}
+```
+
+| Field | Allowed values |
+|---|---|
+| `audio_encode.codec` (RTMP) | `aac_lc`, `he_aac_v1`, `he_aac_v2` |
+| `audio_encode.codec` (HLS)  | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` |
+| `audio_encode.codec` (WebRTC) | `opus` |
+| `audio_encode.bitrate_kbps` | `16`..=`512` |
+| `audio_encode.sample_rate` | `8000`, `16000`, `22050`, `24000`, `32000`, `44100`, `48000` |
+| `audio_encode.channels` | `1` or `2` |
+| `audio_encode` on WebRTC + `video_only=true` | rejected (audio MID required in SDP) |
+
+Requires `ffmpeg` in `PATH` at runtime — outputs without `audio_encode` keep working without ffmpeg installed. RTMP and WebRTC run one persistent ffmpeg per encoded output; HLS forks ffmpeg per segment.
 
 ### Flow groups (essence bundles)
 

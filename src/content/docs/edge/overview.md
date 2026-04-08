@@ -21,14 +21,18 @@ bilbycast-edge is a media transport gateway that bridges multiple protocols for 
 | **SMPTE ST 2110-30** | Yes | Yes | Linear PCM (L16/L24), 48k/96k, 1–16 channels, PM/AM packet times, SMPTE 2022-7 Red/Blue |
 | **SMPTE ST 2110-31** | Yes | Yes | AES3 transparent (Dolby E, etc.) — same wire framing as -30, preserves user/status/parity bits |
 | **SMPTE ST 2110-40** | Yes | Yes | RFC 8331 ancillary data (SCTE-104, SMPTE 12M timecode, CEA-608/708 captions) |
+| **`rtp_audio`** | Yes | Yes | Generic RFC 3551 PCM over RTP — wire-identical to ST 2110-30 but no PTP requirement; `transport_mode: "audio_302m"` option on output for RTP/MP2T delivery |
 
-All protocol implementations are native Rust — no C library dependencies.
+All protocol implementations are native Rust — no C library dependencies. The optional `audio_encode` block on RTMP / HLS / WebRTC outputs is the one exception: it invokes `ffmpeg` at runtime via a subprocess, never linked.
 
 ## Key Features
 
 - **SMPTE 2022-1 FEC** — Forward Error Correction for RTP and SRT
 - **SMPTE 2022-7 hitless redundancy** — Dual-leg input merging for seamless failover
 - **SMPTE ST 2110 (Phase 1)** — Broadcast-audio essences (-30 PCM, -31 AES3) and broadcast-data ancillary (-40), with PTP integration via external `ptp4l` and SMPTE 2022-7 Red/Blue dual-network support
+- **Audio gateway** — Per-output PCM transcode (sample-rate / bit-depth / channel routing via pure-Rust rubato), IS-08 channel-map hot reload, SMPTE 302M LPCM-in-MPEG-TS on SRT / UDP / `rtp_audio` outputs for byte-identical interop with `ffmpeg -c:a s302m` and broadcast hardware decoders — see [Audio Gateway](/edge/audio-gateway/)
+- **Compressed-audio bridge** — In-process pure-Rust AAC-LC decoder (`symphonia-codec-aac`) lands AAC contribution from RTMP / RTSP / SRT / UDP / RTP-TS as PCM on the ST 2110-30/-31, `rtp_audio`, and SMPTE 302M outputs (Phase A). Optional `audio_encode` block re-encodes audio to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 on RTMP / HLS / WebRTC outputs via an ffmpeg sidecar (Phase B). Marquee chain: AAC RTMP contribution → Opus WebRTC distribution in one edge process
+- **Flow groups** — `start_flow_group` / `stop_flow_group` manager commands bring up multi-essence broadcast bundles (audio + ANC + future video) all-or-nothing in parallel; failures roll back every started member
 - **NMOS IS-04 / IS-05 / IS-08 + BCP-004** — Broadcast control system integration with multi-essence audio/data resources, audio channel mapping, and BCP-004 receiver capability constraint sets
 - **mDNS-SD discovery** — Best-effort `_nmos-node._tcp` registration for automatic NMOS controller discovery
 - **TR-101290 analysis** — Transport stream quality monitoring

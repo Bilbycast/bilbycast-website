@@ -161,7 +161,7 @@ In addition to handling commands, the edge pushes four kinds of unsolicited mess
 | Message type | Cadence | Contents |
 |---|---|---|
 | `stats` | Every 1 s | Per-flow input/output bitrates, packet counts, FEC stats, TR-101290, IAT/PDV |
-| `health` | Every 15 s | Node-level health summary, software version, capability list |
+| `health` | Every 15 s | Node-level health summary, software version, capability list. The capability list advertises `audio-encode` when the edge binary knows about the Phase B ffmpeg-sidecar encoder, so the manager UI can show the `audio_encode` block on RTMP / HLS / WebRTC output forms on nodes that support it |
 | `thumbnail` | Every 10 s (per flow with thumbnails enabled) | 320×180 JPEG, base64-encoded, optional `thumbnail_program_number` selector for MPTS |
 | `event` | On state change | Operational events with `severity`, `category`, `message`, optional `flow_id` and `details`. See [Events & Alarms](/edge/events-and-alarms/) |
 

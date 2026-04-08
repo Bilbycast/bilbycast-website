@@ -26,6 +26,11 @@ const features = [
     description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (pure-Rust rubato). IS-08 channel maps hot-reload without restarting flows. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware.',
   },
   {
+    icon: 'AAC',
+    title: 'Compressed-Audio Bridge',
+    description: 'AAC-LC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process with a pure-Rust symphonia decoder — land it into PCM-only ST 2110-30/-31 / rtp_audio / SMPTE 302M outputs, or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 via an optional ffmpeg sidecar for RTMP, HLS, and WebRTC. Marquee chain: AAC RTMP contribution → Opus WebRTC distribution in a single edge process.',
+  },
+  {
     icon: 'NMOS',
     title: 'NMOS Integration',
     description: 'IS-04 Discovery & Registration, IS-05 Connection Management, IS-08 Audio Channel Mapping, and BCP-004 receiver capability sets. Best-effort PTP integration via external ptp4l. Seamless drop-in to existing NMOS facilities.',

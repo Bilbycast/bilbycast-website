@@ -861,7 +861,7 @@ Viewers POST an SDP offer to `/api/v1/flows/{flow_id}/whep` and receive an SDP a
 | `public_ip` | string | No | `null` | Public IP for ICE candidates (NAT traversal). |
 | `video_only` | boolean | No | `false` | Only send video. When set, any `audio_encode` block is rejected at validation (an audio MID is required in the SDP to carry Opus). |
 | `program_number` | integer | No | `null` | MPTS program selector. `null` = lock onto the lowest program_number in the PAT (deterministic default); `Some(N)` = extract elementary streams from program N only. WebRTC is single-program by spec, so this only changes *which* program is sent. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
-| `audio_encode` | object | No | `null` | Optional Phase B `audio_encode` block (codec: `opus`). When absent, Opus sources are carried natively and **AAC sources automatically fall back to video-only** because WebRTC does not carry AAC. When present, the input AAC-LC is decoded via the Phase A `engine::audio_decode::AacDecoder` and re-encoded as Opus via the ffmpeg-sidecar `engine::audio_encode::AudioEncoder` — see [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc). |
+| `audio_encode` | object | No | `null` | Optional Phase B `audio_encode` block (codec: `opus`). When absent, Opus sources are carried natively and **AAC sources automatically fall back to video-only** because WebRTC does not carry AAC. When present, the input AAC is decoded via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC/HE-AAC v1/v2/multichannel) and re-encoded as Opus via the `engine::audio_encode::AudioEncoder` (ffmpeg subprocess for Opus) — see [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc). |
 
 **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths. AAC contribution sources need an `audio_encode: { codec: "opus" }` block to be carried as Opus; without it, AAC sources fall back to video-only.
 
@@ -1489,7 +1489,7 @@ The `rtp_audio` input/output type is wire-identical to ST 2110-30 (same RFC 3551
 
 `srt`, `udp`, and `rtp_audio` outputs accept `transport_mode: "audio_302m"` to ship 48 kHz LPCM as SMPTE 302M-in-MPEG-TS. Mutually exclusive with `packet_filter` (SRT), `program_number`, and SRT `redundancy`.
 
-**Phase A compressed-audio ingress:** when a flow input carries AAC-LC in MPEG-TS (RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into PCM so ST 2110-30/-31, `rtp_audio`, and the SMPTE 302M outputs can consume it without ffmpeg. AAC-LC mono/stereo only; HE-AAC / AAC-Main / multichannel are rejected.
+**Phase A compressed-audio ingress:** when a flow input carries AAC in MPEG-TS (RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into PCM so ST 2110-30/-31, `rtp_audio`, and the SMPTE 302M outputs can consume it without ffmpeg. Default FDK AAC backend supports AAC-LC, HE-AAC v1/v2, and multichannel up to 7.1; pure-Rust symphonia fallback supports AAC-LC mono/stereo only.
 
 **Phase B `audio_encode` block on RTMP / HLS / WebRTC outputs:**
 

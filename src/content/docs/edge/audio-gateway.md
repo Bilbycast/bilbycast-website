@@ -11,9 +11,11 @@ public internet, distributing talkback over encrypted SRT links, and
 interoperating with the standard broadcast tool stack (`ffmpeg`,
 `srt-live-transmit`, hardware encoders/decoders that speak SMPTE 302M
 LPCM-in-MPEG-TS). It also covers the compressed-audio bridge that
-decodes AAC-LC contribution feeds in-process and re-encodes them to
-AAC, HE-AAC v1/v2, Opus, MP2, or AC-3 for the RTMP, HLS, and WebRTC
-outputs via an optional ffmpeg sidecar.
+decodes AAC contribution feeds in-process (via Fraunhofer FDK AAC by
+default — AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) and re-encodes
+them to AAC, HE-AAC v1/v2, Opus, MP2, or AC-3 for the RTMP, HLS, and
+WebRTC outputs. AAC codecs encode in-process via FDK AAC; non-AAC
+codecs (Opus, MP2, AC-3) use an ffmpeg subprocess.
 
 If you only want byte-identical SMPTE ST 2110-30/-31 passthrough on a
 local broadcast plant, see [SMPTE ST 2110](/edge/st2110/) — that
@@ -28,9 +30,10 @@ operation, WAN transport, and compressed-audio egress.
 > The audio gateway feature set turns that Phase 1 plumbing into a
 > real audio gateway: per-output PCM transcoding, a generic `rtp_audio`
 > variant with no PTP requirement, SMPTE 302M LPCM-in-MPEG-TS over
-> SRT / UDP / RTP/MP2T, an in-process AAC-LC decode bridge for
-> compressed contribution audio, and an ffmpeg-sidecar encoder for
-> RTMP / HLS / WebRTC compressed egress.
+> SRT / UDP / RTP/MP2T, an in-process AAC decode bridge (FDK AAC) for
+> compressed contribution audio, and an audio encoder for RTMP / HLS /
+> WebRTC compressed egress (in-process FDK AAC for AAC codecs, ffmpeg
+> subprocess for Opus / MP2 / AC-3).
 
 ---
 
@@ -46,8 +49,8 @@ operation, WAN transport, and compressed-audio egress.
 | Atomically start a multi-essence broadcast group (audio + ANC) | `start_flow_group` manager command |
 | Send 24-bit LPCM to a hardware decoder that expects MPEG-TS over UDP | UDP output with `transport_mode: "audio_302m"` |
 | Send 24-bit LPCM to a hardware decoder that expects RTP/MP2T (RFC 2250) | `rtp_audio` output with `transport_mode: "audio_302m"` |
-| Ingest AAC-LC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (pure-Rust `symphonia-codec-aac`) |
-| Re-encode audio for YouTube / Twitch / HLS / WebRTC egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block (ffmpeg sidecar) |
+| Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; symphonia fallback: AAC-LC mono/stereo) |
+| Re-encode audio for YouTube / Twitch / HLS / WebRTC egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block (in-process FDK AAC for AAC codecs, ffmpeg subprocess for Opus/MP2/AC-3) |
 | Deliver an AAC contribution to browsers as Opus in one hop | Combined Phase A + Phase B chain — RTMP AAC input → WebRTC WHEP Opus output |
 
 ---
@@ -415,21 +418,24 @@ have the broadcast tool stack installed.
 
 ---
 
-## The `audio_decode` bridge — AAC-LC contribution into PCM outputs (Phase A)
+## The `audio_decode` bridge — AAC contribution into PCM outputs (Phase A)
 
-bilbycast-edge carries a pure-Rust, in-process AAC-LC decoder
-(`engine::audio_decode::AacDecoder`, backed by
-`symphonia-codec-aac`) that turns compressed audio carried inside
-MPEG-TS — whether delivered over RTMP, RTSP, SRT, UDP, or RTP/MP2T —
-into f32 planar PCM on the broadcast channel. That PCM is what the
-PCM-only outputs consume: ST 2110-30 (and via SMPTE 302M: the `srt`,
-`udp`, and `rtp_audio` 302M output modes).
+bilbycast-edge carries an in-process AAC decoder
+(`engine::audio_decode::AacDecoder`) that turns compressed audio
+carried inside MPEG-TS — whether delivered over RTMP, RTSP, SRT, UDP,
+or RTP/MP2T — into f32 planar PCM on the broadcast channel. That PCM
+is what the PCM-only outputs consume: ST 2110-30 (and via SMPTE 302M:
+the `srt`, `udp`, and `rtp_audio` 302M output modes).
+
+**Default (`fdk-aac` feature, on by default):** Fraunhofer FDK AAC
+via FFI. Supports AAC-LC, HE-AAC v1 (SBR), HE-AAC v2 (PS), AAC-LD,
+AAC-ELD, and multichannel up to 7.1. **Fallback (no `fdk-aac`
+feature):** pure-Rust `symphonia-codec-aac` — AAC-LC mono/stereo
+only; HE-AAC and multichannel are rejected with an `audio_decode`
+Critical event.
 
 No ffmpeg is required for this path. The decoder is part of the
-bilbycast-edge binary itself. It only handles AAC-LC (mono / stereo);
-HE-AAC, AAC-Main, and multichannel AAC are rejected with an
-`audio_decode` Critical event so operators see the mismatch instead of
-silently dropping audio.
+bilbycast-edge binary itself.
 
 This is the Phase A half of the compressed-audio bridge. Combined with
 the Phase B `audio_encode` block (below), it lets a single
@@ -454,13 +460,14 @@ gaps:
 
 The `audio_encode` block, available on the RTMP, HLS, and WebRTC
 output types, fills both gaps. When set, the output decodes the input
-AAC-LC in-process via the Phase A `engine::audio_decode::AacDecoder`,
-runs the PCM through a long-running `ffmpeg` subprocess that produces
-the configured codec / bitrate / sample rate / channels, and
-re-injects the encoded frames into the output's normal egress path.
+AAC in-process via the Phase A `engine::audio_decode::AacDecoder`,
+then re-encodes via Phase B's `engine::audio_encode::AudioEncoder`.
 
-The pure-Rust binary is unchanged: ffmpeg is invoked at runtime via
-`tokio::process::Command` and never linked. Outputs without
+**Default (`fdk-aac` feature, on by default):** AAC codecs (AAC-LC,
+HE-AAC v1, HE-AAC v2) are encoded in-process via Fraunhofer FDK AAC
+— no subprocess, no ffmpeg dependency for AAC. Non-AAC codecs (Opus,
+MP2, AC-3) use an ffmpeg subprocess. **Fallback (no `fdk-aac`
+feature):** all codecs use an ffmpeg subprocess. Outputs without
 `audio_encode` set keep working without ffmpeg installed at all.
 
 ```jsonc
@@ -481,7 +488,7 @@ The pure-Rust binary is unchanged: ffmpeg is invoked at runtime via
 
 | Output | Allowed `codec` | Default | Notes |
 |---|---|---|---|
-| `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. HE-AAC v2 (`aac_he_v2`) requires an ffmpeg build with `libfdk_aac`; if unavailable the encoder fails fast on the first frame. |
+| `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. |
 | `hls` | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | HLS-TS supports MP2 (stream type 0x04) and AC-3 (private_stream_1) so long as the consumer's player does. |
 | `webrtc` | `opus` | `opus` | WebRTC realistically only does Opus. Validation also rejects `audio_encode` + `video_only=true` (an audio MID must be negotiated in SDP). |
 
@@ -527,22 +534,27 @@ always AAC, the sink is always Opus, so passthrough is impossible.
 The encoder is opt-in and fails fast with a clear `audio_encode`
 category event to the manager (Critical severity) when:
 
-- **ffmpeg is missing in `PATH`**: outputs with `audio_encode` set
-  refuse to start (HLS) or drop audio for the rest of the output's
-  lifetime after logging once (RTMP / WebRTC). Outputs without
-  `audio_encode` keep working.
-- **Input audio is not AAC-LC**: Phase A's decoder rejects HE-AAC,
-  AAC-Main, multichannel AAC, etc. The output drops audio and emits
-  the failure event so the operator sees the problem.
+- **ffmpeg is missing in `PATH`** (non-AAC codecs, or AAC without
+  `fdk-aac` feature): outputs with `audio_encode` set refuse to start
+  (HLS) or drop audio for the rest of the output's lifetime after
+  logging once (RTMP / WebRTC). AAC codecs with the `fdk-aac` feature
+  (default) do not require ffmpeg. Outputs without `audio_encode` keep
+  working without ffmpeg installed.
+- **Input audio is unsupported**: with the default `fdk-aac` feature,
+  the decoder supports AAC-LC, HE-AAC v1/v2, and multichannel up to
+  7.1. Without `fdk-aac`, the pure-Rust fallback supports AAC-LC
+  mono/stereo only — other profiles are rejected. The output drops
+  audio and emits the failure event so the operator sees the problem.
 - **`compressed_audio_input` is false**: the flow input cannot carry
   TS audio (e.g. ST 2110-30, `rtp_audio` are PCM-only). The output
   drops audio.
-- **Encoder spawn fails**: `ffmpeg` rejects the codec / profile flag
-  combination (e.g. `aac_he_v2` on a build without `libfdk_aac`).
-- **Restart cap exhausted**: the `engine::audio_encode` supervisor
-  restarts ffmpeg with exponential backoff up to 5 times in any
-  60-second window. After that it gives up and emits the Critical
-  event.
+- **Encoder configuration error**: the in-process FDK AAC encoder or
+  ffmpeg subprocess rejects the codec/profile combination.
+- **Restart cap exhausted** (ffmpeg backend only): the
+  `engine::audio_encode` supervisor restarts ffmpeg with exponential
+  backoff up to 5 times in any 60-second window. After that it gives
+  up and emits the Critical event. The in-process FDK AAC backend does
+  not use a subprocess and has no restart budget.
 
 The supervisor also emits **`audio_encode` Info** when the encoder
 starts successfully (with codec / bitrate / SR / channels in the

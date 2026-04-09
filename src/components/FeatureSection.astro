@@ -28,7 +28,7 @@ const features = [
   {
     icon: 'AAC',
     title: 'Compressed-Audio Bridge',
-    description: 'AAC-LC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process with a pure-Rust symphonia decoder — land it into PCM-only ST 2110-30/-31 / rtp_audio / SMPTE 302M outputs, or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 via an optional ffmpeg sidecar for RTMP, HLS, and WebRTC. Marquee chain: AAC RTMP contribution → Opus WebRTC distribution in a single edge process.',
+    description: 'AAC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) — land it into PCM-only ST 2110-30/-31 / rtp_audio / SMPTE 302M outputs, or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 for RTMP, HLS, and WebRTC. AAC codecs encode in-process; non-AAC codecs (Opus, MP2, AC-3) use an ffmpeg subprocess. Marquee chain: AAC RTMP contribution → Opus WebRTC distribution in a single edge process.',
   },
   {
     icon: 'NMOS',

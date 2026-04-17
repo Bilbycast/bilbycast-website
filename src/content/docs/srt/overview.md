@@ -1,15 +1,15 @@
 ---
 title: SRT Library Overview
-description: bilbycast-srt — pure Rust implementation of the SRT protocol, wire-compatible with libsrt v1.5.5.
+description: bilbycast-srt — Rust implementation of the SRT protocol, wire-compatible with libsrt v1.5.5.
 sidebar:
   order: 1
 ---
 
-bilbycast-srt is a complete, pure-Rust implementation of the SRT (Secure Reliable Transport) protocol. It provides the same functionality as the original Haivision C++ SRT library but compiles without any external system dependencies.
+bilbycast-srt is a complete Rust implementation of the SRT (Secure Reliable Transport) protocol. It provides the same functionality as the original Haivision C++ SRT library but compiles without any external system dependencies.
 
 ## Features
 
-- **Pure Rust** — No C/C++ dependencies, no system library linking
+- **No external system libraries** — builds with `cargo build` alone
 - **Wire-compatible** — Compatible with libsrt v1.5.5
 - **Async I/O** — Built on Tokio for high-performance async networking
 - **Encryption** — AES-128/192/256 in CTR and GCM modes via RustCrypto

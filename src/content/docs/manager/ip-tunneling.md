@@ -92,10 +92,14 @@ Content-Type: application/json
   "ingress_listen_port": 9000,
   "egress_node_id": "node-hub-01",
   "egress_forward_addr": "127.0.0.1:9000",
-  "relay_addr": "relay.example.com:4433",
+  "relay_addr": "relay-primary.example.com:4433",
+  "secondary_relay_addr": "relay-backup.example.com:4433",
+  "secondary_relay_node_id": "relay-backup-node-id",
   "associated_flow_ids": ["flow-srt-main"]
 }
 ```
+
+`secondary_relay_addr` + `secondary_relay_node_id` are optional — omit both for a single-relay tunnel, include both for a redundant tunnel. The manager pushes the pair to each edge as an ordered `relay_addrs` array (primary first) so edges can fail over automatically. See [Redundant Relay Failover](#redundant-relay-failover) below.
 
 #### List all tunnels
 
@@ -118,7 +122,9 @@ Response includes node names for easy identification:
       "egress_node_id": "node-hub-01",
       "egress_node_name": "Hub Edge",
       "egress_forward_addr": "127.0.0.1:9000",
-      "relay_addr": "relay.example.com:4433",
+      "relay_addr": "relay-primary.example.com:4433",
+      "secondary_relay_addr": "relay-backup.example.com:4433",
+      "secondary_relay_node_id": "relay-backup-node-id",
       "status": "active",
       "associated_flow_ids": ["flow-srt-main"]
     }
@@ -181,9 +187,13 @@ Use the Manager UI or API to create a UDP tunnel:
   "ingress_listen_port": 9000,
   "egress_node_id": "edge-hub-01",
   "egress_forward_addr": "127.0.0.1:9000",
-  "relay_addr": "relay.example.com:4433"
+  "relay_addr": "relay-primary.example.com:4433",
+  "secondary_relay_addr": "relay-backup.example.com:4433",
+  "secondary_relay_node_id": "relay-backup-node-id"
 }
 ```
+
+(Omit `secondary_relay_addr` + `secondary_relay_node_id` for a single-relay deployment.)
 
 ### Step 4: Configure SRT flows
 
@@ -216,6 +226,22 @@ Set via the Manager API:
 PUT /api/v1/nodes/{id}
 { "metadata": { "network_type": "nat" } }
 ```
+
+## Redundant Relay Failover
+
+A relay-mode tunnel can carry two relay addresses — a primary and a backup. The manager stores these as `relay_addr` (primary) and `secondary_relay_addr` (backup, with matching `secondary_relay_node_id` for topology tracking) and pushes them to both edges as an ordered `relay_addrs` array.
+
+When the primary relay becomes unreachable, **each edge independently** detects the loss and reconnects via the backup:
+
+- **Detection:** ~25 s of QUIC silence before the transport declares the primary dead (5 s keep-alive × 5 missed pings). This window is sized to tolerate Starlink satellite handovers and 4G/5G cell handoffs without flapping.
+- **Failover:** after detection, the edge reconnects and walks to the next relay in the list. Each reconnect attempt is bounded to 6 s so a dead primary cannot stall the loop. **End-to-end failover budget is ~30–40 s** (the slower of the two edges sets total latency; they act independently).
+- **Convergence:** if the two edges land on different relays initially, the first-to-bind sits in a `Waiting` state for up to 10 s, then steps forward — so the pair converges on whichever relay both can reach.
+- **Failback:** a background probe measures the primary's RTT every 60 s. When the primary is healthy and its RTT is within 50 ms of the active backup, traffic fails back to the primary automatically. This RTT gate prevents returning to a reachable-but-degraded primary.
+- **Events:** each failover emits a Warning event with `from_relay_addr`, `to_relay_addr`, `from_idx`, `to_idx` so the UI can surface the active leg.
+
+This is not a *hitless* switchover — expect a ~30 s gap on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against relay-server failure, not network-path jitter.
+
+Single-relay tunnels (no `secondary_relay_addr`) will simply reconnect to the same relay until it returns — there is no backup path.
 
 ## Security
 

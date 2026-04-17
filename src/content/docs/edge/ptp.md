@@ -127,7 +127,7 @@ Other PTP-capable NICs should work — the requirement is hardware tx/rx timesta
 
 ## What's deferred — `--features ptp-internal`
 
-A future build flag `--features ptp-internal` is reserved for an in-process PTP slave implementation based on [`statime`](https://github.com/pendulum-project/statime), the pure-Rust PTP stack from the Pendulum project. The motivation is to:
+A future build flag `--features ptp-internal` is reserved for an in-process PTP slave implementation based on [`statime`](https://github.com/pendulum-project/statime), the PTP stack from the Pendulum project. The motivation is to:
 
 - Eliminate the `linuxptp` external dependency.
 - Run on platforms where `ptp4l` is not packaged (containers, immutable OS images, embedded ARM).

@@ -218,7 +218,7 @@ cert_path = "certs/server.crt"
 key_path = "certs/server.key"
 ```
 
-TLS is provided by **rustls** (pure-Rust TLS). The server will refuse to start without valid TLS configuration in direct mode. Cookies include the `Secure` flag, and HSTS headers are sent on all responses.
+TLS is provided by **rustls**. The server will refuse to start without valid TLS configuration in direct mode. Cookies include the `Secure` flag, and HSTS headers are sent on all responses.
 
 #### Behind Proxy Mode (`tls_mode = "behind_proxy"`)
 

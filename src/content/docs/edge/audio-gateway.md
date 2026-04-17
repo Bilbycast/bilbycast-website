@@ -335,8 +335,7 @@ reporter and any NMOS `clock_domain` advertising are skipped.
 
 SMPTE 302M is the broadcast industry standard for carrying lossless PCM
 audio inside MPEG-2 transport streams. It avoids any audio codec
-dependency (no AAC, no AC-3, no MP2 — none of which have
-production-grade pure-Rust encoders today), and it's exactly what
+dependency (no AAC, no AC-3, no MP2), and it's exactly what
 hardware encoders, hardware decoders, and the standard ffmpeg /
 srt-live-transmit tool stack expect for lossless audio over MPEG-TS
 contribution links.
@@ -433,9 +432,8 @@ the `srt`, `udp`, and `rtp_audio` 302M output modes).
 **Default (`fdk-aac` feature, on by default):** Fraunhofer FDK AAC
 via FFI. Supports AAC-LC, HE-AAC v1 (SBR), HE-AAC v2 (PS), AAC-LD,
 AAC-ELD, and multichannel up to 7.1. **Fallback (no `fdk-aac`
-feature):** pure-Rust `symphonia-codec-aac` — AAC-LC mono/stereo
-only; HE-AAC and multichannel are rejected with an `audio_decode`
-Critical event.
+feature):** `symphonia-codec-aac` — AAC-LC mono/stereo only; HE-AAC
+and multichannel are rejected with an `audio_decode` Critical event.
 
 No ffmpeg is required for this path. The decoder is part of the
 bilbycast-edge binary itself.
@@ -550,7 +548,7 @@ category event to the manager (Critical severity) when:
   working without ffmpeg installed.
 - **Input audio is unsupported**: with the default `fdk-aac` feature,
   the decoder supports AAC-LC, HE-AAC v1/v2, and multichannel up to
-  7.1. Without `fdk-aac`, the pure-Rust fallback supports AAC-LC
+  7.1. Without `fdk-aac`, the symphonia fallback supports AAC-LC
   mono/stereo only — other profiles are rejected. The output drops
   audio and emits the failure event so the operator sees the problem.
 - **`compressed_audio_input` is false**: the flow input cannot carry

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-bilbycast-srt is a pure-Rust SRT protocol implementation split into three crates:
+bilbycast-srt is a Rust SRT protocol implementation split into three crates:
 
 | Crate | Purpose | When to use it |
 |---|---|---|

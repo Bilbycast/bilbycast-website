@@ -7,7 +7,7 @@ sidebar:
 
 ## Overview
 
-bilbycast-edge is a pure-Rust media gateway supporting multiple transport protocols for professional broadcast and streaming workflows. All transport and FEC implementations are native Rust with no C library dependencies.
+bilbycast-edge is a media gateway supporting multiple transport protocols for professional broadcast and streaming workflows.
 
 Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `video-thumbnail` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC software video encoding requires `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), or `video-encoder-nvenc` (NVIDIA GPU required); the `*-full` release channel bundles all three. The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
 
@@ -52,7 +52,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 ### RIST (VSF TR-06-1 Simple Profile)
 - **Direction:** Input and Output
 - **Transport:** UDP with RTCP NACK-driven retransmission
-- **Implementation:** `bilbycast-rist`, a pure-Rust two-crate workspace (`rist-protocol` + `rist-transport`). Wire-verified against librist 0.2.11 `ristsender` / `ristreceiver`
+- **Implementation:** `bilbycast-rist`, a two-crate workspace (`rist-protocol` + `rist-transport`). Wire-verified against librist 0.2.11 `ristsender` / `ristreceiver`
 - **Features:**
   - Reliable RTP over UDP with RTCP NACK retransmission, RTT echo, SDES, and NTP-aligned RTP timestamps
   - Dynamic RTCP source-address learning so receivers work through NAT
@@ -141,7 +141,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Transport:** TCP (RTMP) or TLS over TCP (RTMPS)
 - **Use case:** Delivering to Twitch, YouTube Live, Facebook Live; ingesting from OBS, Wirecast, ffmpeg
 - **Features:**
-  - Pure Rust RTMP protocol implementation (handshake, chunking, AMF0)
+  - Native RTMP protocol implementation (handshake, chunking, AMF0)
   - Demuxes H.264 and AAC from MPEG-2 TS, muxes into FLV
   - Automatic AVC sequence header (SPS/PPS) and AAC config generation
   - Reconnection with configurable delay and max attempts
@@ -172,7 +172,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 ### RTSP
 - **Direction:** Input only
 - **Transport:** TCP (interleaved) or UDP
-- **Client library:** `retina` (pure Rust)
+- **Client library:** `retina`
 - **Features:**
   - Pull H.264 or H.265/HEVC video and AAC audio from IP cameras and media servers
   - Digest and Basic authentication support
@@ -218,7 +218,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
     via a `tokio::sync::watch` channel — see
     [Audio Gateway](/edge/audio-gateway/) for the full feature set,
     presets, and worked examples.
-  - **Compressed-audio ingress (Phase A):** when the upstream flow input is AAC in MPEG-TS (carried over RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into f32 planar PCM so ST 2110-30 / -31 outputs — and the `srt` / `udp` / `rtp_audio` 302M output modes — can carry it without ffmpeg. Default FDK AAC backend supports AAC-LC, HE-AAC v1/v2, and multichannel up to 7.1; pure-Rust symphonia fallback supports AAC-LC mono/stereo only.
+  - **Compressed-audio ingress (Phase A):** when the upstream flow input is AAC in MPEG-TS (carried over RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into f32 planar PCM so ST 2110-30 / -31 outputs — and the `srt` / `udp` / `rtp_audio` 302M output modes — can carry it without ffmpeg. Default FDK AAC backend supports AAC-LC, HE-AAC v1/v2, and multichannel up to 7.1; symphonia fallback supports AAC-LC mono/stereo only.
 - **NMOS:** advertised as `urn:x-nmos:format:audio` in IS-04, with
   BCP-004 receiver caps reflecting the configured sample rate, channel
   count, and sample depth
@@ -235,7 +235,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 
 ### WebRTC (WHIP/WHEP)
 - **Direction:** Input and Output
-- **Transport:** UDP (ICE-lite/DTLS/SRTP) via `str0m` pure-Rust WebRTC stack
+- **Transport:** UDP (ICE-lite/DTLS/SRTP) via the `str0m` WebRTC stack
 - **Status:** Fully implemented. The `webrtc` feature is enabled by default.
 - **Four modes:**
   - **WHIP input** (server): Accept contributions from OBS, browsers — endpoint at `/api/v1/flows/{id}/whip`

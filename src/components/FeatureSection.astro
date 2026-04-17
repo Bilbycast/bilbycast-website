@@ -18,7 +18,7 @@ const features = [
   {
     icon: '\u266B',
     title: 'Audio Gateway + Channel Router',
-    description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (pure-Rust rubato). Built-in presets for 5.1→stereo BS.775 downmix, stereo→mono sum, and arbitrary matrix routing. IS-08 channel maps hot-reload without restarting flows — shuffle, swap, or remix audio channels live. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware decoders.',
+    description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (via rubato). Built-in presets for 5.1→stereo BS.775 downmix, stereo→mono sum, and arbitrary matrix routing. IS-08 channel maps hot-reload without restarting flows — shuffle, swap, or remix audio channels live. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware decoders.',
   },
   {
     icon: 'AAC',
@@ -42,8 +42,8 @@ const features = [
   },
   {
     icon: '\u2295',
-    title: 'Pure-Rust & End-to-End Encrypted',
-    description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Built entirely in Rust — the SRT, RIST, AAC, and core video-codec wrappers are all native — for memory safety, small binaries, and simple deployment.',
+    title: 'End-to-End Encrypted',
+    description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Memory-safe core with tight, static binaries for simple deployment.',
   },
   {
     icon: 'NMOS',

@@ -1,6 +1,6 @@
 ---
 title: libsrt Comparison
-description: Feature comparison between bilbycast-srt (Pure Rust) and the C++ libsrt library.
+description: Feature comparison between bilbycast-srt and the C++ libsrt library.
 sidebar:
   order: 2
 ---
@@ -14,10 +14,10 @@ sidebar:
 
 | | **bilbycast-srt** | **libsrt v1.5.5-rc** |
 |---|---|---|
-| Language | Pure Rust (zero C/C++ deps) | C++ with C API |
+| Language | Rust (no external C deps) | C++ with C API |
 | Architecture | 3 crates: `srt-protocol` (no I/O), `srt-transport` (tokio), `srt-ffi` (WIP) | Monolithic C++ library |
 | Async model | Tokio async/await | Epoll + threads |
-| Crypto deps | RustCrypto (pure Rust) | OpenSSL-EVP (default), mbedTLS, GnuTLS, Botan |
+| Crypto deps | RustCrypto | OpenSSL-EVP (default), mbedTLS, GnuTLS, Botan |
 | Version advertised | `0x010505` (1.5.5) | `0x010505` (1.5.5) |
 
 ## Feature Parity

@@ -14,8 +14,8 @@ Bilbycast is a suite of Rust projects for professional broadcast media transport
 | **bilbycast-edge** | Media transport gateway — bridges SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, and SMPTE ST 2110-20/-23/-30/-31/-40, with in-process transcoding and hot input switching |
 | **bilbycast-manager** | Web UI + API for remote management, monitoring, and AI-assisted flow configuration |
 | **bilbycast-relay** | QUIC relay for NAT traversal between edge nodes |
-| **bilbycast-srt** | Pure Rust SRT protocol library (used by edge internally) |
-| **bilbycast-rist** | Pure Rust RIST (VSF TR-06-1 Simple Profile) library (used by edge internally) |
+| **bilbycast-srt** | SRT protocol library (used by edge internally) |
+| **bilbycast-rist** | RIST (VSF TR-06-1 Simple Profile) library (used by edge internally) |
 | **bilbycast-fdk-aac-rs** | Fraunhofer FDK AAC wrapper — in-process AAC decode / encode |
 | **bilbycast-ffmpeg-video-rs** | FFmpeg libavcodec / libswscale wrapper — in-process video decode, scaling, JPEG encode, and Opus / MP2 / AC-3 audio encode |
 | **bilbycast-appear-x-api-gateway** | Bridge for Appear X broadcast devices |

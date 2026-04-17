@@ -74,7 +74,7 @@ export default defineConfig({
 					],
 				},
 				{
-					label: 'SRT Library (Pure Rust)',
+					label: 'SRT Library',
 					items: [
 						{ label: 'Overview', slug: 'srt/overview' },
 						{ label: 'Usage Guide', slug: 'srt/usage' },

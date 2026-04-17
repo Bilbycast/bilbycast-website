@@ -14,7 +14,7 @@ specifications:
 | IS-05 v1.1 | `/x-nmos/connection/v1.1/` | single sender/receiver staged + active + transporttype + constraints |
 | IS-08 v1.0 | `/x-nmos/channelmapping/v1.0/` | io, map/active, map/staged, map/activate (active map persists to disk) |
 | BCP-004 | embedded in IS-04 receiver caps | constraint_sets for ST 2110 audio inputs |
-| mDNS-SD | `_nmos-node._tcp` | best-effort registration via the pure-Rust `mdns-sd` crate |
+| mDNS-SD | `_nmos-node._tcp` | best-effort registration via the `mdns-sd` crate |
 
 ## Format detection
 

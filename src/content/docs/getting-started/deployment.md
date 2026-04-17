@@ -47,14 +47,14 @@ The manager is distributed as a tarball containing the binary, database migratio
 
 ```bash
 curl -fsSL -o bilbycast-manager.tar.gz \
-  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
+  https://github.com/Bilbycast/bilbycast-manager/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
 tar xzf bilbycast-manager.tar.gz
 ```
 
 Verify checksum:
 ```bash
 curl -fsSL -o bilbycast-manager.tar.gz.sha256 \
-  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
+  https://github.com/Bilbycast/bilbycast-manager/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
 sha256sum -c bilbycast-manager.tar.gz.sha256
 ```
 

@@ -1,0 +1,58 @@
+---
+import Landing from '../layouts/Landing.astro';
+
+const services = [
+  {
+    title: 'Support Contracts with SLAs',
+    description: 'Production-grade support with defined response times, escalation paths, and dedicated engineers who know the Bilbycast internals. Covers edge, manager, relay, and the protocol libraries. Tiered plans from business-hours to 24×7 broadcast-critical coverage.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" /></svg>`,
+  },
+  {
+    title: 'Professional Services & Integration',
+    description: 'Hands-on engineering to integrate Bilbycast into your broadcast plant — NMOS control plane work, orchestration with your existing MAM / automation, custom device drivers, and interop validation against specific third-party encoders, decoders, and gateways.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" /></svg>`,
+  },
+  {
+    title: 'Managed Deployment & Hosting',
+    description: 'Fully managed Bilbycast deployments on infrastructure we operate — manager, relay fleet, and optional edge nodes. Upgrades, monitoring, certificate rotation, and incident response are handled for you. Suitable for teams that want the capabilities without running the platform.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" /></svg>`,
+  },
+  {
+    title: 'OEM & Vendor Licensing',
+    description: 'Embed Bilbycast components inside your own product or appliance under a commercial licence that permits redistribution, hosted-service resale, and trademark use. Covers the Elastic-licensed manager as well as commercial exemptions to the AGPL terms of the edge and relay.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>`,
+  },
+  {
+    title: 'Training & Certification',
+    description: 'Instructor-led training for operators and integrators — flow modelling, NMOS / IS-04/05/08 workflows, transcoding pipelines, SRT and RIST transport, and the manager API. Delivered on-site or remote, with optional certification for partner engineers who install Bilbycast for end customers.',
+    icon: `<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5" /></svg>`,
+  },
+];
+---
+
+<Landing title="Bilbycast — Services" description="Support contracts, professional services, managed deployment, OEM licensing, and training for Bilbycast broadcast media transport.">
+  <section class="pt-32 pb-12 lg:pt-40 lg:pb-16">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Services</h1>
+      <p class="mt-6 text-lg leading-relaxed text-slate-400">
+        Bilbycast is open for self-service deployment, and backed by commercial services for teams that need support guarantees, deeper integration, or a managed operation.
+      </p>
+    </div>
+  </section>
+
+  <section class="pb-24 lg:pb-32">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="grid gap-6 sm:grid-cols-2">
+        {services.map((s) => (
+          <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-950 text-sky-400 ring-1 ring-sky-800/40">
+              <Fragment set:html={s.icon} />
+            </div>
+            <h3 class="mt-4 text-lg font-semibold text-white">{s.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-slate-400">{s.description}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+</Landing>

@@ -5,16 +5,19 @@ sidebar:
   order: 1
 ---
 
-Bilbycast is a suite of Rust projects for professional broadcast media transport. The core components work together to move live video and audio between locations with broadcast-grade reliability.
+Bilbycast is a suite of Rust projects for professional broadcast media transport. The core components work together to move live video and audio between locations with broadcast-grade reliability, in-process transcoding, hot input switching, and configurable path synchronisation.
 
 ## Components
 
 | Component | Role |
 |-----------|------|
-| **bilbycast-edge** | Media transport gateway — bridges SRT, RTP, UDP, RTMP, RTSP, HLS, WebRTC |
-| **bilbycast-manager** | Web UI + API for remote management and monitoring |
+| **bilbycast-edge** | Media transport gateway — bridges SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, and SMPTE ST 2110-20/-23/-30/-31/-40, with in-process transcoding and hot input switching |
+| **bilbycast-manager** | Web UI + API for remote management, monitoring, and AI-assisted flow configuration |
 | **bilbycast-relay** | QUIC relay for NAT traversal between edge nodes |
 | **bilbycast-srt** | Pure Rust SRT protocol library (used by edge internally) |
+| **bilbycast-rist** | Pure Rust RIST (VSF TR-06-1 Simple Profile) library (used by edge internally) |
+| **bilbycast-fdk-aac-rs** | Fraunhofer FDK AAC wrapper — in-process AAC decode / encode |
+| **bilbycast-ffmpeg-video-rs** | FFmpeg libavcodec / libswscale wrapper — in-process video decode, scaling, JPEG encode, and Opus / MP2 / AC-3 audio encode |
 | **bilbycast-appear-x-api-gateway** | Bridge for Appear X broadcast devices |
 
 ## Architecture
@@ -52,30 +55,36 @@ The fastest way to see bilbycast in action is to run a standalone edge node:
 cd bilbycast-edge
 cargo build --release
 
-# Create a minimal config
+# Create a minimal config (config v2 — independent inputs/outputs/flows)
 cat > config.json << 'EOF'
 {
-  "version": 1,
+  "version": 2,
   "server": { "listen_addr": "0.0.0.0", "listen_port": 8080 },
+  "inputs": [
+    {
+      "id": "in-srt",
+      "name": "SRT Input",
+      "type": "srt",
+      "mode": "listener",
+      "local_addr": "0.0.0.0:9000",
+      "latency_ms": 120
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out-rtp",
+      "name": "RTP Output",
+      "type": "rtp",
+      "dest_addr": "192.168.1.100:5004"
+    }
+  ],
   "flows": [
     {
       "id": "srt-to-rtp",
       "name": "SRT Input to RTP Output",
       "enabled": true,
-      "input": {
-        "type": "srt",
-        "mode": "listener",
-        "local_addr": "0.0.0.0:9000",
-        "latency_ms": 120
-      },
-      "outputs": [
-        {
-          "type": "rtp",
-          "id": "out-1",
-          "name": "RTP Output",
-          "dest_addr": "192.168.1.100:5004"
-        }
-      ]
+      "input_ids": ["in-srt"],
+      "output_ids": ["out-rtp"]
     }
   ]
 }

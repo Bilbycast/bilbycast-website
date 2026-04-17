@@ -1,44 +1,59 @@
 ---
 const features = [
   {
-    icon: 'IP',
-    title: 'Secure IP Tunneling',
-    description: 'Forward any TCP or UDP traffic through encrypted QUIC tunnels between edge nodes. Monitor devices, control equipment, or extend your network — all managed from the bilbycast-manager UI.',
+    icon: '12+',
+    title: 'Twelve Protocols, One Gateway',
+    description: 'SRT, RIST (VSF TR-06-1), RTP, UDP, RTMP/RTMPS, RTSP, HLS, WebRTC (WHIP/WHEP), and SMPTE ST 2110-20/-23/-30/-31/-40. Inputs, outputs, and flows are independently managed entities — reuse outputs across flows, attach multiple inputs to one flow, and swap them mid-stream.',
   },
   {
-    icon: '11+',
-    title: 'Eleven Protocols, One Gateway',
-    description: 'SRT, RTP, UDP, RTMP/RTMPS, RTSP, HLS, WebRTC (WHIP/WHEP), and SMPTE ST 2110-30/-31/-40. Each flow has one input fanning out to any number of outputs — independently and without cross-output interference.',
+    icon: '\u21C4',
+    title: 'Hot Input Switching',
+    description: 'Flows with multiple inputs support zero-gap cutover via a single API call. A shared TS continuity fixer resets CC state, injects the new input\u2019s PAT/PMT with a bumped version, and forwards immediately — receivers keep playing without a glitch. Fully format-agnostic: switch between different codecs, containers, and transports (H.264, HEVC, JPEG XS, uncompressed ST 2110) on the same flow.',
   },
   {
-    icon: 'FEC',
-    title: 'Broadcast Standards',
-    description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge, TR-101290 transport stream analysis, SMPTE RP 2129 trust boundary metrics, and VSF TR-07 JPEG XS awareness.',
-  },
-  {
-    icon: '\u2295',
-    title: 'End-to-End Encryption',
-    description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Built entirely in Rust for memory safety, small binaries, and simple deployment — no C/C++ dependencies or OpenSSL.',
+    icon: 'VID',
+    title: 'Video Transcoding',
+    description: 'In-process H.264 / HEVC transcoding on SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs via libx264, libx265, or NVIDIA NVENC. TS outputs use a streaming PMT rewriter that preserves non-video PIDs. WebRTC auto-transcodes HEVC sources to H.264 so every browser can play. Two release channels: AGPL-only default, or a full variant with GPL encoders bundled.',
   },
   {
     icon: '\u266B',
-    title: 'Audio Gateway',
-    description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (pure-Rust rubato). IS-08 channel maps hot-reload without restarting flows. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware.',
+    title: 'Audio Gateway + Channel Router',
+    description: 'Per-output sample-rate, bit-depth, and channel-routing transcode (pure-Rust rubato). Built-in presets for 5.1→stereo BS.775 downmix, stereo→mono sum, and arbitrary matrix routing. IS-08 channel maps hot-reload without restarting flows — shuffle, swap, or remix audio channels live. SMPTE 302M LPCM-in-MPEG-TS for byte-identical interop with ffmpeg, srt-live-transmit, and broadcast hardware decoders.',
   },
   {
     icon: 'AAC',
     title: 'Compressed-Audio Bridge',
-    description: 'AAC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) — land it into PCM-only ST 2110-30/-31 / rtp_audio / SMPTE 302M outputs, or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 for RTMP, HLS, and WebRTC. AAC codecs encode in-process; non-AAC codecs (Opus, MP2, AC-3) use an ffmpeg subprocess. Marquee chain: AAC RTMP contribution → Opus WebRTC distribution in a single edge process.',
+    description: 'AAC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1). Land it on ST 2110-30/-31, rtp_audio, or SMPTE 302M outputs — or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 on any RTMP, HLS, WebRTC, SRT, UDP, RTP, or RIST output. All codecs encode in-process via FDK AAC and libavcodec — no external ffmpeg subprocess on the default build.',
+  },
+  {
+    icon: '\u29D9',
+    title: 'Output Delay & Path Sync',
+    description: 'SRT, RIST, RTP, and UDP outputs accept a delay block so parallel paths with different processing latencies stay aligned. Pick fixed millisecond delay, a self-adjusting target end-to-end latency, or a frame-accurate target using auto-detected frame rate. Keep a clean feed in lockstep with a commentary-processed variant, or compensate for a downstream transcode box.',
+  },
+  {
+    icon: 'IP',
+    title: 'Secure IP Tunneling',
+    description: 'Forward any TCP or UDP traffic through encrypted QUIC tunnels between edge nodes. Monitor devices, control equipment, or extend your network across NAT — all managed from the bilbycast-manager UI with per-tunnel HMAC bind tokens and ChaCha20-Poly1305 AEAD.',
+  },
+  {
+    icon: 'FEC',
+    title: 'Broadcast Standards',
+    description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge (including RIST bonding), TR-101290 transport-stream analysis, SMPTE RP 2129 trust-boundary metrics, and VSF TR-06-1 / TR-07 awareness. RIST is a first-class protocol, not a subset of SRT.',
+  },
+  {
+    icon: '\u2295',
+    title: 'Pure-Rust & End-to-End Encrypted',
+    description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Built entirely in Rust — the SRT, RIST, AAC, and core video-codec wrappers are all native — for memory safety, small binaries, and simple deployment.',
   },
   {
     icon: 'NMOS',
     title: 'NMOS Integration',
-    description: 'IS-04 Discovery & Registration, IS-05 Connection Management, IS-08 Audio Channel Mapping, and BCP-004 receiver capability sets. Best-effort PTP integration via external ptp4l. Seamless drop-in to existing NMOS facilities.',
+    description: 'IS-04 Discovery & Registration, IS-05 Connection Management, IS-08 Audio Channel Mapping, and BCP-004 receiver capability sets. Best-effort PTP integration via external ptp4l. Seamless drop-in to existing NMOS facilities for both audio and uncompressed ST 2110-20/-23 video.',
   },
   {
     icon: 'MPTS',
     title: 'MPTS / SPTS Handling',
-    description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, and HLS. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow.',
+    description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, RIST, and HLS. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow.',
   },
   {
     icon: 'AI',

@@ -13,9 +13,12 @@ interoperating with the standard broadcast tool stack (`ffmpeg`,
 LPCM-in-MPEG-TS). It also covers the compressed-audio bridge that
 decodes AAC contribution feeds in-process (via Fraunhofer FDK AAC by
 default — AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) and re-encodes
-them to AAC, HE-AAC v1/v2, Opus, MP2, or AC-3 for the RTMP, HLS, and
-WebRTC outputs. AAC codecs encode in-process via FDK AAC; non-AAC
-codecs (Opus, MP2, AC-3) use an ffmpeg subprocess.
+them to AAC, HE-AAC v1/v2, Opus, MP2, or AC-3 on RTMP, HLS, WebRTC,
+SRT, UDP, RTP, and RIST outputs. On the default build all codecs
+encode in-process — AAC via FDK AAC (`fdk-aac` feature) and Opus /
+MP2 / AC-3 via FFmpeg libavcodec + libopus (`video-thumbnail`
+feature). An ffmpeg subprocess fallback is used only when those
+features are disabled.
 
 If you only want byte-identical SMPTE ST 2110-30/-31 passthrough on a
 local broadcast plant, see [SMPTE ST 2110](/edge/st2110/) — that
@@ -50,7 +53,7 @@ operation, WAN transport, and compressed-audio egress.
 | Send 24-bit LPCM to a hardware decoder that expects MPEG-TS over UDP | UDP output with `transport_mode: "audio_302m"` |
 | Send 24-bit LPCM to a hardware decoder that expects RTP/MP2T (RFC 2250) | `rtp_audio` output with `transport_mode: "audio_302m"` |
 | Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; symphonia fallback: AAC-LC mono/stereo) |
-| Re-encode audio for YouTube / Twitch / HLS / WebRTC egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block (in-process FDK AAC for AAC codecs, ffmpeg subprocess for Opus/MP2/AC-3) |
+| Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `video-thumbnail` build (ffmpeg subprocess fallback otherwise) |
 | Deliver an AAC contribution to browsers as Opus in one hop | Combined Phase A + Phase B chain — RTMP AAC input → WebRTC WHEP Opus output |
 
 ---
@@ -458,17 +461,21 @@ gaps:
    because Opus is the only realistic WebRTC audio codec and there
    was no decode/encode bridge.
 
-The `audio_encode` block, available on the RTMP, HLS, and WebRTC
-output types, fills both gaps. When set, the output decodes the input
-AAC in-process via the Phase A `engine::audio_decode::AacDecoder`,
-then re-encodes via Phase B's `engine::audio_encode::AudioEncoder`.
+The `audio_encode` block, available on the RTMP, HLS, WebRTC, SRT,
+RIST, UDP, and RTP output types (TS outputs use the streaming
+`engine::ts_audio_replace::TsAudioReplacer`, which rewrites the PMT
+stream_type in place and leaves video / other PIDs untouched), fills
+both gaps. When set, the output decodes the input AAC in-process via
+the Phase A `engine::audio_decode::AacDecoder`, then re-encodes via
+Phase B's `engine::audio_encode::AudioEncoder`.
 
-**Default (`fdk-aac` feature, on by default):** AAC codecs (AAC-LC,
-HE-AAC v1, HE-AAC v2) are encoded in-process via Fraunhofer FDK AAC
-— no subprocess, no ffmpeg dependency for AAC. Non-AAC codecs (Opus,
-MP2, AC-3) use an ffmpeg subprocess. **Fallback (no `fdk-aac`
-feature):** all codecs use an ffmpeg subprocess. Outputs without
-`audio_encode` set keep working without ffmpeg installed at all.
+**Default build (`fdk-aac` + `video-thumbnail`, both on by default):**
+all codecs encode in-process. AAC codecs (AAC-LC, HE-AAC v1, HE-AAC
+v2) use Fraunhofer FDK AAC; Opus / MP2 / AC-3 use FFmpeg libavcodec
+(+ libopus). No external subprocess, no ffmpeg binary on PATH
+required. **Fallback (features disabled):** the encoder falls back to
+an ffmpeg subprocess for the affected codecs. Outputs without
+`audio_encode` set keep working regardless.
 
 ```jsonc
 {
@@ -491,6 +498,7 @@ feature):** all codecs use an ffmpeg subprocess. Outputs without
 | `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. |
 | `hls` | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | HLS-TS supports MP2 (stream type 0x04) and AC-3 (private_stream_1) so long as the consumer's player does. |
 | `webrtc` | `opus` | `opus` | WebRTC realistically only does Opus. Validation also rejects `audio_encode` + `video_only=true` (an audio MID must be negotiated in SDP). |
+| `srt`, `rist`, `udp`, `rtp` (TS outputs) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `opus`, `mp2`, `ac3` | `aac_lc` | `TsAudioReplacer` rewrites the PMT stream_type in place and leaves video / other PIDs untouched. Mutually exclusive with `transport_mode: audio_302m`. |
 
 The validator enforces this matrix at config load time and on every
 `update_config` manager command — invalid combinations are rejected

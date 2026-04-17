@@ -1,16 +1,19 @@
 ---
 const protocols = [
-  { name: 'SRT', input: true, output: true, features: 'AES-CTR/GCM, Stream ID, FEC, 2022-7 hitless redundancy, SMPTE 302M audio mode' },
-  { name: 'RTP', input: true, output: true, features: 'SMPTE 2022-1 FEC, unicast/multicast, DSCP QoS, 2022-7 redundancy' },
-  { name: 'UDP', input: true, output: true, features: 'Raw MPEG-TS, unicast/multicast, SMPTE 302M audio mode' },
-  { name: 'RTMP/RTMPS', input: true, output: true, features: 'H.264/AAC, ingest from OBS/ffmpeg, publish to Twitch/YouTube/Facebook, TLS, optional audio_encode' },
+  { name: 'SRT', input: true, output: true, features: 'AES-CTR/GCM, Stream ID, FEC, 2022-7 redundancy, SMPTE 302M audio mode, optional audio_encode + video_encode on TS output, optional delay block' },
+  { name: 'RIST', input: true, output: true, features: 'VSF TR-06-1 Simple Profile — NACK-driven retransmit, SMPTE 2022-7 bonding, optional audio_encode + video_encode on TS output, optional delay block' },
+  { name: 'RTP', input: true, output: true, features: 'SMPTE 2022-1 FEC, unicast/multicast, DSCP QoS, 2022-7 redundancy, optional audio_encode + video_encode on TS output, optional delay block' },
+  { name: 'UDP', input: true, output: true, features: 'Raw MPEG-TS, unicast/multicast, SMPTE 302M audio mode, optional audio_encode + video_encode on TS output, optional delay block' },
+  { name: 'RTMP/RTMPS', input: true, output: true, features: 'H.264 (FLV) + Enhanced-RTMP HEVC, AAC audio, ingest from OBS/ffmpeg, publish to Twitch/YouTube/Facebook, TLS, optional audio_encode + video_encode' },
   { name: 'RTSP', input: true, output: false, features: 'Pull H.264/H.265 from IP cameras, TCP/UDP' },
   { name: 'HLS', input: false, output: true, features: 'Segment-based egress, HEVC/HDR support, MPTS filtering, optional audio_encode (AAC/HE-AAC/MP2/AC-3)' },
-  { name: 'WebRTC', input: true, output: true, features: 'WHIP/WHEP, H.264 + Opus, browser-compatible, str0m pure-Rust, AAC→Opus via audio_encode' },
-  { name: 'ST 2110-30', input: true, output: true, features: 'PCM L16/L24, AES67 / RFC 3190, PTP, 2022-7 Red/Blue, IS-08' },
+  { name: 'WebRTC', input: true, output: true, features: 'WHIP/WHEP, H.264 + Opus, browser-compatible, str0m pure-Rust, AAC→Opus and HEVC→H.264 auto-transcode' },
+  { name: 'ST 2110-20', input: true, output: true, features: 'Uncompressed video (RFC 4175, YCbCr 4:2:2 8/10-bit), PTP, 2022-7 Red/Blue — bridged to H.264/HEVC compressed flows on egress' },
+  { name: 'ST 2110-23', input: true, output: true, features: 'Uncompressed video partitioned (2SI + sample-row partition modes), PTP, 2022-7 Red/Blue' },
+  { name: 'ST 2110-30', input: true, output: true, features: 'PCM L16/L24, AES67 / RFC 3190, PTP, 2022-7 Red/Blue, IS-08 channel routing + hot reload' },
   { name: 'ST 2110-31', input: true, output: true, features: 'AES3 transparent (Dolby E, Dolby Digital, etc.), bit-exact passthrough' },
   { name: 'ST 2110-40', input: true, output: true, features: 'RFC 8331 ancillary — SCTE-104, ATC timecode, CEA-608/708' },
-  { name: 'rtp_audio', input: true, output: true, features: 'Generic RFC 3551 PCM over RTP (no PTP required), 302M-capable output' },
+  { name: 'rtp_audio', input: true, output: true, features: 'Generic RFC 3551 PCM over RTP (no PTP required), 302M-capable output, transcode + IS-08 channel mapping' },
 ];
 ---
 
@@ -18,8 +21,9 @@ const protocols = [
   <div class="mx-auto max-w-5xl px-6">
     <div class="text-center">
       <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Protocol Support</h2>
-      <p class="mt-4 text-lg text-slate-400">Every implementation is native Rust — no C library dependencies.</p>
-      <p class="mt-3 text-sm text-slate-500">Compressed-audio bridge: AAC in MPEG-TS (carried over RTMP/RTSP/SRT/UDP/RTP) decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1), and can be re-encoded to AAC-LC, HE-AAC v1/v2 (in-process), Opus, MP2, or AC-3 (ffmpeg) for RTMP, HLS, and WebRTC egress.</p>
+      <p class="mt-4 text-lg text-slate-400">Every transport and FEC implementation is native Rust — no C library dependencies on the wire.</p>
+      <p class="mt-3 text-sm text-slate-500">Compressed-audio bridge: AAC in MPEG-TS (carried over RTMP/RTSP/SRT/UDP/RTP) decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1), and can be re-encoded to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 — all in-process via FDK AAC or libavcodec — on any RTMP, HLS, WebRTC, SRT, UDP, RTP, or RIST output.</p>
+      <p class="mt-3 text-sm text-slate-500">Video transcoding (<code class="text-slate-400">video_encode</code>): libx264, libx265, and NVIDIA NVENC targeting H.264/HEVC on SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs (WebRTC is H.264-only; HEVC sources are auto-transcoded). Shipped in the <code class="text-slate-400">*-full</code> release channel; default <code class="text-slate-400">*-linux</code> binaries ship AGPL-only without software encoders.</p>
     </div>
 
     <div class="mt-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">

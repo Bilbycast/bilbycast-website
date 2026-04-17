@@ -7,7 +7,9 @@ sidebar:
 
 ## Overview
 
-bilbycast-edge is a pure-Rust media gateway supporting multiple transport protocols for professional broadcast and streaming workflows. All protocol implementations are native Rust with no C library dependencies. The compressed-audio egress path (`audio_encode`) is the one exception: it invokes ffmpeg at runtime via a subprocess, never linked.
+bilbycast-edge is a pure-Rust media gateway supporting multiple transport protocols for professional broadcast and streaming workflows. All transport and FEC implementations are native Rust with no C library dependencies.
+
+Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `video-thumbnail` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC software video encoding requires `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), or `video-encoder-nvenc` (NVIDIA GPU required); the `*-full` release channel bundles all three. The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
 
 ## Input Protocols
 
@@ -46,6 +48,19 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - SMPTE 2022-7 hitless redundancy merge (dual-leg input)
   - Automatic reconnection
   - **`transport_mode: "audio_302m"`** (deferred — see [Audio Gateway — Limitations](/edge/audio-gateway/#limitations-and-deferred-items)): demux SMPTE 302M LPCM-in-MPEG-TS from `ffmpeg -c:a s302m`, `srt-live-transmit`, or hardware encoders, and republish as RTP audio packets onto the broadcast channel
+
+### RIST (VSF TR-06-1 Simple Profile)
+- **Direction:** Input and Output
+- **Transport:** UDP with RTCP NACK-driven retransmission
+- **Implementation:** `bilbycast-rist`, a pure-Rust two-crate workspace (`rist-protocol` + `rist-transport`). Wire-verified against librist 0.2.11 `ristsender` / `ristreceiver`
+- **Features:**
+  - Reliable RTP over UDP with RTCP NACK retransmission, RTT echo, SDES, and NTP-aligned RTP timestamps
+  - Dynamic RTCP source-address learning so receivers work through NAT
+  - SMPTE 2022-7 bonding handled in the protocol layer (not just at the broadcast channel)
+  - MPTS passthrough or per-output MPTS→SPTS filter via `program_number`
+  - Optional `audio_encode` on the TS (same codec matrix as SRT / UDP / RTP)
+  - Optional `video_encode` on the TS (same encoders as SRT / UDP / RTP)
+  - Optional output `delay` block (`fixed`, `target_ms`, `target_frames`)
 
 ### `rtp_audio` (RFC 3551 PCM over RTP, no PTP)
 - **Direction:** Input and Output
@@ -133,8 +148,8 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Non-blocking: uses mpsc bridge pattern, never blocks other outputs
   - **MPTS-aware:** on an MPTS input, selects program by `program_number` or (default) locks onto the lowest-numbered program in the PAT
   - **Optional `audio_encode` block (Phase B):** re-encodes audio so the operator can normalise bitrate / sample rate / channel count or upgrade to HE-AAC v1/v2 (`aac_lc`, `he_aac_v1`, `he_aac_v2`). With the default `fdk-aac` feature, AAC codecs encode in-process via FDK AAC (no ffmpeg needed). Same-codec passthrough fast path skips both decoder and encoder when the source is already AAC-LC and no overrides are set. Outputs without `audio_encode` keep working without ffmpeg installed. See [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc).
+  - **Optional `video_encode` block:** H.264 targets emit classic FLV; HEVC targets emit Enhanced RTMP v2 extended VideoTagHeader (`hvc1` FourCC, hvcC assembled from the encoder's extradata). RTMP HEVC passthrough (no `video_encode`) also rides the E-RTMP path, with hvcC built from the demuxer's cached VPS/SPS/PPS.
 - **Limitations:**
-  - Only H.264 video and AAC audio. HEVC/VP9 not supported via RTMP.
   - RTMPS (TLS) uses the `tls` feature (enabled by default).
   - Single-program by spec — only one program can be published per output.
 
@@ -149,7 +164,7 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - Optional Bearer token authentication
   - Async HTTP upload, non-blocking to other outputs
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number` — filtered segments carry a rewritten single-program TS
-  - **Optional `audio_encode` block (Phase B):** each segment is piped through `ffmpeg -i pipe:0 -c:v copy -c:a {codec} -f mpegts pipe:1` before HTTP PUT. Allowed codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3`. Per-segment fork rather than a long-lived encoder because HLS segments are 2-6 s and ffmpeg startup is small relative to that — also lets MP2/AC-3 work without a new TS muxer. Requires ffmpeg in PATH; the output refuses to start if ffmpeg is missing and emits a Critical `audio_encode` event.
+  - **Optional `audio_encode` block (Phase B):** each segment is re-encoded with the configured audio codec and re-muxed back into MPEG-TS in-process (video PIDs pass through unchanged). Allowed codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3`. AAC codecs use the in-process FDK AAC encoder (default `fdk-aac` feature); MP2 / AC-3 use in-process libavcodec on the default `video-thumbnail` build, with an ffmpeg subprocess fallback when the feature is disabled.
 - **Limitations:**
   - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
   - Uses a minimal built-in HTTP client (not a full HTTP/2 client).
@@ -168,6 +183,17 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 - **Limitations:**
   - Input only (no RTSP server mode)
   - AAC audio is passed through as ADTS in MPEG-TS
+
+### SMPTE ST 2110-20 / -23 (uncompressed video)
+- **Direction:** Input and Output
+- **Transport:** RFC 4175 RTP/UDP, multicast or unicast
+- **Payload:** YCbCr 4:2:2 8-bit or 10-bit uncompressed. ST 2110-23 adds two partition modes on top of -20: **2SI** (two-sample interleave) for UHD over multiple 10 GbE pipes, and **sample-row** for higher framerates
+- **PTP:** Best-effort PTP slave via external `ptp4l` — same wiring as the audio essences
+- **Dual-network:** SMPTE 2022-7 Red/Blue bind on input and output
+- **Egress pipeline:** The flow's MPEG-TS video ES is demuxed, decoded via `video-engine::VideoDecoder`, scaled into planar 4:2:2 8/10-bit via `VideoScaler`, then RFC 4175-packetised onto the wire (Red plus optional Blue). Outputs only need the default `video-thumbnail` feature
+- **Ingress pipeline:** RFC 4175 depacketise to raw frames, feed through `video-engine::VideoEncoder` in a blocking worker, then `TsMuxer` into the flow. Inputs require a `video_encode` block and a compiled-in `video-encoder-*` feature (libx264, libx265, or NVENC)
+- **Status:** Phase 2 shipped. ST 2110-22 (JPEG XS) is deferred pending a libjxs wrapper crate
+- **NMOS:** Advertised as `urn:x-nmos:format:video` in IS-04, with BCP-004 receiver caps reflecting the configured width/height/framerate/sampling
 
 ### SMPTE ST 2110-30 / -31 (PCM / AES3 audio)
 - **Direction:** Input and Output
@@ -216,8 +242,8 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
   - **WHIP output** (client): Push media to external WHIP endpoints (CDN, cloud)
   - **WHEP output** (server): Serve browser viewers — endpoint at `/api/v1/flows/{id}/whep`
   - **WHEP input** (client): Pull media from external WHEP servers
-- **Video:** H.264 only (RFC 6184 RTP packetization/depacketization)
-- **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RTP/UDP outputs. **Without `audio_encode`, AAC sources going to a WebRTC output automatically fall back to video-only.** Setting an `audio_encode` block (codec: `opus`) enables the Phase B chain: input AAC is decoded in-process via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC/HE-AAC v1/v2/multichannel) and re-encoded as Opus via the Phase B `engine::audio_encode::AudioEncoder` (ffmpeg subprocess for Opus), then written to the WebRTC audio MID via str0m. This is the marquee Phase A+B chain — **AAC RTMP contribution → Opus WebRTC distribution** — all inside one bilbycast-edge process with no external transcoder. Requires `video_only=false` and ffmpeg in PATH (for Opus encoding).
+- **Video:** H.264 only on egress (browsers don't decode HEVC over WebRTC). HEVC sources are auto-transcoded to H.264 by the same `VideoDecoder` / `VideoEncoder` pair used for explicit `video_encode` — drop an HEVC SRT feed onto a WHEP output and browsers just work. Validation rejects `x265` / `hevc_nvenc` targets for WebRTC outputs. The encoder is opened with `global_header = false` so SPS/PPS ride in-band on every IDR and the RFC 6184 packetizer forwards them as ordinary NAL units
+- **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RIST/RTP/UDP outputs. **Without `audio_encode`, AAC sources going to a WebRTC output automatically fall back to video-only.** Setting an `audio_encode` block (codec: `opus`) enables the Phase B chain: input AAC is decoded in-process via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC / HE-AAC v1/v2 / multichannel) and re-encoded as Opus in-process via libavcodec + libopus (on the default `video-thumbnail` build; ffmpeg subprocess fallback when the feature is disabled), then written to the WebRTC audio MID via str0m. This is the marquee Phase A+B chain — **AAC RTMP contribution → Opus WebRTC distribution** — all inside one bilbycast-edge process with no external transcoder. Requires `video_only=false`.
 - **MPTS-aware outputs:** on an MPTS input, WHIP/WHEP outputs select program by `program_number` or (default) lock onto the lowest-numbered program in the PAT. Single-program by spec.
 - **Interoperability:** Compatible with OBS, browsers, Cloudflare, LiveKit, and other standard WHIP/WHEP implementations.
 - **Security:** Bearer token authentication on WHIP/WHEP endpoints, DTLS/SRTP encryption, ICE-lite for server modes.
@@ -230,6 +256,45 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 - **TS-native outputs** (UDP, RTP, SRT, HLS) pass the full MPTS through by default. Each output may opt into a per-program filter via `program_number`, which rewrites the PAT to a single-program form and drops packets for every PID that isn't part of the selected program. FEC (2022-1) and hitless redundancy (2022-7) protect the filtered bytes, so receivers see a valid SPTS.
 - **Re-muxing outputs** (RTMP, WebRTC) and the **thumbnail generator** honour the same `program_number` field to select which program's elementary streams to extract. The default (unset) locks onto the lowest `program_number` in the PAT for deterministic behaviour.
 - **Per-output scope:** one flow can fan an MPTS out to multiple outputs, each locked onto a different program, while a sibling output forwards the full MPTS unchanged.
+
+## Video Transcoding (`video_encode`)
+
+SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs accept an optional `video_encode` block. TS-carrying outputs (SRT / RIST / UDP / RTP) run the streaming `engine::ts_video_replace::TsVideoReplacer`: the source video ES is demuxed, decoded via `video-engine::VideoDecoder`, re-encoded via `video-engine::VideoEncoder`, and re-muxed into the output TS — non-video PIDs (audio, PCR, PSI, ST 2110-40 ANC) pass through untouched. RTMP drives the same decoder/encoder pair, emitting classic FLV for H.264 targets and Enhanced RTMP v2 (`hvc1` FourCC, hvcC extradata) for HEVC targets. WebRTC is H.264-only and auto-transcodes HEVC sources.
+
+Supported encoders (opt-in via Cargo features):
+
+| Feature | Codec | Runtime |
+|---|---|---|
+| `video-encoder-x264` | H.264 via libx264 (GPL v2+) | CPU |
+| `video-encoder-x265` | HEVC via libx265 (GPL v2+) | CPU |
+| `video-encoder-nvenc` | H.264 / HEVC via NVIDIA NVENC (LGPL-clean API, requires NVIDIA GPU + driver) | GPU |
+| `video-encoders-full` | All three, for `*-linux-full` release builds | — |
+
+Default release builds (`*-linux`) ship AGPL-only without software encoders. The `*-linux-full` release channel bundles libx264 + libx265 + NVENC and is an AGPL-3.0-or-later combined work.
+
+ST 2110-22 (JPEG XS) transcoding is deferred pending a libjxs wrapper. HLS `video_encode` is the last deferred transport — tracked in the repo's `transcoding.md`.
+
+## Output Delay (path synchronisation)
+
+SRT, RIST, RTP, and UDP outputs accept an optional `delay` block so parallel paths with different processing latencies stay aligned. Three modes:
+
+- **`fixed`** — constant delay in milliseconds, applied at the output
+- **`target_ms`** — self-adjusting target end-to-end latency in milliseconds
+- **`target_frames`** — frame-accurate target latency using the auto-detected input frame rate, with optional ms fallback if the frame rate cannot be determined
+
+Typical use case: a flow with a clean primary feed and a secondary feed that goes through an external loudness processor or captioning engine. Apply the right mode on the clean output to compensate for the extra latency on the processed path.
+
+## Seamless Input Switching
+
+Flows can be configured with multiple `input_ids`; only one is active at a time. Switching is driven by `POST /api/v1/flows/{id}/activate-input` and is zero-gap:
+
+- A shared `TsContinuityFixer` (per flow) with per-input PSI caching resets CC state on switch, creating a clean-break CC jump so receivers resync
+- The new input's cached PAT/PMT is injected with a bumped `version_number` (CRC32 recalculated) to force receivers to re-parse even when inputs share PSI version numbers
+- All subsequent packets forward immediately — no buffering delay, no renegotiation
+
+The switcher is fully format-agnostic: inputs can use different codecs, containers, and transports. A flow can have H.264 SRT on one input, HEVC RIST on another, JPEG XS on a third, and uncompressed ST 2110-20 on a fourth, and cut between them with no visible gap on the output.
+
+For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent.
 
 ## Monitoring and Analysis
 
@@ -263,10 +328,16 @@ bilbycast-edge is a pure-Rust media gateway supporting multiple transport protoc
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `tls` | Enable RTMPS (RTMP over TLS) via `rustls`/`tokio-rustls` | **Yes** |
+| `tls` | Enable RTMPS (RTMP over TLS) via `rustls` / `tokio-rustls` | **Yes** |
 | `webrtc` | Enable WebRTC WHIP/WHEP input and output via `str0m` | **Yes** |
+| `fdk-aac` | In-process AAC decode + encode via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1). Replaces symphonia decode and the ffmpeg AAC encode subprocess | **Yes** |
+| `video-thumbnail` | In-process video decode, JPEG thumbnail encode, uncompressed ST 2110-20/-23 video decode, and Opus / MP2 / AC-3 audio encode via FFmpeg libavcodec / libswscale / libopus. Eliminates all ffmpeg subprocess dependencies on the default build | **Yes** |
+| `video-encoder-x264` | H.264 video transcoding via libx264. **GPL v2+** — binaries with this feature are an AGPL-3.0-or-later combined work | No |
+| `video-encoder-x265` | HEVC video transcoding via libx265. **GPL v2+** — same combined-work implications as x264 | No |
+| `video-encoder-nvenc` | NVIDIA NVENC H.264 / HEVC hardware encoders. LGPL-clean API layer; requires an NVIDIA GPU + proprietary driver at runtime | No |
+| `video-encoders-full` | Composite: enables `video-encoder-x264` + `video-encoder-x265` + `video-encoder-nvenc`. Used by the `*-linux-full` release channel | No |
 
-All features are enabled by default. A plain `cargo build --release` includes everything.
+Default release binaries (`*-linux`) ship AGPL-only without software video encoders. The `*-linux-full` channel bundles GPL / NVENC encoders — see `bilbycast-edge/docs/transcoding.md` in the repo for the full licence breakdown and install steps.
 
 ## Architecture Notes
 

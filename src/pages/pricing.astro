@@ -59,7 +59,7 @@ const managerTiers: Tier[] = [
     price: 'Free',
     color: 'sky',
     description:
-      'Self-host bilbycast-manager under the Elastic License 2.0 (ELv2). Suitable for evaluation, small plants, and teams running Bilbycast for their own broadcast operation.',
+      'Self-host bilbycast-manager under the Business Source License 1.1 (BSL 1.1). Suitable for evaluation, small plants, and teams running Bilbycast for their own broadcast operation. Each release converts to Apache License 2.0 four years after publication.',
     features: [
       'Up to 10 managed nodes (edges + relays combined)',
       'Full management UI — topology view, flow config, real-time stats, thumbnails',
@@ -69,7 +69,7 @@ const managerTiers: Tier[] = [
       'Community support — GitHub Issues & Discussions',
     ],
     footnote:
-      'ELv2 lets you self-host and use the manager freely, including for internal commercial broadcasting. It does not permit offering the manager itself as a hosted service to third parties, or removing/obscuring license keys or functionality. For those cases see Enterprise / OEM.',
+      'BSL 1.1 lets you self-host and use the manager freely for your own broadcast operations, including operations done on behalf of your clients. It does not permit offering the manager as a hosted / managed / SaaS service to third parties, embedding it in an appliance or product you deliver to third parties, or circumventing the license-key and node-count enforcement. For those cases see Enterprise / OEM.',
     ctaLabel: 'Get started',
     ctaHref: '/getting-started/',
   },
@@ -101,7 +101,7 @@ const managerTiers: Tier[] = [
     features: [
       'Everything in Commercial',
       '24×7 broadcast-critical SLA with a dedicated engineer',
-      'ELv2 redistribution rights — host the manager as a service, ship it inside an appliance',
+      'Redistribution rights outside BSL 1.1 — host the manager as a service, ship it inside an appliance',
       'AGPL commercial exemption for edge + relay when bundled in closed-source products',
       'Managed deployment option — we run it on your behalf',
       'Custom integration, training, and certification',
@@ -144,8 +144,8 @@ const faqs = [
     a: 'Self-hosted use inside your own facility — including for commercial, revenue-generating broadcasts — is fully covered by AGPL 3. The copyleft obligation kicks in only if you modify edge or relay and then offer the modified version as a network service to third parties. If you just run the official binaries, you have nothing to publish.',
   },
   {
-    q: 'What does Elastic License 2.0 mean for the manager?',
-    a: 'ELv2 lets you self-host and use bilbycast-manager for your own operations, including internal commercial broadcasting. It does not permit offering the manager itself as a hosted service to third parties, or removing/disabling the licence or its functionality. For both of those cases, a commercial or Enterprise / OEM licence is available.',
+    q: 'What does the Business Source License 1.1 mean for the manager?',
+    a: 'BSL 1.1 lets you self-host and use bilbycast-manager for your own broadcast operations (including operations you run on behalf of your clients), up to ten managed nodes. It does not permit offering the manager as a hosted / managed / SaaS service to third parties, embedding it in an appliance or product you deliver to third parties, or circumventing the license-key and node-count enforcement. Each release automatically converts to Apache License 2.0 four years after publication. For use beyond those limits, a commercial or Enterprise / OEM licence is available.',
   },
   {
     q: 'How is a "managed node" counted?',
@@ -161,20 +161,20 @@ const faqs = [
   },
   {
     q: 'Do I need a commercial licence to use Bilbycast for a paid broadcast?',
-    a: 'No. Running edge, relay, and manager for your own broadcast operation — including revenue-generating broadcasts — is fully covered by the free AGPL 3 and ELv2 terms. Commercial licences are for teams that need a support SLA, more than 10 manager nodes, or the right to redistribute the software inside their own product.',
+    a: 'No. Running edge, relay, and manager for your own broadcast operation — including revenue-generating broadcasts — is fully covered by the free AGPL 3 and BSL 1.1 terms. Commercial licences are for teams that need a support SLA, more than 10 manager nodes, or the right to redistribute the software inside their own product or as a hosted service.',
   },
 ];
 ---
 
 <Landing
   title="Bilbycast — Pricing"
-  description="Simple, broadcast-grade licensing. Edge and relay are free under AGPL 3; manager is free for up to 10 nodes under ELv2. Commercial licences and support contracts available."
+  description="Simple, broadcast-grade licensing. Edge and relay are free under AGPL 3; manager is free for up to 10 nodes under BSL 1.1 (converts to Apache 2.0 after four years). Commercial licences and support contracts available."
 >
   <section class="pt-32 pb-12 lg:pt-40 lg:pb-16">
     <div class="mx-auto max-w-4xl px-6 text-center">
       <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Simple, broadcast-grade licensing</h1>
       <p class="mt-6 text-lg leading-relaxed text-slate-400">
-        Bilbycast is open for self-service deployment. Edge and relay ship under <span class="font-medium text-slate-200">AGPL 3</span>, manager under the <span class="font-medium text-slate-200">Elastic License 2.0</span>. Free for self-hosted broadcast operations. Commercial terms are available when you need a support SLA, more than 10 manager nodes, or redistribution rights.
+        Bilbycast is open for self-service deployment. Edge and relay ship under <span class="font-medium text-slate-200">AGPL 3</span>, manager under the <span class="font-medium text-slate-200">Business Source License 1.1</span> (converting to Apache 2.0 four years after each release). Free for self-hosted broadcast operations. Commercial terms are available when you need a support SLA, more than 10 manager nodes, or redistribution rights.
       </p>
     </div>
   </section>

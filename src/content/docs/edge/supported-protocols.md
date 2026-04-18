@@ -91,8 +91,10 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Scheduler:** `media_aware` default (walks H.264/HEVC NAL units and
   duplicates IDR frames across the two lowest-RTT paths), `weighted_rtt`,
   or `round_robin`
-- **Why it exists:** Peplink-class path aggregation for broadcast —
-  outperforms per-protocol bonding (SRT groups, RIST 2022-7) on mixed-link
+- **Why it exists:** Carrier-grade path aggregation for broadcast — the
+  capability typically sold as a dedicated bonded-cellular encoder or
+  SD-WAN bonding appliance, built directly into the edge. Outperforms
+  per-protocol bonding (SRT groups, RIST 2022-7) on mixed-link
   heterogeneous scenarios, with frame-accurate failover via IDR
   duplication rather than stream-wide doubling
 - **Features:**

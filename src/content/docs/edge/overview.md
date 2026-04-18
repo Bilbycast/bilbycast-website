@@ -25,7 +25,7 @@ bilbycast-edge is a media transport gateway that bridges multiple protocols for 
 | **SMPTE ST 2110-31** | Yes | Yes | AES3 transparent (Dolby E, etc.) — same wire framing as -30, preserves user/status/parity bits |
 | **SMPTE ST 2110-40** | Yes | Yes | RFC 8331 ancillary data (SCTE-104, SMPTE 12M timecode, CEA-608/708 captions) |
 | **`rtp_audio`** | Yes | Yes | Generic RFC 3551 PCM over RTP — wire-identical to ST 2110-30 but no PTP requirement; `transport_mode: "audio_302m"` option on output for RTP/MP2T delivery |
-| **Bonded** | Yes | Yes | Peplink-class multi-path aggregation — N heterogeneous paths over UDP / QUIC / RIST, media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover. Any inner protocol (SRT/RTMP/RTSP/ST 2110) can ride a bonded hop. See [Multi-Path Bonding](/edge/bonding/) |
+| **Bonded** | Yes | Yes | Carrier-grade multi-path aggregation — N heterogeneous paths over UDP / QUIC / RIST, media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover. Any inner protocol (SRT/RTMP/RTSP/ST 2110) can ride a bonded hop. See [Multi-Path Bonding](/edge/bonding/) |
 
 The default build includes the `fdk-aac` feature (Fraunhofer FDK AAC — AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) and the `video-thumbnail` feature (FFmpeg libavcodec/libswscale for thumbnails, video decode, Opus/MP2/AC-3 in-process audio encode, and uncompressed ST 2110-20/-23 video decode). H.264/HEVC software encoding requires opting into `video-encoder-x264` / `video-encoder-x265` (GPL) or `video-encoder-nvenc` — the `*-full` release channel bundles all three.
 

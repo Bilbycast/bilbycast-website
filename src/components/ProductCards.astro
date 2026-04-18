@@ -19,16 +19,10 @@ const products = [
     color: 'emerald',
   },
   {
-    name: 'bilbycast-srt',
-    description: 'SRT protocol implementation — wire-compatible with libsrt v1.5.5. AES-CTR/GCM, FEC (row, staircase, 2D), Stream ID, and 80+ stats counters.',
-    link: '/srt/overview/',
+    name: 'bilbycast-bonding',
+    description: 'Media-aware multi-path packet bonding across N heterogeneous IP links — 5G + Starlink + fibre over UDP, QUIC, or RIST. Media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover. Transport-agnostic — bond any inner protocol (SRT, RTMP, RTSP, ST 2110).',
+    link: '/edge/bonding/',
     color: 'amber',
-  },
-  {
-    name: 'bilbycast-appear-x-api-gateway',
-    description: 'Reference API gateway sidecar — bridges Appear X encoder/gateway platforms into the bilbycast manager via the same WebSocket protocol. Template for adding any third-party broadcast device.',
-    link: '/appear-x-gateway/overview/',
-    color: 'rose',
   },
 ];
 
@@ -45,7 +39,7 @@ const colorMap: Record<string, { ring: string; bg: string; text: string }> = {
   <div class="mx-auto max-w-7xl px-6">
     <div class="text-center">
       <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">The Suite</h2>
-      <p class="mt-4 text-lg text-slate-400">Five components that work together for complete media transport infrastructure.</p>
+      <p class="mt-4 text-lg text-slate-400">Four components that work together for complete media transport infrastructure.</p>
     </div>
 
     <div class="mt-16 grid gap-6 sm:grid-cols-2">

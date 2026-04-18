@@ -1,0 +1,357 @@
+---
+import Landing from '../layouts/Landing.astro';
+
+type Tier = {
+  badge: string;
+  price: string;
+  color: 'sky' | 'violet' | 'emerald';
+  highlight?: boolean;
+  ribbon?: string;
+  description: string;
+  features: string[];
+  footnote?: string;
+  ctaLabel: string;
+  ctaHref: string;
+};
+
+const edgeRelayTiers: Tier[] = [
+  {
+    badge: 'Community',
+    price: 'Free',
+    color: 'sky',
+    description:
+      'Self-host bilbycast-edge and bilbycast-relay under AGPL 3. Every protocol, transcoder, FEC, bonding, and 2022-7 feature is in the default build — no paywalled capabilities.',
+    features: [
+      'Unlimited edge nodes and relay servers',
+      'SRT, RIST, RTP/UDP, RTMP, RTSP, HLS, WebRTC, SMPTE ST 2110-20/-22/-30/-31/-40',
+      'Full audio + video transcoding stack (AGPL default, or *-full release with GPL encoders)',
+      'SMPTE 2022-7 hitless redundancy, FEC, bonding, end-to-end tunnel encryption',
+      'Prometheus metrics, NMOS IS-04/05/08, BCP-004 receiver capabilities',
+      'Community support — GitHub Issues & Discussions',
+    ],
+    footnote:
+      'AGPL 3 kicks in only if you modify edge/relay and offer the modified version as a network service to third parties. Self-hosted broadcast operations — including revenue-generating ones — are unaffected.',
+    ctaLabel: 'Get started',
+    ctaHref: '/getting-started/',
+  },
+  {
+    badge: 'Commercial Support',
+    price: 'Contact sales',
+    color: 'violet',
+    description:
+      'Production-grade support with defined response times, named escalation engineers, and priority access to bug fixes and hot-patches.',
+    features: [
+      'Everything in Community',
+      'SLAs from business-hours to 24×7 broadcast-critical',
+      'Named escalation engineers who know the Bilbycast internals',
+      'Priority bug fixes and private hot-patches',
+      'Interop validation against your specific third-party encoders, decoders, and gateways',
+      'Optional AGPL commercial exemption for OEMs embedding edge/relay in closed-source products',
+    ],
+    ctaLabel: 'Contact sales',
+    ctaHref: 'mailto:contact@bilbycast.com?subject=Edge%20%26%20Relay%20Support',
+  },
+];
+
+const managerTiers: Tier[] = [
+  {
+    badge: 'Community',
+    price: 'Free',
+    color: 'sky',
+    description:
+      'Self-host bilbycast-manager under the Elastic License 2.0 (ELv2). Suitable for evaluation, small plants, and teams running Bilbycast for their own broadcast operation.',
+    features: [
+      'Up to 10 managed nodes (edges + relays combined)',
+      'Full management UI — topology view, flow config, real-time stats, thumbnails',
+      'AI-assisted flow configuration',
+      'NMOS IS-04/05/08 visibility and control plane integration',
+      'Driver-aware integration with third-party broadcast devices',
+      'Community support — GitHub Issues & Discussions',
+    ],
+    footnote:
+      'ELv2 lets you self-host and use the manager freely, including for internal commercial broadcasting. It does not permit offering the manager itself as a hosted service to third parties, or removing/obscuring license keys or functionality. For those cases see Enterprise / OEM.',
+    ctaLabel: 'Get started',
+    ctaHref: '/getting-started/',
+  },
+  {
+    badge: 'Commercial',
+    price: 'Contact sales',
+    color: 'violet',
+    highlight: true,
+    ribbon: 'Most teams start here',
+    description:
+      'Manage unlimited nodes with a commercial licence plus production support. A single vendor relationship covering manager, edge, and relay.',
+    features: [
+      'Unlimited managed nodes',
+      'Business-hours or 24×7 SLA — your choice',
+      'Named escalation engineers and private hot-patches',
+      'Priority bug fixes and migration assistance on upgrades',
+      'Private upgrade cadence aligned to your maintenance windows',
+      'Interop validation with your existing plant equipment',
+    ],
+    ctaLabel: 'Contact sales',
+    ctaHref: 'mailto:contact@bilbycast.com?subject=Manager%20Commercial%20Licence',
+  },
+  {
+    badge: 'Enterprise / OEM',
+    price: 'Contact sales',
+    color: 'emerald',
+    description:
+      'For broadcasters running 24×7 critical infrastructure and vendors embedding Bilbycast inside their own appliance or hosted service.',
+    features: [
+      'Everything in Commercial',
+      '24×7 broadcast-critical SLA with a dedicated engineer',
+      'ELv2 redistribution rights — host the manager as a service, ship it inside an appliance',
+      'AGPL commercial exemption for edge + relay when bundled in closed-source products',
+      'Trademark use rights',
+      'Managed deployment option — we run it on your behalf',
+      'Custom integration, training, and certification',
+    ],
+    ctaLabel: 'Talk to us',
+    ctaHref: 'mailto:contact@bilbycast.com?subject=Manager%20Enterprise%20%2F%20OEM',
+  },
+];
+
+const colorMap: Record<string, { ring: string; bg: string; text: string; border: string; button: string; buttonHover: string }> = {
+  sky: {
+    ring: 'ring-sky-800/40',
+    bg: 'bg-sky-950',
+    text: 'text-sky-400',
+    border: 'border-slate-800',
+    button: 'bg-slate-800 hover:bg-slate-700',
+    buttonHover: 'text-white',
+  },
+  violet: {
+    ring: 'ring-violet-800/40',
+    bg: 'bg-violet-950',
+    text: 'text-violet-400',
+    border: 'border-violet-800/40',
+    button: 'bg-sky-600 hover:bg-sky-500',
+    buttonHover: 'text-white',
+  },
+  emerald: {
+    ring: 'ring-emerald-800/40',
+    bg: 'bg-emerald-950',
+    text: 'text-emerald-400',
+    border: 'border-slate-800',
+    button: 'bg-slate-800 hover:bg-slate-700',
+    buttonHover: 'text-white',
+  },
+};
+
+const faqs = [
+  {
+    q: 'What does AGPL 3 mean for my broadcast plant?',
+    a: 'Self-hosted use inside your own facility — including for commercial, revenue-generating broadcasts — is fully covered by AGPL 3. The copyleft obligation kicks in only if you modify edge or relay and then offer the modified version as a network service to third parties. If you just run the official binaries, you have nothing to publish.',
+  },
+  {
+    q: 'What does Elastic License 2.0 mean for the manager?',
+    a: 'ELv2 lets you self-host and use bilbycast-manager for your own operations, including internal commercial broadcasting. It does not permit offering the manager itself as a hosted service to third parties, or removing/disabling the licence or its functionality. For both of those cases, a commercial or Enterprise / OEM licence is available.',
+  },
+  {
+    q: 'How is a "managed node" counted?',
+    a: 'Every edge node and every relay server connected to a single manager instance counts as one managed node. Ten edges and zero relays is ten nodes. Seven edges and three relays is also ten nodes.',
+  },
+  {
+    q: 'What is community support?',
+    a: 'Public GitHub Issues and Discussions on the Bilbycast repositories. Best-effort responses from maintainers, no SLA, no guaranteed turnaround. Great for learning and non-critical deployments.',
+  },
+  {
+    q: 'Can I start on Community and upgrade later?',
+    a: 'Yes. The config files, the binaries, and the WebSocket protocol are identical across tiers. A commercial licence removes the 10-node cap and adds a support contract — no migration, no re-install, no config change.',
+  },
+  {
+    q: 'Do I need a commercial licence to use Bilbycast for a paid broadcast?',
+    a: 'No. Running edge, relay, and manager for your own broadcast operation — including revenue-generating broadcasts — is fully covered by the free AGPL 3 and ELv2 terms. Commercial licences are for teams that need a support SLA, more than 10 manager nodes, or the right to redistribute the software inside their own product.',
+  },
+];
+---
+
+<Landing
+  title="Bilbycast — Pricing"
+  description="Simple, broadcast-grade licensing. Edge and relay are free under AGPL 3; manager is free for up to 10 nodes under ELv2. Commercial licences and support contracts available."
+>
+  <section class="pt-32 pb-12 lg:pt-40 lg:pb-16">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Simple, broadcast-grade licensing</h1>
+      <p class="mt-6 text-lg leading-relaxed text-slate-400">
+        Bilbycast is open for self-service deployment. Edge and relay ship under <span class="font-medium text-slate-200">AGPL 3</span>, manager under the <span class="font-medium text-slate-200">Elastic License 2.0</span>. Free for self-hosted broadcast operations. Commercial terms are available when you need a support SLA, more than 10 manager nodes, or redistribution rights.
+      </p>
+    </div>
+  </section>
+
+  <section class="pb-20">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="mb-10">
+        <div class="inline-flex items-center gap-2 rounded-full bg-sky-950 px-3 py-1 text-xs font-semibold text-sky-400 ring-1 ring-sky-800/40">bilbycast-edge + bilbycast-relay</div>
+        <h2 class="mt-4 text-3xl font-bold tracking-tight text-white sm:text-4xl">Edge & Relay — AGPL 3</h2>
+        <p class="mt-3 max-w-3xl text-base leading-relaxed text-slate-400">
+          Free and open source. Run unlimited edges and relays in your plant. Commercial support is available for production deployments that need defined response times or OEM redistribution rights.
+        </p>
+      </div>
+
+      <div class="grid gap-6 lg:grid-cols-2">
+        {edgeRelayTiers.map((t) => {
+          const c = colorMap[t.color];
+          return (
+            <div class={`flex flex-col rounded-xl border ${c.border} bg-gradient-to-br from-slate-800/30 to-slate-900/10 p-8`}>
+              <div class="flex items-center justify-between">
+                <div class={`inline-flex items-center gap-2 rounded-full ${c.bg} ${c.ring} ring-1 px-3 py-1 text-xs font-semibold ${c.text}`}>{t.badge}</div>
+              </div>
+              <div class="mt-6">
+                <div class="text-3xl font-bold tracking-tight text-white">{t.price}</div>
+                <p class="mt-3 text-sm leading-relaxed text-slate-400">{t.description}</p>
+              </div>
+              <ul class="mt-6 space-y-3">
+                {t.features.map((f) => (
+                  <li class="flex items-start gap-3 text-sm leading-relaxed text-slate-300">
+                    <svg class={`mt-0.5 h-4 w-4 flex-none ${c.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+              {t.footnote && (
+                <p class="mt-6 text-xs leading-relaxed text-slate-500">{t.footnote}</p>
+              )}
+              <div class="mt-auto pt-8">
+                <a
+                  href={t.ctaHref}
+                  class={`inline-flex w-full items-center justify-center gap-2 rounded-xl ${c.button} px-5 py-3 text-sm font-semibold ${c.buttonHover} shadow-lg shadow-black/20 transition`}
+                >
+                  {t.ctaLabel}
+                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                  </svg>
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <p class="mt-6 text-center text-sm text-slate-500">
+        Need the full support + OEM catalogue? See the <a href="/services/" class="text-sky-400 hover:text-sky-300">Services page</a>.
+      </p>
+    </div>
+  </section>
+
+  <section class="pb-20">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="mb-10">
+        <div class="inline-flex items-center gap-2 rounded-full bg-violet-950 px-3 py-1 text-xs font-semibold text-violet-400 ring-1 ring-violet-800/40">bilbycast-manager</div>
+        <h2 class="mt-4 text-3xl font-bold tracking-tight text-white sm:text-4xl">Manager — Elastic License 2.0</h2>
+        <p class="mt-3 max-w-3xl text-base leading-relaxed text-slate-400">
+          Free for up to 10 managed nodes. Commercial licence for larger fleets, production support, and OEM / redistribution use.
+        </p>
+      </div>
+
+      <div class="grid gap-6 lg:grid-cols-3">
+        {managerTiers.map((t) => {
+          const c = colorMap[t.color];
+          const borderClass = t.highlight ? 'border-violet-700/60 ring-1 ring-violet-700/30' : c.border;
+          return (
+            <div class={`relative flex flex-col rounded-xl border ${borderClass} bg-gradient-to-br from-slate-800/30 to-slate-900/10 p-8`}>
+              {t.ribbon && (
+                <div class="absolute -top-3 left-1/2 -translate-x-1/2">
+                  <div class="rounded-full bg-violet-600 px-3 py-1 text-xs font-semibold text-white shadow-lg shadow-violet-950/40">{t.ribbon}</div>
+                </div>
+              )}
+              <div class="flex items-center justify-between">
+                <div class={`inline-flex items-center gap-2 rounded-full ${c.bg} ${c.ring} ring-1 px-3 py-1 text-xs font-semibold ${c.text}`}>{t.badge}</div>
+              </div>
+              <div class="mt-6">
+                <div class="text-3xl font-bold tracking-tight text-white">{t.price}</div>
+                <p class="mt-3 text-sm leading-relaxed text-slate-400">{t.description}</p>
+              </div>
+              <ul class="mt-6 space-y-3">
+                {t.features.map((f) => (
+                  <li class="flex items-start gap-3 text-sm leading-relaxed text-slate-300">
+                    <svg class={`mt-0.5 h-4 w-4 flex-none ${c.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+              {t.footnote && (
+                <p class="mt-6 text-xs leading-relaxed text-slate-500">{t.footnote}</p>
+              )}
+              <div class="mt-auto pt-8">
+                <a
+                  href={t.ctaHref}
+                  class={`inline-flex w-full items-center justify-center gap-2 rounded-xl ${c.button} px-5 py-3 text-sm font-semibold ${c.buttonHover} shadow-lg shadow-black/20 transition`}
+                >
+                  {t.ctaLabel}
+                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                  </svg>
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  </section>
+
+  <section class="pb-20">
+    <div class="mx-auto max-w-5xl px-6">
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 sm:p-12">
+        <div class="flex items-center gap-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-950 text-sky-400 ring-1 ring-sky-800/40">
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+            </svg>
+          </div>
+          <h3 class="text-xl font-bold tracking-tight text-white sm:text-2xl">Every tier ships the same engine</h3>
+        </div>
+        <p class="mt-4 text-sm leading-relaxed text-slate-400 sm:text-base">
+          There is no feature gating on the transport or transcoding side. SRT, RIST, ST 2110, bonding, FEC, SMPTE 2022-7 hitless redundancy, audio and video transcoding, WebRTC distribution, and AI-assisted flow configuration are all in the default builds. The commercial line is about <span class="text-slate-200">licensing rights and support obligations</span>, not unlocking features. Evaluate the platform at full capability before talking to sales.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="pb-20">
+    <div class="mx-auto max-w-4xl px-6">
+      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Frequently asked questions</h2>
+      <div class="mt-8 space-y-3">
+        {faqs.map((f) => (
+          <details class="group rounded-xl border border-slate-800 bg-slate-900/40 p-5 open:bg-slate-900/60">
+            <summary class="flex cursor-pointer list-none items-start justify-between gap-6 text-base font-semibold text-white">
+              <span>{f.q}</span>
+              <svg class="mt-1 h-4 w-4 flex-none text-slate-500 transition group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </summary>
+            <p class="mt-3 text-sm leading-relaxed text-slate-400">{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="pb-24 lg:pb-32">
+    <div class="mx-auto max-w-4xl px-6">
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center sm:p-12">
+        <h2 class="text-2xl font-bold tracking-tight text-white sm:text-3xl">Not sure which tier fits?</h2>
+        <p class="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
+          Tell us about your plant, your channel count, and your SLA expectations — we'll recommend the right licence and support level. Evaluation and proof-of-concept deployments are welcome.
+        </p>
+        <div class="mt-8 flex items-center justify-center">
+          <a
+            href="mailto:contact@bilbycast.com?subject=Bilbycast%20Pricing"
+            class="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-600/20 transition hover:bg-sky-500"
+          >
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+            </svg>
+            contact@bilbycast.com
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</Landing>

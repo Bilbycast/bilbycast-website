@@ -41,6 +41,11 @@ const features = [
     description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge (including RIST bonding), TR-101290 transport-stream analysis, SMPTE RP 2129 trust-boundary metrics, and VSF TR-06-1 / TR-07 awareness. RIST is a first-class protocol, not a subset of SRT.',
   },
   {
+    icon: 'BOND',
+    title: 'Multi-Path Bonding',
+    description: 'Peplink-class aggregation of N heterogeneous IP links (5G + Starlink + fibre) over UDP / QUIC / RIST paths. Media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover without doubling total bandwidth. Transport-agnostic — bond any inner protocol (SRT, RTMP, RTSP, ST 2110).',
+  },
+  {
     icon: '\u2295',
     title: 'End-to-End Encrypted',
     description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Memory-safe core with tight, static binaries for simple deployment.',

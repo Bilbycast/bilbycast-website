@@ -25,6 +25,7 @@ bilbycast-edge is a media transport gateway that bridges multiple protocols for 
 | **SMPTE ST 2110-31** | Yes | Yes | AES3 transparent (Dolby E, etc.) — same wire framing as -30, preserves user/status/parity bits |
 | **SMPTE ST 2110-40** | Yes | Yes | RFC 8331 ancillary data (SCTE-104, SMPTE 12M timecode, CEA-608/708 captions) |
 | **`rtp_audio`** | Yes | Yes | Generic RFC 3551 PCM over RTP — wire-identical to ST 2110-30 but no PTP requirement; `transport_mode: "audio_302m"` option on output for RTP/MP2T delivery |
+| **Bonded** | Yes | Yes | Peplink-class multi-path aggregation — N heterogeneous paths over UDP / QUIC / RIST, media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover. Any inner protocol (SRT/RTMP/RTSP/ST 2110) can ride a bonded hop. See [Multi-Path Bonding](/edge/bonding/) |
 
 The default build includes the `fdk-aac` feature (Fraunhofer FDK AAC — AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) and the `video-thumbnail` feature (FFmpeg libavcodec/libswscale for thumbnails, video decode, Opus/MP2/AC-3 in-process audio encode, and uncompressed ST 2110-20/-23 video decode). H.264/HEVC software encoding requires opting into `video-encoder-x264` / `video-encoder-x265` (GPL) or `video-encoder-nvenc` — the `*-full` release channel bundles all three.
 
@@ -39,6 +40,7 @@ The default build includes the `fdk-aac` feature (Fraunhofer FDK AAC — AAC-LC,
 - **SMPTE ST 2110** — Phase 1: audio essences (-30 PCM, -31 AES3) and ancillary data (-40). Phase 2: uncompressed video (-20 RFC 4175, -23 with 2SI and sample-row partition modes). Best-effort PTP integration via external `ptp4l` management socket. SMPTE 2022-7 Red/Blue dual-network support everywhere
 - **SMPTE 2022-1 FEC** — Forward Error Correction for RTP (encode + decode) and SRT (wire-compatible with libsrt 1.5.5 row/staircase/2D modes)
 - **SMPTE 2022-7 hitless redundancy** — Dual-leg input merging for seamless failover; also available inside the RIST protocol layer as native bonding
+- **Multi-path bonding** — A third bonding option for N ≥ 2 heterogeneous paths (5G + Starlink + fibre), distinct from SRT socket groups and RIST 2022-7. Media-aware scheduler walks H.264/HEVC NAL units and duplicates IDR frames across the two lowest-RTT paths; the bond layer itself is transport-agnostic and can carry SRT, RTMP, RTSP, ST 2110, or any other inner protocol — see [Multi-Path Bonding](/edge/bonding/)
 - **Flow groups** — `start_flow_group` / `stop_flow_group` manager commands bring up multi-essence broadcast bundles (audio + ANC + video) all-or-nothing in parallel; failures roll back every started member
 - **NMOS IS-04 / IS-05 / IS-08 + BCP-004** — Broadcast control system integration with multi-essence audio/data/video resources, audio channel mapping, and BCP-004 receiver capability constraint sets
 - **mDNS-SD discovery** — Best-effort `_nmos-node._tcp` registration for automatic NMOS controller discovery

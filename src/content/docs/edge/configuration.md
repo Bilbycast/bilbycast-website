@@ -33,6 +33,7 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [SRT Output](#srt-output)
   - [RTMP Output](#rtmp-output)
   - [HLS Output](#hls-output)
+  - [CMAF Output](#cmaf-output)
   - [WebRTC Output](#webrtc-output)
 - [MPTS → SPTS filtering](#mpts--spts-filtering)
 - [SMPTE 2022-1 FEC Configuration](#smpte-2022-1-fec-configuration)
@@ -837,6 +838,106 @@ Segments MPEG-2 TS data and uploads via HTTP for HLS ingest (e.g., YouTube HLS).
 
 **Limitations:**
 - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
+
+### CMAF Output
+
+Pushes fragmented MP4 (ISO BMFF) segments to an HTTP(S) ingest endpoint with parallel HLS (`.m3u8`) and MPEG-DASH (`.mpd`) manifests built off the same segment set. Supports whole-segment PUT (standard CMAF) and chunked-transfer streaming PUT (low-latency CMAF), plus ClearKey CENC encryption with optional Widevine / PlayReady / FairPlay PSSH passthrough.
+
+**Standard CMAF — HLS + DASH, AAC passthrough, unencrypted:**
+
+```json
+{
+  "type": "cmaf",
+  "id": "cdn-primary",
+  "name": "CDN primary push",
+  "ingest_url": "https://ingest.cdn.example.com/live/channel1",
+  "auth_token": "Bearer-xyz",
+  "segment_duration_secs": 4.0,
+  "max_segments": 6,
+  "manifests": ["hls", "dash"]
+}
+```
+
+**LL-CMAF — HLS-only, FairPlay CBCS encryption:**
+
+```json
+{
+  "type": "cmaf",
+  "id": "ll-ios",
+  "name": "Low-latency iOS",
+  "ingest_url": "https://ll.cdn.example.com/live/ios",
+  "low_latency": true,
+  "chunk_duration_ms": 333,
+  "segment_duration_secs": 2.0,
+  "manifests": ["hls"],
+  "encryption": {
+    "scheme": "cbcs",
+    "key_id": "0123456789abcdef0123456789abcdef",
+    "key": "fedcba9876543210fedcba9876543210"
+  }
+}
+```
+
+**DASH-only — HEVC re-encode at 5 Mbps, ClearKey CENC + Widevine PSSH passthrough:**
+
+```json
+{
+  "type": "cmaf",
+  "id": "uhd-dash",
+  "name": "UHD DASH egress",
+  "ingest_url": "https://ingest.cdn.example.com/live/uhd",
+  "segment_duration_secs": 4.0,
+  "manifests": ["dash"],
+  "video_encode": { "codec": "x265", "bitrate_kbps": 5000, "preset": "medium", "profile": "main10" },
+  "audio_encode": { "codec": "he_aac_v1", "bitrate_kbps": 64 },
+  "encryption": {
+    "scheme": "cenc",
+    "key_id": "0123456789abcdef0123456789abcdef",
+    "key": "fedcba9876543210fedcba9876543210",
+    "pssh_boxes": ["<widevine-pssh-hex>", "<playready-pssh-hex>"]
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | - | Must be `"cmaf"`. |
+| `id` | string | Yes | - | Unique output ID. Cannot be empty. |
+| `name` | string | Yes | - | Human-readable display name. |
+| `ingest_url` | string | Yes | - | CMAF ingest base URL. Must start with `http://` or `https://`, max 2048 chars, no control characters. |
+| `auth_token` | string | No | `null` | Bearer token sent as `Authorization: Bearer <token>` on every PUT. Max 4096 chars, no control/whitespace characters. |
+| `segment_duration_secs` | float | No | `2.0` | Target closed-GoP segment duration in seconds. Range 1.0-10.0. Used as the GoP alignment target when `video_encode` is set. |
+| `max_segments` | integer | No | `5` | Rolling playlist depth. Range 1-30. |
+| `low_latency` | boolean | No | `false` | `false` = standard CMAF (whole-segment PUT). `true` = LL-CMAF (chunked-transfer PUT + `#EXT-X-PART` in HLS and `availabilityTimeOffset` in DASH). |
+| `chunk_duration_ms` | integer | No | `500` | Sub-segment chunk cadence for LL-CMAF. Range 100-2000. Only meaningful when `low_latency = true`; ignored otherwise. |
+| `manifests` | array&lt;string&gt; | No | `["hls", "dash"]` | Which manifests to publish. Non-empty subset of `["hls", "dash"]`. Use `["hls"]` for Apple-only, `["dash"]` for Widevine/PlayReady-centric CDNs, both for maximum reach. |
+| `encryption` | object | No | `null` | ClearKey CENC encryption block — see below. Omit for clear (unencrypted) output. |
+| `audio_encode` | object | No | `null` | Optional AAC re-encode (codec: `aac_lc`, `he_aac_v1`, `he_aac_v2`). Omit for AAC passthrough. MP2/AC-3/Opus are rejected — CMAF audio is AAC-family only. |
+| `transcode` | object | No | `null` | Optional PCM channel-shuffle / sample-rate / bit-depth conversion, sits between the AAC decoder and the target encoder. Only effective when `audio_encode` is set; rejected at validation otherwise. |
+| `video_encode` | object | No | `null` | Optional re-encode (same schema as ST 2110 video inputs: `x264`, `x265`, `h264_nvenc`, `hevc_nvenc`). HEVC (`x265`, `hevc_nvenc`) requires `manifests: ["dash"]` — HLS fMP4 HEVC client support is inconsistent. Omit for passthrough. |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = source must already be SPTS (CMAF is inherently single-program). `Some(N)` = filter to program N before segmenting. Must be `> 0`. |
+
+**Encryption block (`encryption`):**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `scheme` | string | Yes | - | `"cenc"` (AES-CTR — Widevine/PlayReady standard, pairs with DASH) or `"cbcs"` (AES-CBC with 1:9 pattern — FairPlay / Apple standard, pairs with HLS). |
+| `key_id` | string | Yes | - | Key identifier. Exactly 32 hex characters (16 bytes). |
+| `key` | string | Yes | - | AES-128 content key. Exactly 32 hex characters (16 bytes). |
+| `pssh_boxes` | array&lt;string&gt; | No | `[]` | Pre-built Widevine / PlayReady / FairPlay `pssh` boxes for commercial DRM passthrough. Each entry is a hex-encoded `pssh` ISO-BMFF box (32-4096 bytes, fourcc `pssh` at bytes 4-7). The edge copies each entry verbatim into the init segment's `moov` alongside the ClearKey `pssh` box it emits automatically. |
+
+**How encryption works on the wire:**
+- CMAF uses ISO/IEC 23001-7 Common Encryption with subsample encryption: video NAL prefixes and parameter sets stay in the clear (~first 32 bytes per NAL), the rest is encrypted under the chosen scheme.
+- Each segment carries `senc` (sample encryption), `saio` (sample auxiliary info offsets), `saiz` (sample auxiliary info sizes), and `tenc` (track encryption) boxes.
+- The init segment's `moov` carries one or more `pssh` boxes — the edge-emitted ClearKey `pssh` plus any operator-supplied commercial-DRM boxes.
+- Commercial DRM license servers (Widevine, PlayReady, FairPlay) are operator-managed; bilbycast does not proxy license requests.
+
+**Limitations:**
+- Output only. Players are browsers, iOS/tvOS/Android apps, smart TVs, STBs — the edge does not ingest CMAF.
+- HEVC (`x265`, `hevc_nvenc`) on HLS is rejected client-side by many Apple devices. The edge does not reject the combination — operators who need HEVC should emit `manifests: ["dash"]`.
+- `transcode` requires `audio_encode`; rejected at validation when set alone.
+
+**Reference:** `bilbycast-edge/docs/cmaf.md` in the repo covers the ISO-BMFF box writer, LL-CMAF threading model, DASH MPD profile (dynamic, `availabilityStartTime`, `minimumUpdatePeriod`, `timeShiftBufferDepth`, `SegmentTemplate`), HEVC `hvc1` vs `hev1` signalling, and the CENC subsample algorithm.
 
 ### WebRTC Output
 

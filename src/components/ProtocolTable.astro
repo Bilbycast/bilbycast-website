@@ -7,6 +7,7 @@ const protocols = [
   { name: 'RTMP/RTMPS', input: true, output: true, features: 'H.264 (FLV) + Enhanced-RTMP HEVC, AAC audio, ingest from OBS/ffmpeg, publish to Twitch/YouTube/Facebook, TLS, optional audio_encode + video_encode' },
   { name: 'RTSP', input: true, output: false, features: 'Pull H.264/H.265 from IP cameras, TCP/UDP' },
   { name: 'HLS', input: false, output: true, features: 'Segment-based egress, HEVC/HDR support, MPTS filtering, optional audio_encode (AAC/HE-AAC/MP2/AC-3)' },
+  { name: 'CMAF / CMAF-LL', input: false, output: true, features: 'Fragmented MP4 with parallel HLS + MPEG-DASH manifests, chunked-transfer low-latency mode, ClearKey CENC (cenc AES-CTR + cbcs AES-CBC pattern) with Widevine/PlayReady/FairPlay PSSH passthrough, optional audio_encode (AAC/HE-AAC) and video_encode (H.264 on HLS+DASH, HEVC on DASH)' },
   { name: 'WebRTC', input: true, output: true, features: 'WHIP/WHEP, H.264 + Opus, browser-compatible, via str0m, AAC→Opus and HEVC→H.264 auto-transcode' },
   { name: 'ST 2110-20', input: true, output: true, features: 'Uncompressed video (RFC 4175, YCbCr 4:2:2 8/10-bit), PTP, 2022-7 Red/Blue — bridged to H.264/HEVC compressed flows on egress' },
   { name: 'ST 2110-23', input: true, output: true, features: 'Uncompressed video partitioned (2SI + sample-row partition modes), PTP, 2022-7 Red/Blue' },

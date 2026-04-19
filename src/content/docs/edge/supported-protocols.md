@@ -201,6 +201,32 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
   - Uses a minimal built-in HTTP client (not a full HTTP/2 client).
 
+### CMAF / CMAF-LL
+- **Direction:** Output only
+- **Transport:** HTTP(S) PUT to an ingest endpoint
+- **Use case:** OTT distribution to CDNs that accept fragmented MP4 (CloudFront, Akamai, Fastly, bespoke origins) with simultaneous HLS (Apple) and MPEG-DASH (Widevine/PlayReady) player reach, low-latency live, and DRM-protected streams.
+- **Implementation:** hand-rolled ISO-BMFF box writer (no MP4 crate dependency) in `engine/cmaf/`. Sibling of the HLS output with fragmented MP4 segments instead of TS.
+- **Features:**
+  - **Dual manifests:** emits `.m3u8` (HLS) and `.mpd` (DASH) off the same CMAF segment set — operators reach Apple and DASH players with a single push. `manifests` is a subset of `["hls", "dash"]` (default both).
+  - **Standard CMAF:** whole-segment HTTP PUT — target `segment_duration_secs` (1.0-10.0, default 2.0), rolling playlist of `max_segments` (1-30, default 5).
+  - **Low-latency CMAF (LL-CMAF):** `low_latency: true` enables chunked-transfer PUT + `#EXT-X-PART` in HLS and DASH `availabilityTimeOffset`. Chunk cadence set by `chunk_duration_ms` (100-2000, default 500). Sub-second end-to-end latency on a well-tuned CDN.
+  - **Video passthrough or re-encode:** H.264 and HEVC source streams ride unchanged by default. Setting `video_encode` forces a `VideoDecoder` → `VideoEncoder` pipeline (x264/x265/NVENC, same schema as other outputs) with GoP alignment to `segment_duration_secs`. HEVC output is DASH-only — HLS fMP4 HEVC (`hvc1`) playback support varies by client, so prefer `manifests: ["dash"]` when encoding to HEVC.
+  - **HEVC `hvc1`/`hev1` signalling:** DASH MPD carries the codec FourCC in the `<Representation codecs="...">` attribute; iOS Safari compatibility drives `hvc1` by default.
+  - **Audio passthrough or re-encode:** AAC sources ride unchanged by default. Setting `audio_encode` runs the decode → optional `transcode` → re-encode pipeline with the AAC family only (`aac_lc`, `he_aac_v1`, `he_aac_v2`). MP2, AC-3, and Opus are not valid for CMAF.
+  - **ClearKey CENC encryption** (ISO/IEC 23001-7 Common Encryption). Two schemes:
+    - **`cenc`** — AES-CTR. Widevine and PlayReady standard. Pairs with DASH for the broadest DRM reach.
+    - **`cbcs`** — AES-CBC with 1:9 pattern. FairPlay / Apple standard. Pairs with HLS for iOS / tvOS.
+  - **DRM bring-your-own:** the edge emits a W3C EME ClearKey `pssh` box automatically; operators can additionally supply pre-built Widevine, PlayReady, and FairPlay `pssh` boxes via `encryption.pssh_boxes` and the edge copies them verbatim into the init segment's `moov`. Commercial DRM license servers are operator-managed (not part of bilbycast).
+  - **Subsample encryption** keeps video NAL prefixes and parameter sets in the clear (first ~32 bytes per NAL), encrypts the rest. `senc`/`saio`/`saiz` boxes per segment.
+  - **Optional Bearer auth** on uploads via `auth_token`.
+  - **MPTS filtering:** optional `program_number` selector filters an MPTS input to a single program before segmenting.
+  - **Never blocks the broadcast subscriber:** all codec work runs in `tokio::task::block_in_place`; the LL-CMAF chunked upload uses a bounded `mpsc(8)` with drop-on-full semantics so a slow CDN can't back-pressure the rest of the flow.
+- **Limitations:**
+  - Output only — bilbycast-edge does not ingest its own CMAF output (the playback side is any compliant HLS or DASH player).
+  - HLS fMP4 HEVC clients are inconsistent; re-encoding to HEVC → HLS typically fails on older Apple devices. Recommended: `manifests: ["dash"]` when re-encoding HEVC, or stick to H.264 when serving HLS.
+  - `transcode` requires `audio_encode` to be set — it has no effect on passthrough audio and is rejected at validation.
+- **Reference:** see [Configuration — CMAF Output](/edge/configuration/#cmaf-output) for the field table and worked examples, and `bilbycast-edge/docs/cmaf.md` in the repo for the implementation deep-dive (threading model, segment boundary semantics, DASH manifest profile, CENC subsample algorithm).
+
 ### RTSP
 - **Direction:** Input only
 - **Transport:** TCP (interleaved) or UDP

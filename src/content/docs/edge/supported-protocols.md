@@ -347,8 +347,9 @@ Typical use case: a flow with a clean primary feed and a secondary feed that goe
 Flows can be configured with multiple `input_ids`; only one is active at a time. Switching is driven by `POST /api/v1/flows/{id}/activate-input` and is zero-gap:
 
 - A shared `TsContinuityFixer` (per flow) with per-input PSI caching resets CC state on switch, creating a clean-break CC jump so receivers resync
-- The new input's cached PAT/PMT is injected with a bumped `version_number` (CRC32 recalculated) to force receivers to re-parse even when inputs share PSI version numbers
+- The new input's cached PAT/PMT is injected with its `version_number` stamped from a per-fixer **monotonic counter** (CRC32 recalculated) — the counter advances on every switch, including to dead inputs, so consecutive switches always produce a strictly-different version. A naive `cached_version + 1` stamping would emit identical `version = 1` phantoms for every input whose natural version is 0 (virtually every ffmpeg / srt-live-transmit / camera-SDK-generated stream) and leave receivers' audio decoders locked on the previous input's format after an `A → B → A` round-trip
 - All subsequent packets forward immediately — no buffering delay, no renegotiation
+- A 250 ms-interval NULL-PID (0x1FFF) keepalive goes out whenever the active input has no packets to forward — keeps downstream UDP sockets and decoder state alive when the operator switches to an input whose source isn't currently transmitting
 
 The switcher is fully format-agnostic: inputs can use different codecs, containers, and transports. A flow can have H.264 SRT on one input, HEVC RIST on another, JPEG XS on a third, and uncompressed ST 2110-20 on a fourth, and cut between them with no visible gap on the output.
 

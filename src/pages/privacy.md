@@ -65,7 +65,7 @@ We share personal information only with categories of recipients necessary to op
 
 We do not share personal information with third parties for their own marketing purposes.
 
-A current list of our material subprocessors is available on request from `privacy@bilbycast.com`.
+A current list of our material subprocessors is available on request from `contact@bilbycast.com`.
 
 ## 5. International transfers
 
@@ -92,9 +92,9 @@ Subject to applicable law, you have the following rights in relation to your per
 - **Objection and restriction.** You may object to, or ask us to restrict, certain processing of your personal information.
 - **Portability.** Where processing is based on your consent or a contract and is carried out by automated means, you may request a machine-readable copy of the personal information you provided to us.
 - **Withdrawal of consent.** Where processing is based on your consent, you may withdraw it at any time.
-- **Marketing opt-out.** You may unsubscribe from marketing communications at any time via the link in any marketing email, or by emailing `privacy@bilbycast.com`.
+- **Marketing opt-out.** You may unsubscribe from marketing communications at any time via the link in any marketing email, or by emailing `contact@bilbycast.com`.
 
-To exercise any of these rights, contact us at `privacy@bilbycast.com`. We will respond within the timeframes required by applicable law (generally within 30 days).
+To exercise any of these rights, contact us at `contact@bilbycast.com`. We will respond within the timeframes required by applicable law (generally within 30 days).
 
 ## 8. Security
 
@@ -116,8 +116,7 @@ For questions about this policy, or to exercise your rights, contact us:
 
 ```
 Softside Tech Pty Ltd
-Email:  privacy@bilbycast.com
-General enquiries:  contact@bilbycast.com
+Email:    contact@bilbycast.com
 Website:  https://bilbycast.com
 ```
 

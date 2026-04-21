@@ -1,0 +1,87 @@
+---
+import Landing from './Landing.astro';
+
+interface Props {
+  frontmatter: {
+    title: string;
+    description: string;
+  };
+}
+
+const { frontmatter } = Astro.props;
+---
+
+<Landing title={frontmatter.title} description={frontmatter.description}>
+  <article class="legal-prose mx-auto max-w-3xl px-6 py-20 text-slate-300">
+    <slot />
+  </article>
+</Landing>
+
+<style is:global>
+  .legal-prose h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    color: white;
+    letter-spacing: -0.025em;
+    margin-bottom: 2rem;
+  }
+  .legal-prose h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: white;
+    margin-top: 3rem;
+    margin-bottom: 1rem;
+  }
+  .legal-prose h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: rgb(226 232 240);
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+  }
+  .legal-prose p {
+    margin-bottom: 1rem;
+    line-height: 1.75;
+  }
+  .legal-prose strong {
+    color: white;
+    font-weight: 600;
+  }
+  .legal-prose em {
+    font-style: italic;
+  }
+  .legal-prose code {
+    background: rgb(30 41 59);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+    color: rgb(165 243 252);
+  }
+  .legal-prose hr {
+    border: 0;
+    border-top: 1px solid rgb(30 41 59);
+    margin: 2rem 0;
+  }
+  .legal-prose a {
+    color: rgb(56 189 248);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .legal-prose a:hover {
+    color: rgb(125 211 252);
+  }
+  .legal-prose ul,
+  .legal-prose ol {
+    padding-left: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .legal-prose li {
+    margin-bottom: 0.25rem;
+  }
+  .legal-prose blockquote {
+    border-left: 3px solid rgb(51 65 85);
+    padding-left: 1rem;
+    color: rgb(148 163 184);
+    margin: 1rem 0;
+  }
+</style>

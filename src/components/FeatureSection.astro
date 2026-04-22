@@ -61,6 +61,11 @@ const features = [
     description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, RIST, and HLS. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow.',
   },
   {
+    icon: 'PID',
+    title: 'Flow Assembly — TS from N Inputs',
+    description: 'Build a fresh MPEG-TS (SPTS or MPTS) from elementary streams pulled off any of a flow’s inputs: mix video from input A with audio from input B, compose a multi-program feed from N sources, or stand up a pre-bus hitless merger between two ingress legs. PCM and AES3 inputs (ST 2110-30/-31, rtp_audio) become TS carriers via input-level audio_encode (AAC-LC, HE-AAC v1/v2, SMPTE 302M). The assembly plan is hot-swappable at runtime — PMT versions bump in place, unchanged slots keep running, no packet gap.',
+  },
+  {
     icon: 'AI',
     title: 'AI-Assisted Configuration',
     description: 'Built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows via a driver-aware action system. Supports OpenAI, Anthropic, and Gemini providers — credentials stripped before any LLM context.',

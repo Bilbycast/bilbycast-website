@@ -235,6 +235,28 @@ ffmpeg-sidecar audio encoder lifecycle for the Phase B compressed-audio egress o
 
 ---
 
+### PID Bus / Flow Assembly (`flow`)
+
+Errors generated while bringing up or hot-swapping an assembled flow (`assembly.kind = spts | mpts`). All `pid_bus_*` codes are emitted as **Critical** events with a structured `details` payload (`error_code`, `input_id`, `input_type`, `program_number`, …) and the same `error_code` rides on the corresponding `command_ack.error_code` — so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. See [Flow Assembly (PID Bus)](/edge/flow-assembly/).
+
+| Error code | Trigger | Details payload | Remediation |
+|---|---|---|---|
+| `pid_bus_spts_input_needs_audio_encode` | A referenced input could produce TS via input-level `audio_encode` but isn't configured. | `{ input_id, input_type }` | Set `audio_encode.codec = "aac_lc"` (or HE-AAC / `s302m`) on the input. ST 2110-31 must use `s302m`. |
+| `pid_bus_audio_encode_codec_not_supported_on_input` | `audio_encode.codec` validates but has no runtime path on the decoded-ES cache yet (today: `mp2`, `ac3`). | `{ input_id, input_type }` | First-light codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `s302m`. `mp2` / `ac3` deferred. |
+| `pid_bus_spts_non_ts_input` | Referenced input has no current path to TS (e.g. ST 2110-40 ANC). | `{ input_id, input_type }` | ST 2110-40 ANC-to-TS wrapping is deferred. |
+| `pid_bus_no_program` | `assembly.kind = spts/mpts` but `programs` is empty. | `{}` | Should not normally reach runtime — config validation catches this earlier. |
+| `pid_bus_essence_kind_not_implemented` | `SlotSource::Essence` with a `kind` the resolver can't yet satisfy. | `{ input_id, kind }` | First-light supports `video` and `audio`; `subtitle` / `data` under development. |
+| `pid_bus_essence_no_catalogue` | Essence slot but the named input has no PSI catalogue yet (non-TS input or ingress not warm). | `{ input_id }` | Switch to a `SlotSource::Pid` slot, or wait for PSI; re-try with `UpdateFlowAssembly`. |
+| `pid_bus_essence_no_match` | Essence slot of kind X, but no matching ES found in the input's PMT. | `{ input_id, kind }` | Check the input's live PSI catalogue in the manager UI. |
+| `pid_bus_spts_stream_type_mismatch` | Warning logged when a slot's configured `stream_type` doesn't match the source PMT's declared `stream_type`. | `{ input_id, source_pid, configured, observed }` | Non-fatal — the slot still forwards bytes. Fix the `stream_type` on the slot to match the upstream PMT. |
+| `pid_bus_hitless_leg_not_pid` | A `SlotSource::Hitless` leg is neither `Pid` nor `Essence`. | `{ program_number, leg: "primary" \| "backup" }` | Nested Hitless is rejected at config-save time; this fires only if a follow-up variant slips past validation. |
+| `pid_bus_mpts_pcr_source_required` | MPTS program has no effective PCR (neither program-level `pcr_source` nor flow-level fallback). | `{ program_number }` | Config validation also catches this — runtime check is a belt-and-braces guard. |
+| `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
+
+**Source**: `src/engine/flow.rs`, `src/engine/ts_assembler.rs`, `src/engine/ts_es_hitless.rs`, `src/engine/input_pcm_encode.rs`.
+
+---
+
 ## Manager-Generated Events
 
 In addition to events sent by the edge, the manager itself generates these events when an edge connects or disconnects:
@@ -253,7 +275,7 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| `flow` | 7 | Flow lifecycle (start/stop/fail, output add/remove) |
+| `flow` | 18 | Flow lifecycle (start/stop/fail, output add/remove) + PID bus / Flow Assembly errors |
 | `bandwidth` | 4 | Per-flow bandwidth monitoring (alarm, block, recovery) |
 | `srt` | 9 | SRT input and output connection state |
 | `redundancy` | 3 | SMPTE 2022-7 dual-leg status |
@@ -269,7 +291,7 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 | `network_leg` | — | SMPTE 2022-7 Red/Blue per-leg loss / recovery (Phase 1) |
 | `nmos` | — | NMOS IS-04 / IS-05 / IS-08 controller activity (Phase 1) |
 | `scte104` | — | SCTE-104 splice events parsed from ST 2110-40 ANC (Phase 1) |
-| **Total** | **58** | |
+| **Total** | **69** | |
 
 ### Phase 1 ST 2110 categories
 
@@ -286,6 +308,6 @@ The four categories are declared up-front in `src/manager/events.rs` so the mana
 
 | Severity | Count | Description |
 |----------|-------|-------------|
-| critical | 16 | Service-impacting: flow/tunnel failures, auth rejection, both legs lost, bandwidth block, audio_encode build/restart-cap failures |
-| warning | 20 | Degradation: disconnects, stale connections, upload failures, reconnects, bandwidth exceeded, audio_encode restart / per-segment HLS remux failure |
+| critical | 26 | Service-impacting: flow/tunnel failures, auth rejection, both legs lost, bandwidth block, audio_encode build/restart-cap failures, PID-bus bring-up errors |
+| warning | 21 | Degradation: disconnects, stale connections, upload failures, reconnects, bandwidth exceeded, audio_encode restart / per-segment HLS remux failure, PID-bus stream_type mismatch |
 | info | 23 | State changes: connections established, flows started, config updated, bandwidth recovery, audio_encode started |

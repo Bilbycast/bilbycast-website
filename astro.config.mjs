@@ -38,6 +38,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'edge/overview' },
 						{ label: 'Supported Protocols', slug: 'edge/supported-protocols' },
 						{ label: 'Configuration', slug: 'edge/configuration' },
+						{ label: 'Flow Assembly (PID Bus)', slug: 'edge/flow-assembly' },
 						{ label: 'API Reference', slug: 'edge/api-reference' },
 						{ label: 'Architecture', slug: 'edge/architecture' },
 						{ label: 'Events & Alarms', slug: 'edge/events-and-alarms' },

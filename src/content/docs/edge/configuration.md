@@ -35,6 +35,7 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [HLS Output](#hls-output)
   - [CMAF Output](#cmaf-output)
   - [WebRTC Output](#webrtc-output)
+- [Flow Assembly (PID Bus — SPTS / MPTS from N inputs)](#flow-assembly-pid-bus--spts--mpts-from-n-inputs)
 - [MPTS → SPTS filtering](#mpts--spts-filtering)
 - [SMPTE 2022-1 FEC Configuration](#smpte-2022-1-fec-configuration)
 - [SMPTE 2022-7 SRT Redundancy](#smpte-2022-7-srt-redundancy)
@@ -447,6 +448,7 @@ Each flow defines one input source fanning out to one or more output destination
 | `bandwidth_limit` | object | No | `null` | Per-flow bandwidth monitoring (RP 2129). See [Bandwidth Limit](#bandwidth-limit). |
 | `input` | object | Yes | - | Input source configuration (RTP, UDP, SRT, RTMP, RTSP, WebRTC, or WHEP). |
 | `outputs` | array | Yes | - | Output destination configurations. Can be empty. Output IDs must be unique within the flow. |
+| `assembly` | object | No | `null` | Optional PID-bus assembly block. `null` (or `"kind": "passthrough"`) = forward the active input verbatim (default). Set `"kind": "spts"` / `"mpts"` to build a fresh MPEG-TS from elementary streams pulled off any of the flow's inputs. See [Flow Assembly (PID Bus)](/edge/flow-assembly/). |
 
 ### Bandwidth Limit
 
@@ -986,6 +988,28 @@ Viewers POST an SDP offer to `/api/v1/flows/{flow_id}/whep` and receive an SDP a
 | `audio_encode` | object | No | `null` | Optional Phase B `audio_encode` block (codec: `opus`). When absent, Opus sources are carried natively and **AAC sources automatically fall back to video-only** because WebRTC does not carry AAC. When present, the input AAC is decoded via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC/HE-AAC v1/v2/multichannel) and re-encoded as Opus via the `engine::audio_encode::AudioEncoder` (ffmpeg subprocess for Opus) — see [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc). |
 
 **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths. AAC contribution sources need an `audio_encode: { codec: "opus" }` block to be carried as Opus; without it, AAC sources fall back to video-only.
+
+---
+
+## Flow Assembly (PID Bus — SPTS / MPTS from N inputs)
+
+A flow can optionally carry an `assembly` block that tells the runtime to stop forwarding one input verbatim and instead **build a fresh MPEG-TS from elementary streams pulled off any of the flow's inputs**. Every output type (UDP, RTP, SRT, RIST, RTMP/RTMPS, HLS, CMAF / CMAF-LL, WebRTC) consumes the assembled TS unchanged — no output-type gate.
+
+Three `kind` values:
+
+| Kind | Programs | PCR |
+|---|---|---|
+| `passthrough` | must be empty | none — forwards the active input verbatim (same behaviour as `assembly = null`) |
+| `spts` | exactly one | flow-level *or* program-level `pcr_source` |
+| `mpts` | one or more, unique `program_number` per program | every program needs an effective `pcr_source` |
+
+Slot sources: **`pid`** (explicit PID off a named input), **`essence`** (first video / audio / subtitle / data ES off a named input, resolved against the input's live PSI catalogue), or **`hitless`** (primary-preference pre-bus merger with 200 ms stall timer — not 2022-7 seq-aware).
+
+PCM / AES3 inputs (ST 2110-30, ST 2110-31, `rtp_audio`) become TS carriers by setting `audio_encode` on the **input** — `aac_lc` / `he_aac_v1` / `he_aac_v2` / `s302m` (ST 2110-31 must use `s302m`).
+
+The plan is hot-swappable at runtime — `UpdateFlowAssembly` replaces the running plan, unchanged slots keep their bus fan-ins (no packet gap), PMT `version_number` bumps mod 32 for changed programs, PAT only when the program set changes, and PSI is re-emitted immediately so receivers see the new PMT before any packet lands on a new `out_pid`. Transitions across the passthrough boundary (passthrough ↔ spts/mpts) are rejected — use a full `UpdateFlow`.
+
+Full reference, examples, validation rules, and monitoring: **[Flow Assembly (PID Bus)](/edge/flow-assembly/)**.
 
 ---
 

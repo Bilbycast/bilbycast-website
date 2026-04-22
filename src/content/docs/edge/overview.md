@@ -49,6 +49,7 @@ The default build includes the `fdk-aac` feature (Fraunhofer FDK AAC — AAC-LC,
 - **WebRTC via str0m** — WHIP/WHEP support, HEVC→H.264 auto-transcode on egress
 - **Media analysis** — Per-program PID breakdown for MPTS inputs (codec, resolution, frame rate, audio format) surfaced in the manager UI
 - **MPTS ↔ SPTS** — Full multi-program transport stream passthrough on UDP/RTP/SRT/RIST/HLS, with per-output `program_number` down-selection to extract any single program as a rewritten SPTS. RTMP/WebRTC outputs and thumbnails lock onto a chosen program deterministically
+- **Flow Assembly (PID bus)** — Build a fresh MPEG-TS (SPTS or MPTS) from elementary streams pulled off **any of a flow's inputs**: mix video from input A with audio from input B, compose a multi-program feed from N different sources, or stand up a pre-bus hitless merger between two ingress legs. Every output type consumes the assembled TS unchanged. PCM / AES3 inputs (ST 2110-30/-31, `rtp_audio`) become TS carriers via input-level `audio_encode` (AAC-LC / HE-AAC v1/v2 / SMPTE 302M). The plan is hot-swappable at runtime via `UpdateFlowAssembly` — unchanged slots keep running, PMT version bumps mod 32, PAT only when the program set changes. See [Flow Assembly (PID Bus)](/edge/flow-assembly/)
 - **Thumbnail generation** — Per-flow 320×180 JPEG thumbnails generated in-process via libavcodec on the default `video-thumbnail` build. Flow-level `thumbnail_program_number` picks which MPTS program the preview shows
 
 ## Deployment Options

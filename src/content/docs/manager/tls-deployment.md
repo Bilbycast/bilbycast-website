@@ -48,7 +48,7 @@ Renewal failures are logged as `tls.renewal_failed` events. If renewal fails rep
 
 ### Backups
 
-The ACME state — including the account key, the issued cert, and the renewal metadata — is stored under the manager's data directory (alongside the SQLite DB). Back this up if you don't want to re-issue from scratch after a manager rebuild.
+The ACME state — including the account key, the issued cert, and the renewal metadata — is stored under the manager's data directory (`BILBYCAST_DATA_DIR`, default `/var/lib/bilbycast-manager/`). Back this up if you don't want to re-issue from scratch after a manager rebuild. The Postgres cluster the manager points at via `BILBYCAST_DATABASE_URL` lives separately and is backed up on its own schedule.
 
 ## File-based certificates
 
@@ -174,7 +174,7 @@ In behind-proxy mode, you may also want to add HSTS at the proxy level to ensure
 
 ## Migration between modes
 
-You can switch between modes by changing env vars and restarting the manager. The data directory and SQLite DB are mode-independent — only the listener configuration changes. Edge nodes will automatically reconnect after the manager restart and continue using their existing credentials.
+You can switch between modes by changing env vars and restarting the manager. The data directory and the Postgres database the manager points at are mode-independent — only the listener configuration changes. Edge nodes will automatically reconnect after the manager restart and continue using their existing credentials.
 
 ## Choosing a mode
 

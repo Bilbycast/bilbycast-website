@@ -195,7 +195,7 @@ BILBYCAST_NEW_MASTER_KEY=$(openssl rand -hex 32) bilbycast-manager rotate-master
 1. Stop the manager server
 2. Set `BILBYCAST_NEW_MASTER_KEY` in the environment
 3. Run `bilbycast-manager rotate-master-key`
-4. All encrypted secrets (node secrets, AI API keys, tunnel keys/PSKs/bind secrets) are decrypted with the old key and re-encrypted with the new key in a single atomic SQLite transaction
+4. All encrypted secrets (node secrets, AI API keys, tunnel keys/PSKs/bind secrets, MFA TOTP secrets, recovery code blobs) are decrypted with the old key and re-encrypted with the new key in a single atomic Postgres transaction
 5. Update `BILBYCAST_MASTER_KEY` to the new value in your `.env` file
 6. Remove `BILBYCAST_NEW_MASTER_KEY` from the environment
 7. Restart the server

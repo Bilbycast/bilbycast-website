@@ -63,9 +63,14 @@ const managerTiers: Tier[] = [
     features: [
       'Up to 10 managed nodes (edges + relays combined)',
       'Full management UI — topology view, flow config, real-time stats, thumbnails',
-      'AI-assisted flow configuration',
+      'Live Switcher — PGM/PVW director console with Take, presets, and per-tenant pages',
+      'Routines — cron-scheduled flow automation with DST-correct IANA timezones',
+      'Multi-tenant Groups with per-tenant logo + brand-colour theming (white-label out of the box)',
+      'On-edge Media Library — browser upload of slates, loops, and emergency-fallback content',
+      'AI-assisted flow configuration (OpenAI / Anthropic / Gemini)',
       'NMOS IS-04/05/08 visibility and control plane integration',
       'Driver-aware integration with third-party broadcast devices',
+      'MFA (TOTP) for local accounts; envelope-encrypted secrets at rest with one-shot master-key rotation',
       'Community support — GitHub Issues & Discussions',
     ],
     footnote:
@@ -82,7 +87,10 @@ const managerTiers: Tier[] = [
     description:
       'Manage larger fleets with a commercial licence plus production support. A single vendor relationship covering manager, edge, and relay.',
     features: [
+      'Everything in Community',
       'Higher managed-node allowance',
+      'OIDC Single Sign-On with optional tenant-aware group sync (licensed feature)',
+      'Encrypted backup & restore — portable application-level export plus DR-grade pg_dump archive (licensed feature)',
       'Business-hours or 24×7 SLA — your choice',
       'Named escalation engineers and private hot-patches',
       'Priority bug fixes and migration assistance on upgrades',
@@ -100,6 +108,7 @@ const managerTiers: Tier[] = [
       'For broadcasters running 24×7 critical infrastructure and vendors embedding Bilbycast inside their own appliance or hosted service.',
     features: [
       'Everything in Commercial',
+      'Active/Active HA — two manager instances against a shared Postgres 18 cluster, with cross-instance pubsub and per-region observability (licensed feature)',
       '24×7 broadcast-critical SLA with a dedicated engineer',
       'Redistribution rights beyond the EULA default — host the manager as a service, ship it inside an appliance',
       'AGPL commercial exemption for edge + relay when bundled in closed-source products',

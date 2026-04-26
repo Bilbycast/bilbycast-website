@@ -20,7 +20,7 @@ sidebar:
 | `BILBYCAST_ACME_EMAIL` | No | Contact email for Let's Encrypt |
 | `BILBYCAST_ACME_HTTP_PORT` | No | Port for HTTP-01 challenge (default: 80) |
 | `BILBYCAST_PORT` | No | Override listen port (default: 8443) |
-| `BILBYCAST_DATABASE_URL` | No | SQLite path override |
+| `BILBYCAST_DATABASE_URL` | No | Postgres DSN (default: `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — points at the dev docker-compose cluster) |
 
 ## Edge and Relay Variables
 

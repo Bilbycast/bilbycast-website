@@ -44,7 +44,7 @@ Edge nodes connect outbound to the manager via WebSocket, enabling management of
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (stable, edition 2024)
-- SQLite3 (for bilbycast-manager)
+- Postgres 18 (for bilbycast-manager — `docker compose -f docker-compose.dev.yml up -d` brings up a local cluster on port 5433 for development)
 
 ## Quick Start
 

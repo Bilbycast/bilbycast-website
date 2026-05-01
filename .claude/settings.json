@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \":*)",
+      "Read(//Users/rezarahimi/.nvm/versions/**)",
+      "Read(//opt/homebrew/Cellar/node/25.8.0/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/**)",
+      "Bash(/opt/homebrew/bin/node -e \":*)",
+      "Bash(PATH=\"/opt/homebrew/bin:$PATH\" npm run build)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(grep -iE \"\\\\.css$\")",
+      "Bash(npm run *)",
+      "WebFetch(domain:bilbycast.com)"
+    ]
+  }
+}

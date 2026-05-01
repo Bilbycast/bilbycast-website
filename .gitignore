@@ -23,3 +23,9 @@ pnpm-debug.log*
 # IDE
 .idea/
 .vscode/
+
+# Claude Code workspace state — share settings.json + launch.json.example,
+# keep per-host launch.json + session/project state local.
+.claude/*
+!.claude/settings.json
+!.claude/launch.json.example

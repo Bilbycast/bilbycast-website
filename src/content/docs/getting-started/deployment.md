@@ -11,43 +11,35 @@ This guide covers deploying the full bilbycast stack: manager, relay, and edge n
 
 Pre-built Linux binaries are available for x86_64 and aarch64 (ARM64). The relay, manager, and Appear X gateway are statically linked against musl and have no runtime dependencies. The **edge** is built dynamically against glibc on Ubuntu 24.04 (so it can link the optional video encoder + display libraries) — see [Optional system dependencies for the edge](#optional-system-dependencies-for-the-edge) below for the runtime packages each variant needs.
 
-The examples below resolve the latest release tag via the GitHub API. Replace `Bilbycast` with the actual GitHub organisation.
+All download URLs below use GitHub's `releases/latest/download/` redirect, so they always resolve to the most recent published release.
 
 ### Edge (Media Gateway)
 
-The edge ships in **two variants** per architecture on every tag:
+The edge ships in **two variants** per architecture on every release:
 
-| Tarball                                  | Includes                                            | Binary licence                                        |
-|------------------------------------------|-----------------------------------------------------|-------------------------------------------------------|
-| `bilbycast-edge-${VER}-${ARCH}-linux.tar.gz`      | Default — no software video encoders                | AGPL-3.0-or-later                                     |
-| `bilbycast-edge-${VER}-${ARCH}-linux-full.tar.gz` | x264 + x265 + NVENC (+ QSV on x86_64)               | AGPL-3.0-or-later combined work bundling GPL-2.0-or-later libx264 / libx265 (see `NOTICE` inside the tarball) |
+| Tarball                                       | Includes                                            | Binary licence                                        |
+|-----------------------------------------------|-----------------------------------------------------|-------------------------------------------------------|
+| `bilbycast-edge-$(uname -m)-linux.tar.gz`      | Default — no software video encoders                | AGPL-3.0-or-later                                     |
+| `bilbycast-edge-$(uname -m)-linux-full.tar.gz` | x264 + x265 + NVENC (+ QSV on x86_64)               | AGPL-3.0-or-later combined work bundling GPL-2.0-or-later libx264 / libx265 (see `NOTICE` inside the tarball) |
 
-Pick the variant matching your transcoding needs. Both snippets resolve the latest tag automatically and detect the host architecture (`x86_64` or `aarch64`).
+`$(uname -m)` auto-detects the host architecture (`x86_64` or `aarch64`).
 
 **Default variant** — pass-through only, no software transcoding (smaller download, AGPL-only):
 
 ```bash
-ARCH=$(uname -m)
-VER=$(curl -s https://api.github.com/repos/Bilbycast/bilbycast-edge/releases/latest \
-        | grep '"tag_name"' | cut -d'"' -f4)
-
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/download/${VER}/bilbycast-edge-${VER#v}-${ARCH}-linux.tar.gz"
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/download/${VER}/bilbycast-edge-${VER#v}-${ARCH}-linux.tar.gz.sha256"
-sha256sum -c "bilbycast-edge-${VER#v}-${ARCH}-linux.tar.gz.sha256"
-tar xzf "bilbycast-edge-${VER#v}-${ARCH}-linux.tar.gz"
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux.tar.gz"
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux.tar.gz.sha256"
+sha256sum -c "bilbycast-edge-$(uname -m)-linux.tar.gz.sha256"
+tar xzf "bilbycast-edge-$(uname -m)-linux.tar.gz"
 ```
 
 **Full variant** — bundles libx264 + libx265 + NVENC (+ QSV on x86_64) for in-process H.264 / H.265 transcoding (AGPL-3.0-or-later combined work with GPL-2.0-or-later libx264 / libx265):
 
 ```bash
-ARCH=$(uname -m)
-VER=$(curl -s https://api.github.com/repos/Bilbycast/bilbycast-edge/releases/latest \
-        | grep '"tag_name"' | cut -d'"' -f4)
-
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/download/${VER}/bilbycast-edge-${VER#v}-${ARCH}-linux-full.tar.gz"
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/download/${VER}/bilbycast-edge-${VER#v}-${ARCH}-linux-full.tar.gz.sha256"
-sha256sum -c "bilbycast-edge-${VER#v}-${ARCH}-linux-full.tar.gz.sha256"
-tar xzf "bilbycast-edge-${VER#v}-${ARCH}-linux-full.tar.gz"
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux-full.tar.gz"
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
+sha256sum -c "bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
+tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 ```
 
 Each tarball expands to a directory containing `bilbycast-edge`, `LICENSE`, `LICENSE.commercial`, `NOTICE` (plus `COPYING.GPL` for the full variant), `README.md`, and `config_examples/`. Remember to install the runtime apt packages from [Optional system dependencies for the edge](#optional-system-dependencies-for-the-edge) before running the binary — the full variant needs `libx264-dev libx265-dev libnuma1` (and `libvpl2 intel-media-va-driver-non-free` for QSV on x86_64); the default variant only needs the baseline `libdrm2 libasound2 libudev1`.

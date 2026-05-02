@@ -83,3 +83,32 @@ This is how Appear X chassis appear in the same topology as bilbycast edges, eve
 | Refresh rate | 1 Hz | Tied to the WebSocket stats cadence |
 
 For very large plants (>500 nodes), use the search/filter bar at the top of the page to narrow down to a subset before switching to the graph view.
+
+## Per-node Web UI link
+
+Each node row carries an optional **`web_ui_url`** — an operator-supplied URL the manager UI surfaces as an **Open Device Web UI** link on the node detail page (and as a button on the Gateway Module header for gateway-style devices like Appear X). Clicking it opens the URL in a new tab via `target="_blank" rel="noopener noreferrer"`. The manager + sidecar are not in the request path — operators point the URL at whatever port-forward, SSH tunnel, or direct LAN address reaches the device's own admin UI from their browser (e.g. `https://127.0.0.1:4443/dashboard/`).
+
+To set it: **Admin → Nodes**, click the node's pencil icon to open the **Edit Node** modal, fill in **Web UI URL**, **Save**.
+
+Validation: must start with `http://` or `https://`, ≤ 2048 chars, no ASCII control characters. Empty input clears the link.
+
+Why operator-supplied? Each device's web admin lives on a private network — there's no way the manager could discover the right reachable URL on its own. Letting the operator paste in whatever they actually browser-bookmark to reach the device is the only thing that works in every deployment topology (port-forwarded LAN, SSH tunnel, Tailscale, ZeroTier, …).
+
+## Resources card
+
+The node detail page renders a **Resources** card driven by two independent data sources:
+
+- **Hardware probe** (`HealthPayload.resource_budget`) — a one-shot snapshot the edge takes at startup. Hardware encoder / decoder presence (NVENC, QSV, VideoToolbox, AMF — H.264 + HEVC each), CPU brand and AVX class, and a static `(physical_cores × avx_mult) → 720p30 x264 streams` heuristic. Surfaced as the maximum cost the host can absorb (`units_total = 1000 + 200 × physical_cores`).
+- **Live cost plan** — every running flow contributes a deterministic per-flow cost. Passthrough = 1 unit. Software video transcode = 500 units; hardware = 100 units. Audio encode = 5 units. Content-analysis tiers and recording add on top. A 1080p30 display output = 275 units.
+
+The card warns above 80 % utilisation and turns red above 100 %. The flow create / edit modal previews the **Resource impact** of a pending change against this same plan, so operators see the cost before saving — the warning is informational only and never blocks save.
+
+The edge re-runs the hardware probe at startup. To inspect the cached snapshot directly:
+
+```http
+GET /api/v1/nodes/{id}/resources
+```
+
+Optional Linux + Windows builds with the `hardware-monitor-nvml` Cargo feature additionally poll NVML for live NVENC / NVDEC % and active session count every 5 s — those numbers also flow into the Resources card.
+
+Filter `/admin/nodes` to just the replay-capable hosts with `?capability=replay`. Other capability strings the edge advertises include `display`, `st2110-30`, `st2110-31`, `st2110-40`, and `resources`.

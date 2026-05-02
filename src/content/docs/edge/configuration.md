@@ -28,6 +28,9 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [RTSP Input](#rtsp-input)
   - [WebRTC/WHIP Input](#webrtcwhip-input)
   - [WHEP Input](#whep-input)
+  - [TestPattern Input](#testpattern-input)
+  - [Bonded Input](#bonded-input)
+  - [Replay Input](#replay-input)
 - [Output Types](#output-types)
   - [RTP Output](#rtp-output)
   - [SRT Output](#srt-output)
@@ -35,6 +38,10 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [HLS Output](#hls-output)
   - [CMAF Output](#cmaf-output)
   - [WebRTC Output](#webrtc-output)
+  - [Display Output](#display-output)
+  - [Bonded Output](#bonded-output)
+- [Recording (Flow Attribute)](#recording-flow-attribute)
+- [Resource Limits](#resource-limits)
 - [Flow Assembly (PID Bus — SPTS / MPTS from N inputs)](#flow-assembly-pid-bus--spts--mpts-from-n-inputs)
 - [MPTS → SPTS filtering](#mpts--spts-filtering)
 - [SMPTE 2022-1 FEC Configuration](#smpte-2022-1-fec-configuration)
@@ -664,6 +671,80 @@ Pulls media from an external WHEP server. The edge acts as a WHEP client. The `w
 | `bearer_token` | string | No | `null` | Bearer token for WHEP authentication. |
 | `video_only` | boolean | No | `false` | Receive only video (ignore audio). |
 
+### TestPattern Input
+
+Generates a synthetic colour-bars-and-tone test pattern as an MPEG-TS stream with H.264 video and AAC audio. Useful for end-to-end pipeline tests, smoke-testing newly-deployed flows, and exercising downstream gear without a real source.
+
+```json
+{
+  "type": "test_pattern",
+  "id": "in-test",
+  "name": "Test pattern",
+  "width": 1280,
+  "height": 720,
+  "fps": 25,
+  "video_bitrate_kbps": 2000,
+  "audio_enabled": true,
+  "tone_hz": 1000.0,
+  "tone_dbfs": -20.0
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"test_pattern"`. |
+| `width` | integer | No | `1280` | Video width in pixels. Must be divisible by 2. |
+| `height` | integer | No | `720` | Video height in pixels. Must be divisible by 2. |
+| `fps` | integer | No | `25` | Frame rate. Range 1–60. |
+| `video_bitrate_kbps` | integer | No | `2000` | Target video bitrate in kbit/s. |
+| `audio_enabled` | boolean | No | `true` | When `false`, emits a video-only TS. |
+| `tone_hz` | number | No | `1000.0` | Audio tone frequency. Range 50–8000. |
+| `tone_dbfs` | number | No | `-20.0` | Audio level in dBFS (negative). `-20 dBFS` is the broadcast reference. |
+
+Requires the edge build to include the `video-thumbnail` and `fdk-aac` features (both on by default).
+
+### Bonded Input
+
+Receives a media flow over the bilbycast multi-path bonding stack — the protocol that replaces appliances like Peplink/SpeedFusion with a media-aware bonded transport. Multiple network paths are aggregated for throughput and failover; per-packet sequencing reorders into a single ordered stream at this end.
+
+```json
+{
+  "type": "bonded",
+  "id": "in-bonded",
+  "name": "Bonded receive",
+  "local_addr": "0.0.0.0:5500",
+  "psk": "<32-byte hex>"
+}
+```
+
+The full Bonded protocol — path adapters, link selection, latency budgets — is covered in [Bonding](/edge/bonding/). The fields on the input config track the protocol's configuration knobs; the bonded sender at the other end uses the matching [Bonded Output](#bonded-output).
+
+### Replay Input
+
+Plays back a recording (or a single clip from a recording) onto a flow's broadcast channel as if it were a live source. Paced by PCR — only available when the edge was built with the `replay` feature (default on).
+
+```json
+{
+  "type": "replay",
+  "id": "in-replay",
+  "name": "Replay",
+  "recording_id": "record-flow",
+  "clip_id": null,
+  "start_paused": true,
+  "loop_playback": false
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"replay"`. |
+| `recording_id` | string | Yes | — | Recording subdirectory under the replay root. |
+| `clip_id` | string | No | `null` | When set, only that clip's `[in_pts, out_pts]` range plays. |
+| `start_paused` | boolean | No | `true` | When `true`, the input idles on flow start until a `play_clip` / `cue_clip` command activates playback. |
+| `loop_playback` | boolean | No | `false` | When `true`, restart at the beginning on EOF. |
+
+Phase 1 supports 1.0× forward playback only. Full operator workflow: [Replay](/edge/replay/) and [Replay (operator UI)](/manager/replay/).
+
 ---
 
 ## Output Types
@@ -988,6 +1069,125 @@ Viewers POST an SDP offer to `/api/v1/flows/{flow_id}/whep` and receive an SDP a
 | `audio_encode` | object | No | `null` | Optional Phase B `audio_encode` block (codec: `opus`). When absent, Opus sources are carried natively and **AAC sources automatically fall back to video-only** because WebRTC does not carry AAC. When present, the input AAC is decoded via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC/HE-AAC v1/v2/multichannel) and re-encoded as Opus via the `engine::audio_encode::AudioEncoder` (ffmpeg subprocess for Opus) — see [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc). |
 
 **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths. AAC contribution sources need an `audio_encode: { codec: "opus" }` block to be carried as Opus; without it, AAC sources fall back to video-only.
+
+### Display Output
+
+Plays the flow's video to a locally-attached HDMI / DisplayPort connector and (optionally) routes its audio to an ALSA device. Linux-only and gated on the `display` Cargo feature (on by default in every release tarball).
+
+```json
+{
+  "type": "display",
+  "id": "out-confidence",
+  "name": "Green-room HDMI",
+  "device": "HDMI-A-1",
+  "audio_device": "hw:0,3"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"display"`. |
+| `device` | string | Yes | — | KMS connector name from the edge's display enumeration: `"HDMI-A-1"`, `"DP-2"`, `"DVI-D-1"`. Validated against `^[A-Z][A-Z0-9-]{0,63}$`. |
+| `audio_device` | string | No | `null` | ALSA device id (`"hw:0,3"`, `"plughw:0,3"`, `"default"`, `"sysdefault"`, `"pulse"`). Omit for video-only. |
+| `program_number` | integer | No | `null` | MPTS program filter (1-based; `0` reserved). `null` selects the lowest program in the active input's PAT. |
+| `audio_track_index` | integer | No | `null` | Audio elementary-stream index within the chosen program. Must be < 16. |
+| `audio_channel_pair` | array | No | `[0, 1]` | Stereo pair to render from decoded multichannel audio. Both indices < 8 and not equal. |
+| `resolution` | string | No | `null` | `"auto"` or `"WIDTHxHEIGHT"` (e.g. `"1920x1080"`). |
+| `refresh_hz` | integer | No | `null` | Refresh rate in Hz. Range 1–240. `null` uses the connector's preferred mode. |
+| `sync_mode` | string | No | `"vsync_to_display"` | v1 only accepts `"vsync_to_display"`. |
+
+Connectors are enumerated at edge startup and surfaced in `HealthPayload.display_devices` — the manager UI populates the **Device** dropdown from this list. HDMI hotplug discovery is startup-only in v1; new cables require restarting the edge.
+
+Full reference, including A/V sync, supported codecs, capacity budget, and the `display_*` event catalogue: [Display Output](/edge/display/).
+
+### Bonded Output
+
+Sends a media flow over the bilbycast multi-path bonding stack — the bonded transport that replaces appliances like Peplink/SpeedFusion with a media-aware multi-path egress. Multiple network paths are aggregated for throughput and failover.
+
+```json
+{
+  "type": "bonded",
+  "id": "out-bonded",
+  "name": "Bonded send",
+  "remote_addr": "203.0.113.10:5500",
+  "psk": "<32-byte hex>"
+}
+```
+
+The full Bonded protocol — path adapters, link selection, latency budgets, FEC — is covered in [Bonding](/edge/bonding/). At the receiving end, use a matching [Bonded Input](#bonded-input).
+
+---
+
+## Recording (Flow Attribute)
+
+Continuous flow recording to disk is a per-flow attribute (`recording`) rather than an output type — the writer is a sibling subscriber on the broadcast channel, not an egress. It can never block live outputs.
+
+```json
+"flows": [{
+  "id": "record-flow",
+  "name": "Record live SRT to disk",
+  "enabled": true,
+  "input_ids": ["live-srt-in"],
+  "output_ids": [],
+  "recording": {
+    "enabled": true,
+    "storage_id": "record-flow",
+    "segment_seconds": 10,
+    "retention_seconds": 86400,
+    "max_bytes": 53687091200,
+    "pre_buffer_seconds": null
+  }
+}]
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | boolean | No | `true` | When `false`, the writer is built but doesn't subscribe — useful for cron-armed recording via routines. |
+| `storage_id` | string | No | flow id | Subdirectory under the replay root. Alphanumeric + `._-`, ≤ 64 chars. |
+| `segment_seconds` | integer | No | `10` | Wall-clock segment roll cadence. Range `[2, 60]`. |
+| `retention_seconds` | integer | No | `86400` | Oldest-first prune by mtime. `0` = unlimited. |
+| `max_bytes` | integer | No | `53687091200` | Oldest-first prune by total size. `0` = unlimited. |
+| `pre_buffer_seconds` | integer | No | `null` | When set, the writer auto-arms in **pre-buffer** mode and rolls segments under the matching retention so an operator pressing Start later picks up the last `N` seconds of pre-roll. Range `[1, 300]`. |
+
+A flow with `output_ids: []` and `recording.enabled: true` is a **monitor-only** recorder — recommended for compliance recording.
+
+Storage root resolution order: `BILBYCAST_REPLAY_DIR` → `$XDG_DATA_HOME/bilbycast/replay/` → `$HOME/.bilbycast/replay/` → `./replay/`. Per-recording cap via `max_bytes`; no global root cap.
+
+Full reference, including playback as an input, error catalogue, and Phase 2 / 1.5 features: [Replay](/edge/replay/).
+
+---
+
+## Resource Limits
+
+Optional top-level `resource_limits` block. When set, the edge samples CPU and RAM usage on a periodic tick and emits Warning / Critical events under category `system_resources` when thresholds are exceeded. Optionally gates new flow creation when resources are critical.
+
+```json
+{
+  "version": 2,
+  "resource_limits": {
+    "cpu_warning_percent": 80,
+    "cpu_critical_percent": 95,
+    "ram_warning_percent": 80,
+    "ram_critical_percent": 95,
+    "critical_action": "alarm",
+    "grace_period_secs": 10
+  },
+  "inputs": [],
+  "outputs": [],
+  "flows": []
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cpu_warning_percent` | number | `80` | CPU usage warning threshold (0–100). |
+| `cpu_critical_percent` | number | `95` | CPU usage critical threshold. |
+| `ram_warning_percent` | number | `80` | RAM usage warning threshold (0–100). |
+| `ram_critical_percent` | number | `95` | RAM usage critical threshold. |
+| `critical_action` | string | `"alarm"` | What to do when any metric is critical. `"alarm"` — events only, flows continue. `"gate_flows"` — additionally reject new flow creation while any metric is critical. |
+| `grace_period_secs` | integer | `10` | Seconds the metric must continuously exceed the threshold before the event fires (debounce). |
+
+Omit the block to disable system-resource alarms entirely. The edge's resource-budget probe (advertised on `HealthPayload.resource_budget`) is independent — that's a one-shot hardware-capability snapshot at startup, not a runtime metric.
 
 ---
 

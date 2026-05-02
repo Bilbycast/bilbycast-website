@@ -257,17 +257,134 @@ Errors generated while bringing up or hot-swapping an assembled flow (`assembly.
 
 ---
 
+### Display (`display`)
+
+The local-display output (Linux-only, `display` Cargo feature) emits events under category `display`. Every failure event sets `details.error_code` for `command_ack` correlation, plus `details.output_id` so the manager UI attributes the failure to the offending output row on a multi-output flow.
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `display_started` | info | Modeset succeeded, ALSA opened (or muted), first frame queued. |
+| `display_stopped` | info | Cancellation token fired. Includes lifetime `frames_displayed`, `frames_dropped_late`, `audio_underruns`. |
+| `display_device_unavailable` | critical | KMS connector vanished mid-flow (cable unplug). |
+| `display_mode_set_failed` | critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
+| `display_audio_open_failed` | critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
+| `display_decoder_overload` | warning | `frames_dropped_late` > 5 % over a 5-s rolling window. |
+| `display_av_drift` | warning | `|av_sync_offset_ms|` > 100 ms sustained ≥ 3 s. |
+| `display_subscriber_lagged` | warning | broadcast `Lagged(n)`; rate-limited to one event / second. |
+
+Save-time `command_ack.error_code` values: `display_device_invalid`, `display_audio_device_invalid`, `display_resolution_unsupported`, `display_program_not_found`, `display_audio_track_not_found`, `display_device_busy`, `display_decoder_overload_predicted`.
+
+Full reference: [Display Output](/edge/display/).
+
+---
+
+### Replay (`replay`)
+
+The replay server writer + playback emit events under category `replay`. All `replay_*` `error_code` values lift onto `command_ack.error_code`.
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `recording_started` | info | A flow with `recording.enabled = true` brought up its writer. |
+| `recording_stopped` | info | Writer cancelled. |
+| `recording_start_failed` | critical | Disk I/O error before the first segment landed. |
+| `clip_created` | info | `mark_in` + `mark_out` produced a new clip. |
+| `clip_deleted` | info | Operator removed a clip. |
+| `playback_started` | info | A `replay` input started serving a clip. |
+| `playback_stopped` | info | Playback paused or cancelled. |
+| `playback_eof` | info | Reached the end of the clip / recording with `loop_playback: false`. |
+| `writer_lagged` | critical | The writer's bounded mpsc filled — packets dropped to keep the broadcast channel non-blocking. Rate-limited to 1 per 5 s. |
+| `disk_pressure` | warning | Recording disk usage crossed 80 % of `max_bytes`. Sticky until usage falls back below 70 %. |
+| `disk_full` | critical | Out of disk space on the replay root. |
+| `index_corrupt` | warning | `index.bin` failed parse on writer init; recovery scan re-aligned to the last valid 24-byte boundary. |
+| `recovery_alert` | warning | Crash-recovery scan ran on writer init; `.tmp/` orphans removed and / or `recording.json` was corrupt. |
+| `metadata_stale` | warning | `recording.json` write failed on segment roll. |
+| `max_bytes_below_segment` | warning | `max_bytes` smaller than one segment — retention can't keep usage under the cap. |
+
+Full reference: [Replay](/edge/replay/) and the operator-facing [Replay UI](/manager/replay/).
+
+---
+
+### Content Analysis (`content_analysis`)
+
+Tier-gated content health events fired by the in-depth analysis subscribers. Tiers are configured per-flow on `FlowConfig.content_analysis` (`lite` / `audio_full` / `video_full`). All event names start with `content_analysis_*` and carry a structured `details.error_code`.
+
+| Event | Severity | Trigger | Tier |
+|---|---|---|---|
+| `content_analysis_scte35_pid` | info | New SCTE-35 PID observed in the PMT. | lite |
+| `content_analysis_scte35_cue` | info | SCTE-35 splice_insert / time_signal cue decoded. `details.pts`, `details.cue_kind`. | lite |
+| `content_analysis_caption_lost` | warning | CEA-608 / CEA-708 caption presence dropped from active to absent for ≥ 5 s. | lite |
+| `content_analysis_mdi_above_threshold` | warning | Media Delivery Index (RFC 4445) MLR or NDF exceeded the threshold. | lite |
+| `content_analysis_audio_silent` | warning | Hard mute or silence detected on a decoded audio PID for ≥ 3 s. | audio_full |
+| `content_analysis_video_freeze` | warning | YUV-SAD against previous frame indicated a freeze for ≥ 3 s. | video_full |
+
+Tiers are recommended for monitor-only deployments — a flow with `output_ids: []` and one or more analysis tiers on is the canonical shape for remote-site broadcast triage.
+
+---
+
+### Bind / Port Conflict
+
+Every runtime bind site on the edge emits a Critical event under either `port_conflict` (EADDRINUSE) or `bind_failed` (any other bind error) with a structured `details = { error_code, component, addr, protocol, error }`. The same `error_code` rides on `command_ack.error_code`, so the manager UI highlights the offending field on Create / Update modals without parsing the error string.
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `port_conflict` | critical | Bind attempt returned `EADDRINUSE`. Common at `udp_input`, `srt_input`, `rtsp_server`, `rtmp_server`, `whip_server`, `udp_output`, `standby` listeners. |
+| `bind_failed` | critical | Any other bind error (permission, address-family mismatch, interface down). |
+
+The manager preflights inputs and outputs against the node's already-managed entities and rejects collisions with HTTP 422 + `error_code: "port_conflict"` before any WS round-trip — so most operator-visible failures surface as a save-time error rather than a runtime event.
+
+---
+
+### System Resources (`system_resources`)
+
+CPU and RAM threshold events. Configured under `resource_limits` in `config.json` — see [Resource Limits](/edge/configuration/#resource-limits). Only emitted when `resource_limits` is set; the configurable `grace_period_secs` debounces flapping.
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `system_resources_cpu_warning` | warning | CPU usage crossed `cpu_warning_percent` for ≥ `grace_period_secs`. |
+| `system_resources_cpu_critical` | critical | CPU usage crossed `cpu_critical_percent` for ≥ `grace_period_secs`. With `critical_action: "gate_flows"`, new flow creation is rejected while in this state. |
+| `system_resources_ram_warning` | warning | RAM usage crossed `ram_warning_percent`. |
+| `system_resources_ram_critical` | critical | RAM usage crossed `ram_critical_percent`. |
+| `system_resources_recovered` | info | Returned below the warning threshold. |
+
+Distinct from the edge's static `HealthPayload.resource_budget` snapshot — that's a one-shot hardware-capability advertisement at startup.
+
+---
+
+### Bonded (`bonded`)
+
+Multi-path bonding stack events on the bonded input / output type. Drives the per-leg link indicators in the manager UI.
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `bonded_path_up` | info | A bonded path adapter completed handshake. |
+| `bonded_path_down` | warning | Handshake heartbeat timed out on a bonded leg. |
+| `bonded_all_paths_down` | critical | Every bonded leg has lost its peer — flow is down. |
+| `bonded_path_throughput_degraded` | warning | A leg's effective throughput dropped below the configured floor. |
+
+Full reference: [Bonding](/edge/bonding/).
+
+---
+
 ## Manager-Generated Events
 
-In addition to events sent by the edge, the manager itself generates these events when an edge connects or disconnects:
+In addition to events sent by the edge, the manager itself generates events under several categories — connection, config_sync, routine, media_library, replay-watchdog, and rate-limiting:
 
 | Severity | Category | Message | Trigger |
 |----------|----------|---------|---------|
 | info | connection | Node connected to manager | Edge successfully authenticates |
 | warning | compatibility | Node WS protocol version differs | Protocol version mismatch during auth |
 | critical | connection | Node disconnected from manager | Edge WebSocket closes |
+| warning | config_sync | Drift detected on managed entity | Reconciliation found a mismatch between manager DB and the edge's reported config |
+| warning | routine | `routine_fire_partial` | Some actions in a fire failed |
+| critical | routine | `routine_fire_failed` | Every action in a fire failed |
+| warning | routine | `routine_fire_missed` | A scheduled fire was older than the 15-minute grace window and didn't replay |
+| warning | media_library | `media_quota_exhausted` | A media-library upload would exceed the per-file or per-node total cap |
+| warning | media_library | `media_deleted_in_use` | An operator deleted a media file that still has `media_player` inputs referencing it |
+| info | media_library | `media_upload_aborted` | An upload was cancelled mid-stream after at least 50 % had transferred |
+| critical | replay-watchdog | `recording_stalled` | A flow's recording writer hasn't produced a new segment for > 2 × `segment_seconds` |
+| warning | event_rate_limit | `event_rate_limit_exceeded` | An edge tripped the per-node event-rate limit and the manager started shedding events |
 
-These are generated server-side in `bilbycast-manager/crates/manager-server/src/ws/node_hub.rs`.
+These are generated server-side in `bilbycast-manager/crates/manager-server/src/ws/node_hub.rs` and the matching reconciliation / routine / media-library / replay-watchdog modules.
 
 ---
 

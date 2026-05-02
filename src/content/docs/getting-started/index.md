@@ -5,20 +5,18 @@ sidebar:
   order: 1
 ---
 
-Bilbycast is a suite of Rust projects for professional broadcast media transport. The core components work together to move live video and audio between locations with broadcast-grade reliability, in-process transcoding, hot input switching, and configurable path synchronisation.
+Bilbycast is a suite of Rust projects for professional broadcast media transport. Edge nodes move live video and audio between locations; the manager is the web UI that controls them; the relay traverses NAT between sites that can't reach each other directly.
 
 ## Components
 
 | Component | Role |
 |-----------|------|
-| **bilbycast-edge** | Media transport gateway — bridges SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, and SMPTE ST 2110-20/-23/-30/-31/-40, with in-process transcoding and hot input switching |
-| **bilbycast-manager** | Web UI + API for remote management, monitoring, and AI-assisted flow configuration |
-| **bilbycast-relay** | QUIC relay for NAT traversal between edge nodes |
-| **bilbycast-srt** | SRT protocol library (used by edge internally) |
-| **bilbycast-rist** | RIST (VSF TR-06-1 Simple Profile) library (used by edge internally) |
-| **bilbycast-fdk-aac-rs** | Fraunhofer FDK AAC wrapper — in-process AAC decode / encode |
-| **bilbycast-ffmpeg-video-rs** | FFmpeg libavcodec / libswscale wrapper — in-process video decode, scaling, JPEG encode, and Opus / MP2 / AC-3 audio encode |
-| **bilbycast-appear-x-api-gateway** | Bridge for Appear X broadcast devices |
+| **bilbycast-manager** | Web UI + API. Controls edge nodes and relays. Where you click to make things happen. |
+| **bilbycast-edge** | Media transport gateway. Bridges SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF, WebRTC, and SMPTE ST 2110. In-process transcoding and local-display playout. |
+| **bilbycast-relay** | Stateless QUIC relay for NAT traversal between edge sites. |
+| **bilbycast-appear-x-api-gateway** | Sidecar that bridges Appear X devices into the manager. |
+
+A few helper crates (`bilbycast-srt`, `bilbycast-rist`, `bilbycast-fdk-aac-rs`, `bilbycast-ffmpeg-video-rs`, `bilbycast-bonding`) ship inside the edge — you don't install them separately.
 
 ## Architecture
 
@@ -39,59 +37,15 @@ Bilbycast is a suite of Rust projects for professional broadcast media transport
                     QUIC tunnels (encrypted)
 ```
 
-Edge nodes connect outbound to the manager via WebSocket, enabling management of devices behind firewalls and NAT. The relay provides QUIC-based tunneling between edge nodes that can't reach each other directly.
+Edge nodes connect outbound to the manager — devices behind NAT or restrictive firewalls don't need any inbound port.
 
-## Prerequisites
+## What you'll do
 
-- [Rust toolchain](https://rustup.rs/) (stable, edition 2024)
-- Postgres 18 (for bilbycast-manager — `docker compose -f docker-compose.dev.yml up -d` brings up a local cluster on port 5433 for development)
+A typical first deployment takes about 20 minutes and looks like this:
 
-## Quick Start
+1. **[Install the manager](/manager/getting-started/)** — one command brings up Postgres + the binary as a systemd service, and you log in to the web UI.
+2. **[Install the relay](/relay/getting-started/)** — only if your sites can't reach each other directly. Skip otherwise.
+3. **[Install an edge node](/edge/getting-started/)** — download, run, then point a browser at the **setup wizard** to register it with the manager. No hand-edited config files.
+4. **[Create your first flow](/getting-started/first-flow/)** — point-and-click in the manager UI: add an input, add an output, click Save.
 
-The fastest way to see bilbycast in action is to run a standalone edge node:
-
-```bash
-# Build the edge node
-cd bilbycast-edge
-cargo build --release
-
-# Create a minimal config (config v2 — independent inputs/outputs/flows)
-cat > config.json << 'EOF'
-{
-  "version": 2,
-  "server": { "listen_addr": "0.0.0.0", "listen_port": 8080 },
-  "inputs": [
-    {
-      "id": "in-srt",
-      "name": "SRT Input",
-      "type": "srt",
-      "mode": "listener",
-      "local_addr": "0.0.0.0:9000",
-      "latency_ms": 120
-    }
-  ],
-  "outputs": [
-    {
-      "id": "out-rtp",
-      "name": "RTP Output",
-      "type": "rtp",
-      "dest_addr": "192.168.1.100:5004"
-    }
-  ],
-  "flows": [
-    {
-      "id": "srt-to-rtp",
-      "name": "SRT Input to RTP Output",
-      "enabled": true,
-      "input_ids": ["in-srt"],
-      "output_ids": ["out-rtp"]
-    }
-  ]
-}
-EOF
-
-# Start the node
-./target/release/bilbycast-edge --config config.json
-```
-
-See the [Deployment](/getting-started/deployment/) guide for full multi-component setup, or jump to [Your First Flow](/getting-started/first-flow/) for a step-by-step walkthrough.
+For a high-level view of the deployment topology and firewall flows, see the [Deployment overview](/getting-started/deployment/).

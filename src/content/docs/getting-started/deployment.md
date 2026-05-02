@@ -87,8 +87,8 @@ In the manager UI:
 If you're running SMPTE ST 2110-30 / -31 / -40 essence flows that need PTP timing, install `linuxptp` on each edge host:
 
 ```bash
-sudo apt install linuxptp        # Debian / Ubuntu
-sudo dnf install linuxptp        # RHEL / Fedora
+sudo apt update && sudo apt install linuxptp   # Debian / Ubuntu
+sudo dnf install linuxptp                      # RHEL / Fedora
 ```
 
 The edge polls `ptp4l`'s management socket — it doesn't run a PTP slave in-process. A worked example, including a sample `ptp4l.conf` and a systemd unit, is in [PTP integration](/edge/ptp/#wiring-it-up). Skip this entirely if you're not running ST 2110 — `rtp_audio`, SRT, RTP/MP2T, RTMP, RTSP, HLS, WebRTC, and the `audio_302m` transport mode have no PTP requirement.

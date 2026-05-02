@@ -38,12 +38,7 @@ const features = [
   {
     icon: 'FEC',
     title: 'Broadcast Standards',
-    description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge (including RIST bonding), TR-101290 transport-stream analysis, SMPTE RP 2129 trust-boundary metrics, and VSF TR-06-1 / TR-07 awareness. RIST is a first-class protocol, not a subset of SRT.',
-  },
-  {
-    icon: 'BOND',
-    title: 'Multi-Path Bonding',
-    description: 'Aggregate N heterogeneous IP links (5G + Starlink + fibre) over UDP / QUIC / RIST paths — the capability typically sold as a dedicated bonded-cellular encoder or SD-WAN bonding appliance, built directly into the edge. Media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover without doubling total bandwidth. Transport-agnostic — bond any inner protocol (SRT, RTMP, RTSP, ST 2110).',
+    description: 'SMPTE 2022-1 FEC encode/decode, SMPTE 2022-7 hitless redundancy merge, TR-101290 transport-stream analysis, SMPTE RP 2129 trust-boundary metrics, and VSF TR-06-1 / TR-07 awareness. RIST is a first-class protocol, not a subset of SRT.',
   },
   {
     icon: '\u2295',
@@ -78,14 +73,9 @@ const features = [
 ];
 ---
 
-<section id="features" class="py-24 lg:py-32">
+<section id="features" class="pb-24 lg:pb-32">
   <div class="mx-auto max-w-7xl px-6">
-    <div class="text-center">
-      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Built for Broadcast</h2>
-      <p class="mt-4 text-lg text-slate-400">Professional-grade features for mission-critical media transport.</p>
-    </div>
-
-    <div class="mt-16 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
       {features.map((f) => (
         <div class="group rounded-xl border border-slate-800 bg-gradient-to-b from-slate-800/40 to-slate-900/20 p-6 transition hover:border-sky-800/40 hover:shadow-lg hover:shadow-sky-900/10">
           <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-950 text-sm font-bold text-sky-400 ring-1 ring-sky-800/40">

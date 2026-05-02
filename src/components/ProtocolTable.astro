@@ -1,7 +1,7 @@
 ---
 const protocols = [
   { name: 'SRT', input: true, output: true, features: 'AES-CTR/GCM, Stream ID, FEC, 2022-7 redundancy, SMPTE 302M audio mode, optional audio_encode + video_encode on TS output, optional delay block' },
-  { name: 'RIST', input: true, output: true, features: 'VSF TR-06-1 Simple Profile — NACK-driven retransmit, SMPTE 2022-7 bonding, optional audio_encode + video_encode on TS output, optional delay block' },
+  { name: 'RIST', input: true, output: true, features: 'VSF TR-06-1 Simple Profile — NACK-driven retransmit, SMPTE 2022-7 redundancy, optional audio_encode + video_encode on TS output, optional delay block' },
   { name: 'RTP', input: true, output: true, features: 'SMPTE 2022-1 FEC, unicast/multicast, DSCP QoS, 2022-7 redundancy, optional audio_encode + video_encode on TS output, optional delay block' },
   { name: 'UDP', input: true, output: true, features: 'Raw MPEG-TS, unicast/multicast, SMPTE 302M audio mode, optional audio_encode + video_encode on TS output, optional delay block' },
   { name: 'RTMP/RTMPS', input: true, output: true, features: 'H.264 (FLV) + Enhanced-RTMP HEVC, AAC audio, ingest from OBS/ffmpeg, publish to Twitch/YouTube/Facebook, TLS, optional audio_encode + video_encode' },

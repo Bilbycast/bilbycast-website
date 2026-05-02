@@ -1,0 +1,25 @@
+---
+import Landing from '../layouts/Landing.astro';
+import UseCases from '../components/UseCases.astro';
+import CtaBanner from '../components/CtaBanner.astro';
+---
+
+<Landing
+  title="Bilbycast — Use cases"
+  description="Concrete workflows Bilbycast solves end-to-end: live event contribution, remote production, facility integration, cloud distribution, hot failover, transcoding, audio gateway, and more."
+>
+  <section class="pt-32 pb-8 lg:pt-40 lg:pb-12">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Use cases</h1>
+      <p class="mx-auto mt-6 max-w-3xl text-lg leading-relaxed text-slate-400">
+        Real workflows Bilbycast was built to solve — from live event contribution to AAC-to-Opus WebRTC
+        distribution to path-synchronised clean &amp; dirty feeds. If your workflow isn't here, it's almost certainly
+        a combination of a few of these.
+      </p>
+    </div>
+  </section>
+
+  <UseCases />
+
+  <CtaBanner />
+</Landing>

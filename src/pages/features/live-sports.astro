@@ -1,0 +1,266 @@
+---
+import Landing from '../../layouts/Landing.astro';
+import CtaBanner from '../../components/CtaBanner.astro';
+
+const replayCapabilities = [
+  {
+    title: 'JKL-scrub timeline',
+    body: 'Per-flow scrub with industry-standard JKL hotkeys. K toggles play, J/L step backward / forward at 1×. Hold Shift for fast scrub. Lock-to-live snaps you to the live edge.',
+  },
+  {
+    title: 'Mark in / Mark out',
+    body: 'I and O drop in / out points. Quick-clip last-N-seconds buttons (5 s / 10 s / 30 s / 60 s) for fast highlight grabs. Bracket-trim hotkeys [ and ] adjust ± 100 ms for fine work.',
+  },
+  {
+    title: 'Customisable tag profiles',
+    body: 'Per-group tag profiles seeded from a built-in sport-preset catalog. Up to 20 profiles per group, each with up to 9 tags. Hotkeys 1–9 rebind to the active profile. Per-operator selection persists in your UI preferences.',
+  },
+  {
+    title: 'Push-to-air per clip',
+    body: 'Trigger any clip onto an output flow with one click. The Push-to-air modal lets you pick which flow to inject to, with the flow card showing the live state.',
+  },
+  {
+    title: 'Search, sort, and filter',
+    body: 'Group-scoped clip library with search by name, sort by created / mark-in / duration, and tag-pill filtering. Multi-tenant Groups isolate clips per tenant.',
+  },
+  {
+    title: 'Tri-state recording badge',
+    body: 'Each flow card shows ● REC (armed and recording) / ● PRE-ROLL (auto-arming pre-buffer) / Idle. Pre-buffer mode keeps the last N seconds before any operator presses Start.',
+  },
+];
+
+const sportPresets = [
+  'Soccer',
+  'Rugby Union',
+  'Rugby League',
+  'NFL',
+  'AFL',
+  'Cricket',
+  'Tennis',
+  'Basketball',
+  'Ice Hockey',
+  'Field Hockey',
+  'Volleyball',
+  'Badminton',
+  'Baseball',
+  'Netball',
+  'Handball',
+  'Combat Sports',
+  'Athletics',
+  'Generic',
+];
+
+const switcherFeatures = [
+  'PGM / PVW director console with Take button',
+  'Per-tenant Switcher pages — operators see only their group',
+  'Configurable presets for repeating shows',
+  'Driver-aware action system — works with Bilbycast and Appear X devices',
+];
+
+const routinesExamples = [
+  {
+    label: 'Match day',
+    body: 'At 14:30 IANA Australia/Sydney every Saturday during the season, set inputs A/B/C live, route to the studio uplink, start recording with 5-min pre-roll, post a kickoff event.',
+  },
+  {
+    label: 'Halftime cutaway',
+    body: 'At 15:18 (configurable per-routine), stop game flow, route slate input to PGM, start ad-pod schedule, resume game flow at 15:33.',
+  },
+  {
+    label: 'Multi-flow synced takedown',
+    body: 'At 16:55 stop all 12 contribution flows simultaneously, push end-of-show clips to highlights archive, send a wrap-event to the manager.',
+  },
+];
+---
+
+<Landing
+  title="Bilbycast — Built for live sports"
+  description="Live-sports stack on top of Bilbycast: per-flow JKL-scrub Replay with sport-preset tag profiles, push-to-air per clip, PGM/PVW Switcher, cron-scheduled Routines for show-day automation, multi-tenant Groups."
+>
+  <!-- Hero -->
+  <section class="relative overflow-hidden pt-32 pb-16 lg:pt-40 lg:pb-20">
+    <div class="absolute inset-0 -z-10">
+      <div class="absolute inset-0 bg-gradient-to-b from-sky-950/30 via-[#020617] to-[#020617]"></div>
+      <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full bg-sky-600/8 blur-[120px]"></div>
+    </div>
+
+    <div class="mx-auto max-w-5xl px-6 text-center">
+      <div class="mb-6 inline-flex items-center gap-2 rounded-full border border-sky-800/40 bg-sky-950/40 px-4 py-1.5 text-xs font-medium text-sky-300">
+        <span class="h-1.5 w-1.5 rounded-full bg-sky-400"></span>
+        Pillar 3 · Built for live sports
+      </div>
+      <h1 class="text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
+        Replay, switch, automate.
+        <span class="block bg-gradient-to-r from-sky-400 to-cyan-300 bg-clip-text text-transparent">
+          Built for show day.
+        </span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-400 sm:text-xl">
+        Per-flow JKL-scrub Replay, customisable per-sport tag profiles, push-to-air per clip, PGM/PVW Switcher,
+        and cron-scheduled Routines that automate the show-day workflow with DST-correct timezones.
+      </p>
+    </div>
+  </section>
+
+  <!-- Replay capabilities -->
+  <section class="py-16 lg:py-24">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="mx-auto max-w-2xl text-center">
+        <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">Replay</div>
+        <h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+          Per-flow JKL-scrub. Push-to-air per clip.
+        </h2>
+        <p class="mt-4 text-lg text-slate-400">
+          Visit <code class="text-slate-300">/replay?node=&amp;flow=</code> on the manager and you're already in the
+          replay UI. No separate replay server, no separate licence key.
+        </p>
+      </div>
+      <div class="mt-16 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        {replayCapabilities.map((c) => (
+          <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+            <h3 class="text-lg font-semibold text-white">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-slate-400">{c.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Sport-preset catalog -->
+  <section class="py-24 bg-slate-900/30 border-y border-slate-800/60">
+    <div class="mx-auto max-w-6xl px-6">
+      <div class="mx-auto max-w-2xl text-center">
+        <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Built-in sport-preset catalog</h2>
+        <p class="mt-4 text-lg text-slate-400">
+          Every group seeds from a sport-specific tag preset on first run. Operators can customise — up to 20 profiles
+          per group, each with up to 9 tags matching <code class="text-slate-300">[A-Z0-9_-]&#123;1,32&#125;</code>.
+          Hotkeys 1–9 rebind to whichever profile is active.
+        </p>
+      </div>
+      <div class="mt-12 flex flex-wrap justify-center gap-2.5">
+        {sportPresets.map((sport) => (
+          <span class="inline-flex items-center rounded-full border border-slate-700 bg-slate-800/50 px-4 py-1.5 text-sm font-medium text-slate-300">
+            {sport}
+          </span>
+        ))}
+      </div>
+      <p class="mt-8 text-center text-sm text-slate-500">
+        Default: Soccer preset. Defined in
+        <code class="text-slate-400">static/js/shared/replay_tag_presets.js</code>. Add your own in the manager
+        admin UI.
+      </p>
+    </div>
+  </section>
+
+  <!-- Switcher -->
+  <section class="py-24 lg:py-32">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="grid gap-12 lg:grid-cols-2 lg:items-center">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">Switcher</div>
+          <h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            PGM / PVW director console.
+          </h2>
+          <p class="mt-4 text-base leading-relaxed text-slate-400">
+            A live director console with Program / Preview, Take, and presets. Operates Bilbycast edges and
+            third-party broadcast devices through the same driver-aware action system. Per-tenant Switcher pages
+            keep operators scoped to their own group.
+          </p>
+          <ul class="mt-6 list-none space-y-2.5">
+            {switcherFeatures.map((f) => (
+              <li class="flex items-start gap-3 text-sm leading-relaxed text-slate-300">
+                <svg class="mt-0.5 h-4 w-4 flex-none text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <!-- Mock switcher panel -->
+        <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
+          <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2">
+            <div class="flex gap-1.5">
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+            </div>
+            <div class="ml-3 text-xs font-mono text-slate-500">manager.bilbycast.com / switcher</div>
+          </div>
+          <div class="grid grid-cols-2 gap-3 p-5">
+            <div class="rounded-lg border-2 border-rose-500/60 bg-slate-950 p-3">
+              <div class="text-[10px] font-bold uppercase tracking-widest text-rose-400">Program</div>
+              <div class="mt-1 h-24 w-full rounded bg-gradient-to-br from-emerald-900/40 to-emerald-700/20"></div>
+              <div class="mt-2 text-xs text-slate-300">CAM 2 — main field</div>
+            </div>
+            <div class="rounded-lg border-2 border-emerald-500/60 bg-slate-950 p-3">
+              <div class="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Preview</div>
+              <div class="mt-1 h-24 w-full rounded bg-gradient-to-br from-sky-900/40 to-sky-700/20"></div>
+              <div class="mt-2 text-xs text-slate-300">CAM 4 — slow-mo</div>
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-2 border-t border-slate-800 bg-slate-800/40 px-5 py-3">
+            <div class="flex gap-2">
+              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 1</button>
+              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 2</button>
+              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 3</button>
+              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 4</button>
+            </div>
+            <button class="rounded bg-rose-600 px-5 py-1.5 text-xs font-bold text-white shadow-lg shadow-rose-600/30">TAKE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Routines -->
+  <section class="py-24 bg-slate-900/30 border-y border-slate-800/60">
+    <div class="mx-auto max-w-6xl px-6">
+      <div class="mx-auto max-w-2xl text-center">
+        <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">Routines</div>
+        <h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">Automate the show day.</h2>
+        <p class="mt-4 text-lg text-slate-400">
+          A Routine is a named target state across flows, plus a cron schedule for activation. DST-correct via
+          IANA timezones (chrono-tz). Real-time fire-partial / fire-failed / missed events surface failed activations
+          to the operator immediately.
+        </p>
+      </div>
+      <div class="mt-12 grid gap-4 lg:grid-cols-3">
+        {routinesExamples.map((r) => (
+          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+            <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">{r.label}</div>
+            <p class="mt-3 text-sm leading-relaxed text-slate-300">{r.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Multi-tenant Groups -->
+  <section class="py-24 lg:py-32">
+    <div class="mx-auto max-w-5xl px-6 text-center">
+      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">
+        Multi-tenant Groups, with brand theming.
+      </h2>
+      <p class="mx-auto mt-4 max-w-2xl text-lg leading-relaxed text-slate-400">
+        Run multiple sports clients on one Bilbycast install. Each tenant gets isolated users, resources, quotas,
+        and per-tenant logo + brand colour theming. Cross-group tunnels for shared infrastructure. Ownership
+        transfer when a client takes their fleet in-house.
+      </p>
+      <div class="mt-8 inline-flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-xs uppercase tracking-wider text-slate-500">
+        <span>Per-tenant theming</span>
+        <span>·</span>
+        <span>OIDC group-sync</span>
+        <span>·</span>
+        <span>Cross-group tunnels</span>
+        <span>·</span>
+        <span>Share-cron</span>
+        <span>·</span>
+        <span>Ownership transfer</span>
+      </div>
+    </div>
+  </section>
+
+  <CtaBanner />
+</Landing>

@@ -18,12 +18,6 @@ const products = [
     link: '/relay/overview/',
     color: 'emerald',
   },
-  {
-    name: 'bilbycast-bonding',
-    description: 'Media-aware multi-path packet bonding across N heterogeneous IP links — 5G + Starlink + fibre over UDP, QUIC, or RIST. Media-aware scheduler duplicates H.264/HEVC IDR frames across the two lowest-RTT paths for frame-accurate failover. Transport-agnostic — bond any inner protocol (SRT, RTMP, RTSP, ST 2110).',
-    link: '/edge/bonding/',
-    color: 'amber',
-  },
 ];
 
 const colorMap: Record<string, { ring: string; bg: string; text: string }> = {
@@ -35,14 +29,9 @@ const colorMap: Record<string, { ring: string; bg: string; text: string }> = {
 };
 ---
 
-<section id="products" class="py-24 lg:py-32">
+<section id="products" class="pb-24 lg:pb-32">
   <div class="mx-auto max-w-7xl px-6">
-    <div class="text-center">
-      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">The Suite</h2>
-      <p class="mt-4 text-lg text-slate-400">Four components that work together for complete media transport infrastructure.</p>
-    </div>
-
-    <div class="mt-16 grid gap-6 sm:grid-cols-2">
+    <div class="grid gap-6 sm:grid-cols-2">
       {products.map((p) => {
         const c = colorMap[p.color];
         return (

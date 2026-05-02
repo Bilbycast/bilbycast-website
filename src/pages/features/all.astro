@@ -1,0 +1,25 @@
+---
+import Landing from '../../layouts/Landing.astro';
+import FeatureSection from '../../components/FeatureSection.astro';
+import CtaBanner from '../../components/CtaBanner.astro';
+---
+
+<Landing
+  title="Bilbycast — Every capability"
+  description="Every Bilbycast capability on one page. Twelve protocols, in-process transcoding, audio gateway, FEC, hitless redundancy, NMOS, AI-assisted configuration, and more."
+>
+  <section class="pt-32 pb-8 lg:pt-40 lg:pb-12">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Every capability, on one page</h1>
+      <p class="mx-auto mt-6 max-w-3xl text-lg leading-relaxed text-slate-400">
+        The full Bilbycast feature list, no curation. If you're evaluating against a procurement checklist or a competitive
+        matrix, this is the page to bookmark. Read top-to-bottom or jump to the headlines on the
+        <a href="/features/" class="text-sky-400 hover:text-sky-300">four pillars</a>.
+      </p>
+    </div>
+  </section>
+
+  <FeatureSection />
+
+  <CtaBanner />
+</Landing>

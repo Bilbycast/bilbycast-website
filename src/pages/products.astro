@@ -1,0 +1,25 @@
+---
+import Landing from '../layouts/Landing.astro';
+import ProductCards from '../components/ProductCards.astro';
+import CtaBanner from '../components/CtaBanner.astro';
+---
+
+<Landing
+  title="Bilbycast — The suite"
+  description="Bilbycast is three components that work together: edge (the gateway), manager (the control plane), and relay (NAT-traversing QUIC tunnels)."
+>
+  <section class="pt-32 pb-8 lg:pt-40 lg:pb-12">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">The suite</h1>
+      <p class="mx-auto mt-6 max-w-3xl text-lg leading-relaxed text-slate-400">
+        Bilbycast is three components that work together. Run all three for the full plant, or just the edge if you
+        only need a media-transport gateway. Edge and relay are AGPL-3 open source; manager is licensed under the
+        Bilbycast EULA with a free Community tier up to 10 nodes.
+      </p>
+    </div>
+  </section>
+
+  <ProductCards />
+
+  <CtaBanner />
+</Landing>

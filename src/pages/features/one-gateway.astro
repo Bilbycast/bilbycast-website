@@ -1,0 +1,174 @@
+---
+import { Image } from 'astro:assets';
+import Landing from '../../layouts/Landing.astro';
+import ProtocolTable from '../../components/ProtocolTable.astro';
+import CtaBanner from '../../components/CtaBanner.astro';
+import flowsImg from '../../assets/screenshots/flows.png';
+
+const transcoding = [
+  {
+    track: 'Video — software',
+    encoders: 'libx264 (H.264), libx265 (HEVC)',
+    note: 'GPL-licensed encoders, shipped in the *-full release channel',
+  },
+  {
+    track: 'Video — hardware',
+    encoders: 'NVIDIA NVENC (H.264 / HEVC), Intel QSV (H.264 / HEVC, x86_64 only)',
+    note: 'LGPL-clean dispatcher; runs against the device driver at runtime',
+  },
+  {
+    track: 'Audio — compressed',
+    encoders: 'AAC-LC, HE-AAC v1/v2 (FDK), Opus, MP2, AC-3',
+    note: 'In-process via FDK AAC and libavcodec — no ffmpeg subprocess',
+  },
+  {
+    track: 'Audio — uncompressed',
+    encoders: 'PCM L16 / L24, SMPTE 302M, AES67, ST 2110-30/-31',
+    note: 'Per-output sample-rate, bit-depth, IS-08 channel routing — hot-reload',
+  },
+];
+
+const standards = [
+  { name: 'NMOS IS-04', body: 'Discovery & Registration via mDNS-SD' },
+  { name: 'NMOS IS-05', body: 'Connection Management via REST' },
+  { name: 'NMOS IS-08', body: 'Audio Channel Mapping with hot-reload' },
+  { name: 'BCP-004', body: 'Receiver capability sets' },
+  { name: 'SMPTE 2022-1', body: 'Forward error correction' },
+  { name: 'SMPTE 2022-7', body: 'Hitless redundancy across two paths' },
+  { name: 'TR-101290', body: 'Transport-stream conformance analysis' },
+  { name: 'VSF TR-06-1 / TR-07', body: 'RIST Simple + Main profile awareness' },
+];
+---
+
+<Landing
+  title="Bilbycast — One gateway, every format"
+  description="Twelve protocols ingressed and egressed in one Rust binary. SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF-LL, WebRTC, SMPTE ST 2110-20/-23/-30/-31/-40. In-process video transcoding (H.264/HEVC/NVENC/QSV) and audio transcoding (AAC/Opus/MP2/AC-3). NMOS IS-04/05/08, FEC, hitless 2022-7. No ffmpeg subprocess."
+>
+  <!-- Hero -->
+  <section class="relative overflow-hidden pt-32 pb-16 lg:pt-40 lg:pb-20">
+    <div class="absolute inset-0 -z-10">
+      <div class="absolute inset-0 bg-gradient-to-b from-sky-950/30 via-[#020617] to-[#020617]"></div>
+      <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full bg-sky-600/8 blur-[120px]"></div>
+    </div>
+
+    <div class="mx-auto max-w-5xl px-6 text-center">
+      <div class="mb-6 inline-flex items-center gap-2 rounded-full border border-sky-800/40 bg-sky-950/40 px-4 py-1.5 text-xs font-medium text-sky-300">
+        <span class="h-1.5 w-1.5 rounded-full bg-sky-400"></span>
+        Pillar 2 · One gateway
+      </div>
+      <h1 class="text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
+        One gateway,
+        <span class="block bg-gradient-to-r from-sky-400 to-cyan-300 bg-clip-text text-transparent">
+          every format.
+        </span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-400 sm:text-xl">
+        Twelve protocols ingressed and egressed in a single Rust binary. In-process video and audio transcoding —
+        no ffmpeg subprocess, no separate transcode box, no extra hardware. NMOS-friendly out of the box.
+      </p>
+    </div>
+  </section>
+
+  <!-- Protocol table (the full matrix) -->
+  <ProtocolTable />
+
+  <!-- Transcoding -->
+  <section class="py-24 lg:py-32">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">In-process transcoding</h2>
+        <p class="mt-4 text-lg text-slate-400">
+          Video and audio transcoders run inside the same Rust process as the protocol stack. No subprocess hop,
+          no shell-out, no extra failure mode. The default <code class="text-slate-300">*-linux</code> binary ships
+          AGPL-only without software encoders; the <code class="text-slate-300">*-linux-full</code> binary adds
+          GPL libx264 / libx265, NVENC, and QSV.
+        </p>
+      </div>
+
+      <div class="mt-12 grid gap-4 sm:grid-cols-2">
+        {transcoding.map((t) => (
+          <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+            <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">{t.track}</div>
+            <div class="mt-2 text-base font-semibold text-white">{t.encoders}</div>
+            <p class="mt-2 text-sm leading-relaxed text-slate-400">{t.note}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Hot input switching -->
+  <section class="py-24 bg-slate-900/30 border-y border-slate-800/60">
+    <div class="mx-auto max-w-5xl px-6">
+      <div class="grid gap-12 lg:grid-cols-2 lg:items-center">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">Hot input switching</div>
+          <h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            Switch sources without going to black.
+          </h2>
+          <p class="mt-4 text-base leading-relaxed text-slate-400">
+            Attach multiple inputs to one flow and cut over with a single API call. A shared TS continuity fixer
+            resets CC state, injects the new input's PAT/PMT with a bumped version, and forwards immediately.
+            Receivers keep playing — even when the two sources use different codecs, sample rates, bitrates, or
+            containers.
+          </p>
+          <ul class="mt-6 list-none space-y-2.5">
+            {[
+              'Format-agnostic: H.264, HEVC, JPEG XS, uncompressed ST 2110',
+              'Zero-gap PMT version bump (mod 32, PAT only when program set changes)',
+              'Pair with SMPTE 2022-7 for sequence-aware hitless merge',
+              'Drives the bilbycast-manager Switcher (PGM/PVW director console)',
+            ].map((b) => (
+              <li class="flex items-start gap-3 text-sm leading-relaxed text-slate-300">
+                <svg class="mt-0.5 h-4 w-4 flex-none text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
+            <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2">
+              <div class="flex gap-1.5">
+                <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+                <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+                <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              </div>
+            </div>
+            <Image
+              src={flowsImg}
+              alt="Bilbycast flows view with live thumbnails and protocol badges"
+              class="w-full h-auto"
+              widths={[480, 720, 960]}
+              sizes="(max-width: 1024px) 720px, 960px"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Standards -->
+  <section class="py-24 lg:py-32">
+    <div class="mx-auto max-w-6xl px-6">
+      <div class="mx-auto max-w-2xl text-center">
+        <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Drops into your facility.</h2>
+        <p class="mt-4 text-lg text-slate-400">
+          Bilbycast speaks the standards your control system already speaks. No bespoke shim layer.
+        </p>
+      </div>
+      <div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {standards.map((s) => (
+          <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+            <div class="text-sm font-bold text-white">{s.name}</div>
+            <div class="mt-1 text-xs leading-relaxed text-slate-400">{s.body}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <CtaBanner />
+</Landing>

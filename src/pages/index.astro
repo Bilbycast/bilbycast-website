@@ -1,20 +1,23 @@
 ---
 import Landing from '../layouts/Landing.astro';
 import Hero from '../components/Hero.astro';
+import TrustStrip from '../components/TrustStrip.astro';
+import ReplacesShelf from '../components/ReplacesShelf.astro';
+import Pillars from '../components/Pillars.astro';
 import ScreenshotShowcase from '../components/ScreenshotShowcase.astro';
-import FeatureSection from '../components/FeatureSection.astro';
-import ProtocolTable from '../components/ProtocolTable.astro';
-import ProductCards from '../components/ProductCards.astro';
-import UseCases from '../components/UseCases.astro';
+import Audiences from '../components/Audiences.astro';
 import CtaBanner from '../components/CtaBanner.astro';
 ---
 
-<Landing title="Bilbycast — Broadcast-Grade Media Transport" description="Move live video, audio, and IP traffic between locations with professional reliability. SRT, RTP, WebRTC, RTMP, CMAF / DASH, encrypted QUIC tunneling, and more.">
+<Landing
+  title="Bilbycast — Live media transport, one control plane"
+  description="Bilbycast unifies SRT, RIST, RTMP, HLS, WebRTC, and SMPTE ST 2110 under one AI-assisted control plane — with in-process transcoding and driver-aware control that extends to third-party broadcast devices. The transcode box, the NMOS gateway, the protocol bridge, and the dashboard for it all — collapsed into one Rust suite."
+>
   <Hero />
-  <FeatureSection />
-  <ProtocolTable />
-  <ScreenshotShowcase />
-  <ProductCards />
-  <UseCases />
+  <TrustStrip />
+  <ReplacesShelf />
+  <Pillars />
+  <ScreenshotShowcase slides={['flows', 'topology', 'ai-config']} />
+  <Audiences />
   <CtaBanner />
 </Landing>

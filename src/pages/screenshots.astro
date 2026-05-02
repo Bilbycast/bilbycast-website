@@ -1,0 +1,29 @@
+---
+import Landing from '../layouts/Landing.astro';
+import ScreenshotShowcase from '../components/ScreenshotShowcase.astro';
+import CtaBanner from '../components/CtaBanner.astro';
+---
+
+<Landing
+  title="Bilbycast — Screenshots"
+  description="See the Bilbycast Manager UI: live network topology, flow overview, node detail with TR-101290 analysis, AI-assisted flow configuration, events and alarms."
+>
+  <section class="pt-32 pb-8 lg:pt-40 lg:pb-12">
+    <div class="mx-auto max-w-4xl px-6 text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white sm:text-5xl">Screenshots</h1>
+      <p class="mx-auto mt-6 max-w-3xl text-lg leading-relaxed text-slate-400">
+        A walk through the Bilbycast Manager UI — the same interface you'd run in a control room or against a fleet of
+        OB-vans. All shots from real production builds; no mockups.
+      </p>
+    </div>
+  </section>
+
+  <ScreenshotShowcase
+    slides={['flows', 'topology', 'edge-status', 'ai-config', 'managed-nodes', 'events']}
+    heading="Manager UI tour"
+    subheading="Six representative views from a typical operator workflow."
+    anchorId="tour"
+  />
+
+  <CtaBanner />
+</Landing>

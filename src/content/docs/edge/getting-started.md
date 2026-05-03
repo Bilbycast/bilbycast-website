@@ -74,15 +74,57 @@ The `-dev` metapackages depend on the matching runtime `.so` packages and pin th
 
 **x86_64 only — Intel QuickSync (QSV):**
 
+QSV uses Intel's oneVPL stack, which is a thin **dispatcher** plus a **GPU runtime backend** plus a **VAAPI driver**. All three components must be installed; the dispatcher alone contains no encoding code.
+
 ```bash
 sudo apt update
-sudo apt install libvpl2 intel-media-va-driver-non-free
+sudo apt install libvpl2 libmfx-gen1.2 intel-media-va-driver-non-free
 sudo usermod -aG render "$USER"   # log out + back in after this
+```
+
+| Package | Role |
+| --- | --- |
+| `libvpl2` | oneVPL dispatcher (`libvpl.so.2`) — what the bilbycast binary links against. |
+| **`libmfx-gen1.2`** | Intel VPL **GPU runtime** (`libmfx-gen.so.1.2`) — the actual hardware encoder. **Most-commonly-missed package.** Without it the dispatcher returns `MFX_ERR_NOT_FOUND` and `h264_qsv` fails to open. |
+| `intel-media-va-driver-non-free` | VAAPI driver (`iHD_drv_video.so`) used by `libmfx-gen` for some pixel-format conversions and zero-copy frame paths. The `intel-media-va-driver` package is the upstream open-source variant and is also acceptable. |
+
+Verify after install:
+
+```bash
+ls /usr/lib/x86_64-linux-gnu/libmfx-gen.so.1.2     # must exist
+ls /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so  # must exist
+ls /dev/dri/                                       # card* + renderD*
 ```
 
 QSV needs a 5th-gen (Broadwell) Intel Core or newer for H.264; HEVC needs 7th-gen (Kaby Lake) or newer.
 
-**NVIDIA NVENC:** no apt packages required. The binary `dlopen`s `libnvidia-encode.so.1`, which ships with the proprietary NVIDIA driver. Install via your distribution's standard mechanism (e.g. `nvidia-driver-550` on Ubuntu) and reboot.
+**NVIDIA NVENC:**
+
+NVENC also uses a dispatcher-style architecture: bilbycast `dlopen`s `libnvidia-encode.so.1` and `libcuda.so.1`, both of which ship inside the NVIDIA proprietary driver. The Nouveau open-source driver does **not** expose NVENC.
+
+```bash
+# Ubuntu 22.04 / 24.04 — recommended branch (auto-detect):
+sudo ubuntu-drivers autoinstall
+# Or pin a specific branch (e.g. 580 LTS):
+sudo apt install nvidia-driver-580          # workstation
+sudo apt install nvidia-driver-580-server   # headless servers
+sudo reboot
+```
+
+```bash
+# Debian 12+ — non-free repo must be enabled:
+sudo apt install nvidia-driver
+sudo reboot
+```
+
+Verify after install:
+
+```bash
+nvidia-smi                                          # lists the GPU
+ldconfig -p | grep -E 'libnvidia-encode|libcuda\.'  # both must appear
+```
+
+**Why the runtime libraries are mandatory.** Both NVENC and QSV are *dispatcher architectures*: the actual encoder kernels that program the GPU live in vendor-shipped runtime libraries (`libnvidia-encode.so.1` for NVENC, `libmfx-gen.so.1.2` for QSV). bilbycast cannot statically link them in — they are GPU-architecture-specific binaries Intel and NVIDIA distribute as part of their driver stacks, the same way every other QSV/NVENC consumer (OBS, FFmpeg CLI, GStreamer, HandBrake) requires them. If you skip the runtime install, hardware encoding fails at session creation; CPU encoding (`x264` / `x265`) keeps working because those libraries are statically linked into the `*-full` binary.
 
 ## 4. Register the node in the manager
 

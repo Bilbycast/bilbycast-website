@@ -108,6 +108,52 @@ WantedBy=multi-user.target
 
 The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optional but recommended. The edge only needs read-write access to `/var/lib/bilbycast/` and reads `/etc/bilbycast/`; everything else stays read-only.
 
+## 5b. Hardware-encoder runtime (only if you'll use NVENC or QSV)
+
+The `*-full` binary compiles in the FFmpeg → NVENC and FFmpeg → QSV bridges, but the actual GPU encoder *implementation* lives in vendor-shipped runtime libraries that are not bundled with the bilbycast tarball. If your flows only use software encoders (`x264` / `x265`) you can skip this section entirely.
+
+**Intel QuickSync (QSV) — x86_64 only:**
+
+```bash
+sudo apt update
+sudo apt install libvpl2 libmfx-gen1.2 intel-media-va-driver-non-free
+sudo usermod -aG render bilbycast    # service user needs /dev/dri/renderD* access
+```
+
+| Package | Role |
+| --- | --- |
+| `libvpl2` | oneVPL dispatcher (`libvpl.so.2`). bilbycast links to this. |
+| **`libmfx-gen1.2`** | Intel VPL **GPU runtime** (`libmfx-gen.so.1.2`) — the actual hardware encoder. **The package most installs miss.** Without it, `MFXLoad` returns `MFX_ERR_NOT_FOUND` and `h264_qsv` / `hevc_qsv` fail to open. |
+| `intel-media-va-driver-non-free` | VAAPI driver (`iHD_drv_video.so`). Required for some pixel-format and zero-copy paths inside `libmfx-gen`. The `intel-media-va-driver` upstream package works too. |
+
+QSV needs Broadwell (5th gen) or newer for H.264; HEVC needs Kaby Lake (7th gen) or newer.
+
+**NVIDIA NVENC:**
+
+```bash
+# Ubuntu 22.04 / 24.04 — auto-pick recommended branch:
+sudo ubuntu-drivers autoinstall
+# Or pin a specific branch (e.g. 580 LTS):
+sudo apt install nvidia-driver-580          # workstation
+sudo apt install nvidia-driver-580-server   # headless servers
+sudo reboot
+
+# Debian 12+ — non-free repo must be enabled:
+sudo apt install nvidia-driver
+sudo reboot
+```
+
+The proprietary NVIDIA driver bundles `libnvidia-encode.so.1` and `libcuda.so.1`, both of which bilbycast `dlopen`s at flow start. The Nouveau open-source driver does **not** expose NVENC.
+
+After install, verify the GPU is visible to the service user:
+
+```bash
+sudo -u bilbycast nvidia-smi          # NVENC: must list the GPU
+ls -l /dev/dri/                       # QSV: bilbycast must be in render group; renderD128 should be readable
+```
+
+If you skip this step but still configure a `video_encode` block with `h264_qsv` / `h264_nvenc`, the encoder will fail to open at flow start and the edge will surface a Critical event under category `video_encode`. Software encoders (`x264`, `x265`) keep working regardless because they're statically linked into the `*-full` binary.
+
 ## 6. Enable and start
 
 ```bash

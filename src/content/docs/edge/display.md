@@ -87,7 +87,7 @@ The video-vs-audio offset is published as a signed EMA on the per-output `displa
 
 ## Supported codecs
 
-- **Video**: H.264 + H.265 (in-process software decode via libavcodec). HW decode (VA-API / NVDEC) lands in v2 behind `display-vaapi` / `display-nvdec` Cargo features.
+- **Video**: H.264 + H.265. Software decode via libavcodec is the always-available baseline; **NVDEC** (`display-nvdec` Cargo feature) and **Intel QSV** (`display-qsv`, x86_64 only) are user-selectable per output via `hw_decode: "auto" | "cpu" | "nvdec" | "qsv"`. Both HW backends ride in the `*-linux-full` release artefact and the runtime probe auto-detects which the host can open. VA-API stays as a v2 placeholder behind `display-vaapi`.
 - **Audio**: AAC family via fdk-aac, plus MP2 / AC-3 / E-AC-3 / Opus via libavcodec. **No re-encode** — every codec decodes to LPCM for ALSA.
 
 Multichannel audio (5.1 / 7.1) is downmixed to the configured stereo pair (`audio_channel_pair`) — passthrough of compressed audio over HDMI is not supported in v1.
@@ -149,7 +149,7 @@ The manager renders the resolution annotation as `display (1920x1080@60Hz)` in t
 ## Limitations (v1)
 
 - Linux only.
-- Software decode only. HW decode (VA-API / NVDEC) is scheduled for v2 behind `display-vaapi` / `display-nvdec` Cargo features.
+- NVDEC and Intel QSV hardware decode are available behind the `display-nvdec` / `display-qsv` Cargo features (both bundled in the `*-linux-full` release). VA-API decode is still scheduled for v2 behind the `display-vaapi` placeholder.
 - HDMI hotplug is discovered at startup only — adding a cable later requires restarting the edge before it shows up in `display_devices`.
 - Multichannel passthrough over HDMI is not supported — multichannel sources are downmixed to stereo on the configured `audio_channel_pair`.
 - One active display output per connector — cross-output uniqueness is enforced.

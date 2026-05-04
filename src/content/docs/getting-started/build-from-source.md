@@ -96,6 +96,8 @@ The most useful Cargo feature flags on the edge:
 | `video-encoder-x265` | off | HEVC software transcoding via libx265 (GPL-2.0-or-later) |
 | `video-encoder-nvenc` | off | NVIDIA NVENC H.264 / HEVC |
 | `video-encoder-qsv` | off | Intel QuickSync H.264 / HEVC (x86_64 only) |
-| `video-encoders-full` | off | Composite of all four — used by the `*-linux-full` release variant |
+| `display-nvdec` | off | NVIDIA NVDEC hardware decode for the local-display output (`h264_cuvid` / `hevc_cuvid`); shares `nv-codec-headers` with `video-encoder-nvenc` |
+| `display-qsv` | off | Intel QSV hardware decode for the local-display output (`h264_qsv` / `hevc_qsv`); shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only |
+| `video-encoders-full` | off | Composite of every video codec backend — encoders (x264 + x265 + NVENC + QSV) **and** display HW decoders (NVDEC + QSV-decode). Used by the `*-linux-full` release variant; runtime probe auto-detects which backends the host can actually open |
 
 Default-off encoder flags are off because they pull in extra system dependencies and (for x264 / x265) flip the binary licence to AGPL-3.0-or-later as a combined work with GPL-2.0-or-later code. The release matrix builds two variants per architecture so users don't have to think about this — pick the tarball that matches your needs and skip the source build.

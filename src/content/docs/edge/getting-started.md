@@ -48,6 +48,23 @@ tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 
 Each tarball expands to a directory containing `bilbycast-edge`, the licence files, a `README.md`, and `config_examples/` with a starter config.
 
+### Verify the Sigstore signature (optional)
+
+Every release ships a Sigstore-signed `manifest.json` alongside the tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit, defending against a compromised GitHub release upload swapping the binary post-publish. Install [cosign](https://github.com/sigstore/cosign), then:
+
+```bash
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/manifest.json"
+curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/manifest.sig.bundle"
+
+cosign verify-blob \
+  --bundle manifest.sig.bundle \
+  --certificate-identity-regexp 'https://github.com/Bilbycast/bilbycast-edge/.github/workflows/nightly-release.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  manifest.json
+```
+
+A successful verify prints `Verified OK`. The verified `manifest.json` then carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same pipeline gates manager-driven [Remote Upgrade](/manager/remote-upgrade/) automatically, so verifying at first install is purely belt-and-suspenders.
+
 ## 3. Install runtime dependencies
 
 The edge has no `ffmpeg` subprocess requirement — AAC, Opus, MP2, AC-3, video decode, JPEG thumbnail, and the local-display output are all in-process. The apt packages below back the local-display output (HDMI / DisplayPort + ALSA confidence monitor playout), the optional video encoders, and PTP for ST 2110.

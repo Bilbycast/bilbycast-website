@@ -69,6 +69,7 @@ export default defineConfig({
 						{ label: 'Topology Visualization', slug: 'manager/topology' },
 						{ label: 'Device Drivers', slug: 'manager/device-drivers' },
 						{ label: 'Config Reconciliation', slug: 'manager/config-reconciliation' },
+						{ label: 'Remote Upgrade', slug: 'manager/remote-upgrade' },
 						{ label: 'Encrypted Backup & Restore', slug: 'manager/backup' },
 						{ label: 'Active/Active HA', slug: 'manager/active-active-ha' },
 						{ label: 'Security', slug: 'manager/security' },

@@ -24,7 +24,34 @@ sidebar:
 5. Click **Create** — a registration token is displayed
 6. Copy the registration token
 
-## Step 2: Configure the Gateway
+## Step 2: Install the Gateway (recommended)
+
+The simplest path is the curl-pipe-bash installer published with every release. It downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching tarball, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/,…}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, and installs + enables the systemd unit:
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/install-appear-x-gateway.sh \
+  | sudo bash -s -- \
+      --manager wss://your-manager-host:8443/ws/node \
+      --registration-token <token-from-step-1> \
+      --appear-x-address 192.168.1.100 \
+      --appear-x-username admin \
+      --appear-x-password '<chassis-password>'
+```
+
+The installer is idempotent — re-running with `--upgrade-installer` refreshes the systemd unit + install script without touching config or staged versions.
+
+After this, the sidecar runs as a systemd service (`bilbycast-appear-x-gateway`). Steady-state ops:
+
+```bash
+sudo systemctl status bilbycast-appear-x-gateway
+sudo journalctl -u bilbycast-appear-x-gateway -f
+```
+
+**Upgrades** flow from the manager UI — see [Remote Upgrade](/manager/remote-upgrade/). The same Sigstore-signed manifest pipeline used at install time gates every subsequent upgrade.
+
+If the curl-pipe-bash flow fits your needs, skip to [Step 4](#step-4-verify-in-manager) — Steps 2 (alternative) and 3 below are only for vendor developers building from source.
+
+## Step 2 (alternative): Configure the Gateway from source
 
 1. Copy `config/example.toml` to your working directory as `config.toml`
 2. Edit the configuration:

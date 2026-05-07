@@ -29,6 +29,23 @@ tar xzf bilbycast-manager.tar.gz
 
 The tarball expands to a directory containing the `bilbycast-manager` binary, the `migrations-pg/` directory (applied automatically on first run), and `config/default.toml`.
 
+### Verify the Sigstore signature (optional)
+
+Every release ships a Sigstore-signed `manifest.json` alongside the tarball. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit. Install [cosign](https://github.com/sigstore/cosign), then:
+
+```bash
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/manifest.json
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/manifest.sig.bundle
+
+cosign verify-blob \
+  --bundle manifest.sig.bundle \
+  --certificate-identity-regexp 'https://github.com/Bilbycast/bilbycast-manager/.github/workflows/nightly-release.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  manifest.json
+```
+
+A successful verify prints `Verified OK`. The manifest then carries the SHA-256 of the tarball — cross-check against your downloaded `.sha256` if you're being thorough. The manager is upgraded manually (no manager-driven upgrade pipeline today), so this is the verifier's main checkpoint.
+
 ## 2. Postgres
 
 Pick one:

@@ -193,7 +193,19 @@ sudo systemctl edit bilbycast-edge
 sudo systemctl restart bilbycast-edge
 ```
 
-**Upgrade to a new release:**
+**Upgrade to a new release (recommended — from the manager UI):**
+
+Once the edge has registered with the manager and shows up in `/admin/nodes`, every subsequent upgrade can be driven from the browser:
+
+1. Go to **Managed Nodes**, click **Upgrade…** on the row.
+2. Pick a `(version, channel)` and click **Stage upgrade**.
+3. The edge fetches the Sigstore-signed manifest, verifies it against its compiled-in allowlist, downloads the tarball, atomically swaps a `current` symlink, and respawns under systemd. A boot watchdog automatically rolls back if the new binary fails to come up healthy.
+
+See [Remote Upgrade](/manager/remote-upgrade/) for the full operator runbook (per-node, group bulk rollout, automatic rollback, troubleshooting).
+
+**Upgrade manually (fallback):**
+
+If you can't reach the manager UI, or you're upgrading the very first edge before the manager-driven path is wired up, you can still upgrade by hand:
 
 ```bash
 sudo systemctl stop bilbycast-edge

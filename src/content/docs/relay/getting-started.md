@@ -30,6 +30,23 @@ curl -fsSL -o bilbycast-relay.sha256 \
 sha256sum -c bilbycast-relay.sha256
 ```
 
+### Verify the Sigstore signature (optional)
+
+Every release ships a Sigstore-signed `manifest.json` alongside the bare binaries and matching tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit. Install [cosign](https://github.com/sigstore/cosign), then:
+
+```bash
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/manifest.json
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/manifest.sig.bundle
+
+cosign verify-blob \
+  --bundle manifest.sig.bundle \
+  --certificate-identity-regexp 'https://github.com/Bilbycast/bilbycast-relay/.github/workflows/nightly-release.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  manifest.json
+```
+
+A successful verify prints `Verified OK`. The verified manifest carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The relay is upgraded manually (no manager-driven upgrade pipeline today), so this is the verifier's main checkpoint.
+
 ## 2. Standalone (zero config)
 
 The simplest deployment — useful for testing or when you don't need the relay reporting back to the manager:

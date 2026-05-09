@@ -87,11 +87,10 @@ RestartSec=2s
 # File-descriptor headroom for SRT / RIST / RTP listeners
 LimitNOFILE=65536
 
-# Reserved for a future wire-pacing thread (engine::wire_emit, in
-# tree but not currently wired in). Harmless today — no SCHED_FIFO
-# threads are created on the current code path, so these lines are
-# no-ops. Keeping them in the unit avoids needing a daemon-reload
-# when wire_emit re-lands.
+# Required by engine::wire_emit, which spawns one SCHED_FIFO std::thread
+# per UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The kernel
+# allows unprivileged SCHED_FIFO whenever LimitRTPRIO is non-zero and
+# RestrictRealtime is off, so no capability grant is required.
 RestrictRealtime=false
 LimitRTPRIO=50
 
@@ -116,12 +115,31 @@ WantedBy=multi-user.target
 
 The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optional but recommended. The edge only needs read-write access to `/var/lib/bilbycast/` and reads `/etc/bilbycast/`; everything else stays read-only.
 
-No SCHED_FIFO threads run on the current code path — wire pacing for
-compressed TS (`engine::wire_emit`) is in tree but not currently
-wired in (a 2026-05-09 integration attempt was reverted; see
-`bilbycast-edge/docs/wire-pacing.md`). PCR-arrival jitter at the
-receiver is in the 5–50 ms band today, which most receivers (VLC,
-Appear, Cisco TV, EVS) tolerate.
+**Wire pacing runs automatically on every UDP-socket-owning output**
+(UDP, RTP including FEC and 2022-7 dual-leg, 302M, ST 2110-20/-23/-30/-31/-40).
+SRT, RIST, RTMP, HLS, CMAF, and WebRTC are paced internally by their
+own protocol layers and need no extra setup.
+
+The edge picks the highest pacing tier the host can deliver at output
+startup and logs the choice (`wire-emit '<id>': starting (anchor=…, tier=…)`).
+The active tier is also surfaced in `OutputStats.wire_pacing_tier` for
+the manager UI.
+
+| Tier | Mechanism | Inter-packet jitter envelope | Requires |
+|---|---|---|---|
+| 1 | `SO_TXTIME` + ETF qdisc with `offload` on a PTP-disciplined NIC | Sub-µs | ETF qdisc (operator-side) + PTP-capable NIC + `ptp4l + phc2sys` |
+| 2 | `SO_TXTIME` + software ETF qdisc | ~1–10 µs | ETF qdisc (operator-side) |
+| 3 | `SO_TXTIME` accepted, no ETF qdisc | Same as no pacing — kernel ignores `SCM_TXTIME` | Linux ≥ 4.19 |
+| 4 | `clock_nanosleep` on SCHED_FIFO | ~50–500 µs | systemd unit's `LimitRTPRIO=50` (already set above) |
+| 5 | `clock_nanosleep` on SCHED_OTHER | ~1–5 ms | None |
+
+For tier-1 broadcast PCR_AC compliance (T-STD ≤ 500 ns), install the
+ETF qdisc on the egress NIC. **The edge does not install the qdisc
+itself** — `tc qdisc` requires `CAP_NET_ADMIN`, deliberately operator-side.
+See [ETF qdisc setup](#etf-qdisc-setup-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) below
+— the same `setup-etf-qdisc.sh` step gives every output (TS as well as
+ST 2110) tier-1 PCR_AC. Without ETF qdisc, the edge runs at tier 3 / 4
+which is fine for most production traffic but won't meet T-STD spec.
 
 ## 5b. Hardware-encoder runtime (only if you'll use NVENC or QSV)
 
@@ -245,11 +263,17 @@ The config + secrets in `/etc/bilbycast/` carry across upgrades untouched.
 
 The `bilbycast-manager init` flow (see [Install the manager](/manager/getting-started/#3-install--guided-recommended)) already drops a working systemd unit at `/etc/bilbycast-manager/bilbycast-manager.service` — there's no separate "manager Ubuntu service" guide because the installer is the guide. Inspect the generated unit, then `install` and `enable --now` it the same way you would the edge unit above.
 
-## ST 2110-21 narrow profile pacing (uncompressed video, opt-in)
+## ETF qdisc setup for tier-1 PCR accuracy and ST 2110-21 narrow profile
 
-Skip this section unless you're sending **uncompressed ST 2110-20 / -23** to a narrow-profile receiver (Imagine, Lawo, EVS Xeebra, Grass Valley LDX, Bridge Tech VB330 in test mode). Compressed paths (SRT, RIST, RTP, UDP) are paced automatically by the SCHED_FIFO `wire-emit` thread you set up in step 5 — no extra work.
+Install ETF qdisc on the egress NIC if you need any of:
 
-ST 2110-20 / -23 narrow-profile compliance at production rates (1080p50 ≈ 250 k pps; 4K60 ≈ 1 M pps) requires per-packet timing within microseconds of the frame raster. Userspace pacing can't hit that budget. The Linux solution is `SO_TXTIME` + the ETF qdisc, with HW offload on PTP-disciplined NICs.
+- ST 2110-20 / -23 narrow profile (Imagine, Lawo, EVS Xeebra, Grass Valley LDX, Bridge Tech VB330 in test mode).
+- T-STD-compliant PCR_AC (≤ 500 ns) on compressed TS over UDP / RTP — required by some professional decoders (Appear, Tektronix, Cisco professional gear).
+- Any output rate above ~10 Mbps where userspace `clock_nanosleep` precision (~50–500 µs at SCHED_FIFO) starts to dominate inter-packet timing.
+
+If you're driving consumer / soft decoders (VLC, ffplay, OBS, web players, the Appear / Cisco TV / EVS receivers in standard tolerance mode), the userspace `clock_nanosleep` fallback (tier 4) is usually sufficient and you can skip this section. The edge will fall back automatically and log the active tier.
+
+ST 2110 specifically: at 1080p50 (≈ 250 k pps) and 4K60 (≈ 1 M pps), per-packet timing must be within microseconds of the frame raster. Userspace pacing can't hit that budget. The Linux solution is `SO_TXTIME` + the ETF qdisc, with HW offload on PTP-disciplined NICs.
 
 This is a three-step setup, all operator-side.
 
@@ -283,40 +307,31 @@ systemctl status ptp4l phc2sys
 
 Both should be **active (running)**. The edge keeps emitting valid bytes without PTP, just not narrow-profile-aligned.
 
-### Step 3: confirm the host advertises the capability
+### Step 3: confirm the active tier on the edge
 
 ```bash
-curl -k https://<edge>:8080/health | jq .capabilities
+sudo journalctl -u bilbycast-edge --since "5 minutes ago" | grep wire-emit
 ```
 
-The list should include `"wire_pacing_txtime"`. The edge probes `setsockopt(SO_TXTIME)` once at startup; Linux ≥ 4.19 normally accepts. If absent, you're either on a too-old kernel, in a container without the right syscall permission, or on a non-Linux host. The manager UI hides the per-output `wire_pacing` knob automatically when this capability isn't advertised.
+You should see a line like `wire-emit '<output-id>': starting (anchor=Pcr, tier=so_txtime)` for every output that owns a UDP socket. With ETF qdisc + PTP from steps 1-2, the host is running tier 1 or 2 (sub-µs to ~10 µs jitter). Without ETF, the same line shows `tier=so_txtime` but actual pacing is no-op (tier 3) — the kernel silently ignores `SCM_TXTIME` without ETF.
 
-### Step 4: opt in per ST 2110-20 / -23 output
+You can also check via the manager UI's per-output card or directly:
 
-Add `wire_pacing` to the output config — either via the manager UI (the dropdown appears only when the capability above is present) or directly in JSON:
-
-```json
-{
-  "type": "st2110_20",
-  "id": "video-out-1",
-  "wire_pacing": {
-    "mode": "tx_time",
-    "profile": "narrow"
-  },
-  ...
-}
+```bash
+curl -k https://<edge>:8080/api/v1/stats | jq '.data.flows[].outputs[] | {id: .output_id, tier: .wire_pacing_tier, late: .wire_pacing_late}'
 ```
 
-`profile` is one of `narrow` (default), `narrow_linear`, `wide`. Today's pacer treats all three as `narrow_linear` (even pacing across the active video period); classic gapped narrow is a follow-up if a specific receiver complains.
+`wire_pacing_late` should stay at 0 — non-zero means the kernel rejected datagrams as "target tx time in the past", typically because of a transient host-clock or scheduling stall.
 
 ### What if any step is skipped?
 
+ST 2110-20 / -23 outputs always run the paced sender — no per-output opt-in needed. The wire pacing is applied automatically across UDP, RTP, FEC, 2022-7 dual-leg, ST 2110 — every UDP-socket-owning output.
+
 | Skipped | Behaviour |
 |---|---|
-| Step 1 (no ETF qdisc) | `setsockopt(SO_TXTIME)` succeeds but the kernel's `pfifo_fast` queue ignores `SCM_TXTIME` — no actual pacing. Same observable behaviour as today's unpaced ST 2110 path; no regression, no narrow-profile compliance. |
-| Step 2 (no PTP) | Pacer's TAI anchor is not GM-aligned. Output emits cleanly but VRX bound at the receiver may fail. |
-| Step 3 (capability not advertised) | Edge can't accept the `wire_pacing` config — it logs a `wire_pacing_unavailable`-style WARN and the output falls back to plain `send_to`. |
-| Step 4 (output not opted in) | ST 2110-20 / -23 sends as fast as the NIC accepts — the today-pre-wire-pacing default. Fine for dev / wide-profile receivers; fails narrow. |
+| Step 1 (no ETF qdisc) | `setsockopt(SO_TXTIME)` succeeds but the kernel's default qdisc ignores `SCM_TXTIME` — no actual pacing. The edge falls into tier 3 (compressed TS — same as no pacing, no regression) or tier 4 / 5 if SO_TXTIME isn't available at all. ST 2110 narrow-profile compliance fails at this tier. |
+| Step 2 (no PTP) | Pacer's TAI anchor is not GM-aligned. Compressed TS pacing still works (anchors on `CLOCK_MONOTONIC`); ST 2110-21 narrow profile fails the receiver-side VRX bound. |
+| Both steps skipped | Edge runs at tier 4 (`clock_nanosleep` on SCHED_FIFO) for compressed TS — adequate for ≤ 6 Mbps TS, degraded above that. ST 2110 saturates a CPU and won't meet narrow profile. |
 
 For the architecture, full failure-mode matrix, and per-NIC notes, see [ST 2110](/edge/st2110/#st-2110-21-narrow-profile-pacing-uncompressed-video).
 

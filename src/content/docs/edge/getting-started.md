@@ -197,7 +197,7 @@ If the node doesn't show up, check the manager log for an `auth_failed` event un
 
 The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes — see [Install edge as an Ubuntu service](/edge/install-ubuntu-service/).
 
-If you're sending **uncompressed ST 2110-20 / -23** to a narrow-profile receiver (Imagine, Lawo, EVS, Grass Valley), there's an additional opt-in step — see [Install edge as an Ubuntu service → ST 2110-21 narrow profile pacing](/edge/install-ubuntu-service/#st-2110-21-narrow-profile-pacing-uncompressed-video-opt-in). Compressed paths (SRT, RIST, RTP, UDP) ship today without extra setup; PCR-arrival jitter is in the 5–50 ms band that most receivers tolerate.
+Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). For tier-1 broadcast PCR accuracy (T-STD ≤ 500 ns) and ST 2110-21 narrow-profile compliance, install the ETF qdisc on the egress NIC — see [Install edge as an Ubuntu service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile). Without ETF qdisc, the edge falls back to a userspace `clock_nanosleep` pacer (~50–500 µs jitter at SCHED_FIFO, ~1–5 ms at SCHED_OTHER) — fine for soft decoders (VLC, ffplay, OBS), insufficient for some professional gear.
 
 ## Where to read next
 

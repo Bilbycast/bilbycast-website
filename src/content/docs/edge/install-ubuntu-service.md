@@ -87,6 +87,14 @@ RestartSec=2s
 # File-descriptor headroom for SRT / RIST / RTP listeners
 LimitNOFILE=65536
 
+# Reserved for a future wire-pacing thread (engine::wire_emit, in
+# tree but not currently wired in). Harmless today — no SCHED_FIFO
+# threads are created on the current code path, so these lines are
+# no-ops. Keeping them in the unit avoids needing a daemon-reload
+# when wire_emit re-lands.
+RestrictRealtime=false
+LimitRTPRIO=50
+
 # Logging + storage roots
 Environment=RUST_LOG=info
 Environment=BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/replay
@@ -107,6 +115,13 @@ WantedBy=multi-user.target
 ```
 
 The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optional but recommended. The edge only needs read-write access to `/var/lib/bilbycast/` and reads `/etc/bilbycast/`; everything else stays read-only.
+
+No SCHED_FIFO threads run on the current code path — wire pacing for
+compressed TS (`engine::wire_emit`) is in tree but not currently
+wired in (a 2026-05-09 integration attempt was reverted; see
+`bilbycast-edge/docs/wire-pacing.md`). PCR-arrival jitter at the
+receiver is in the 5–50 ms band today, which most receivers (VLC,
+Appear, Cisco TV, EVS) tolerate.
 
 ## 5b. Hardware-encoder runtime (only if you'll use NVENC or QSV)
 
@@ -230,9 +245,85 @@ The config + secrets in `/etc/bilbycast/` carry across upgrades untouched.
 
 The `bilbycast-manager init` flow (see [Install the manager](/manager/getting-started/#3-install--guided-recommended)) already drops a working systemd unit at `/etc/bilbycast-manager/bilbycast-manager.service` — there's no separate "manager Ubuntu service" guide because the installer is the guide. Inspect the generated unit, then `install` and `enable --now` it the same way you would the edge unit above.
 
+## ST 2110-21 narrow profile pacing (uncompressed video, opt-in)
+
+Skip this section unless you're sending **uncompressed ST 2110-20 / -23** to a narrow-profile receiver (Imagine, Lawo, EVS Xeebra, Grass Valley LDX, Bridge Tech VB330 in test mode). Compressed paths (SRT, RIST, RTP, UDP) are paced automatically by the SCHED_FIFO `wire-emit` thread you set up in step 5 — no extra work.
+
+ST 2110-20 / -23 narrow-profile compliance at production rates (1080p50 ≈ 250 k pps; 4K60 ≈ 1 M pps) requires per-packet timing within microseconds of the frame raster. Userspace pacing can't hit that budget. The Linux solution is `SO_TXTIME` + the ETF qdisc, with HW offload on PTP-disciplined NICs.
+
+This is a three-step setup, all operator-side.
+
+### Step 1: install the ETF qdisc on the egress NIC
+
+```bash
+sudo bash /opt/bilbycast-edge/packaging/setup-etf-qdisc.sh enp1s0
+```
+
+Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 offload` on the prioritized class. `offload` enables hardware tx pacing on supported NICs (Mellanox CX-6 / CX-7, Intel E810, Intel i210); silently degrades to software ETF on unsupported NICs (still 1–10 µs jitter).
+
+Verify:
+
+```bash
+tc -s qdisc show dev enp1s0
+```
+
+should list `mqprio` at root and `etf` on the prioritized class — not the default `pfifo_fast`.
+
+The `tc qdisc` install does not persist across reboots. Wrap the same `tc` calls in your own systemd unit, NetworkManager dispatch hook, or `ifupdown` post-up snippet — operator policy.
+
+Removal: `sudo tc qdisc del dev enp1s0 root`.
+
+### Step 2: confirm PTP discipline on the system clock
+
+`SO_TXTIME` schedules transmission against `CLOCK_TAI`. Without `ptp4l` + `phc2sys` running, the kernel's TAI clock is just wall time + leap-second offset — sender and receiver drift relative to each other and the receiver's VRX bound fails. See [PTP integration](/edge/ptp/) for the full setup.
+
+```bash
+systemctl status ptp4l phc2sys
+```
+
+Both should be **active (running)**. The edge keeps emitting valid bytes without PTP, just not narrow-profile-aligned.
+
+### Step 3: confirm the host advertises the capability
+
+```bash
+curl -k https://<edge>:8080/health | jq .capabilities
+```
+
+The list should include `"wire_pacing_txtime"`. The edge probes `setsockopt(SO_TXTIME)` once at startup; Linux ≥ 4.19 normally accepts. If absent, you're either on a too-old kernel, in a container without the right syscall permission, or on a non-Linux host. The manager UI hides the per-output `wire_pacing` knob automatically when this capability isn't advertised.
+
+### Step 4: opt in per ST 2110-20 / -23 output
+
+Add `wire_pacing` to the output config — either via the manager UI (the dropdown appears only when the capability above is present) or directly in JSON:
+
+```json
+{
+  "type": "st2110_20",
+  "id": "video-out-1",
+  "wire_pacing": {
+    "mode": "tx_time",
+    "profile": "narrow"
+  },
+  ...
+}
+```
+
+`profile` is one of `narrow` (default), `narrow_linear`, `wide`. Today's pacer treats all three as `narrow_linear` (even pacing across the active video period); classic gapped narrow is a follow-up if a specific receiver complains.
+
+### What if any step is skipped?
+
+| Skipped | Behaviour |
+|---|---|
+| Step 1 (no ETF qdisc) | `setsockopt(SO_TXTIME)` succeeds but the kernel's `pfifo_fast` queue ignores `SCM_TXTIME` — no actual pacing. Same observable behaviour as today's unpaced ST 2110 path; no regression, no narrow-profile compliance. |
+| Step 2 (no PTP) | Pacer's TAI anchor is not GM-aligned. Output emits cleanly but VRX bound at the receiver may fail. |
+| Step 3 (capability not advertised) | Edge can't accept the `wire_pacing` config — it logs a `wire_pacing_unavailable`-style WARN and the output falls back to plain `send_to`. |
+| Step 4 (output not opted in) | ST 2110-20 / -23 sends as fast as the NIC accepts — the today-pre-wire-pacing default. Fine for dev / wide-profile receivers; fails narrow. |
+
+For the architecture, full failure-mode matrix, and per-NIC notes, see [ST 2110](/edge/st2110/#st-2110-21-narrow-profile-pacing-uncompressed-video).
+
 ## Where to read next
 
 - [Configuration reference](/edge/configuration/) — every input, output, and flow field.
+- [ST 2110](/edge/st2110/) — uncompressed video / audio / ANC essence flows + narrow-profile pacing.
 - [Display output](/edge/display/) — drive an HDMI / DisplayPort connector for confidence-monitor playout.
 - [Replay](/edge/replay/) — continuous flow recording and clip playback.
 - [Edge events and alarms](/edge/events-and-alarms/) — what shows up in `journalctl` and the manager events feed.

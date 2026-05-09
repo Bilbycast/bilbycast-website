@@ -45,7 +45,7 @@ cosign verify-blob \
   manifest.json
 ```
 
-A successful verify prints `Verified OK`. The verified manifest carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The relay is upgraded manually (no manager-driven upgrade pipeline today), so this is the verifier's main checkpoint.
+A successful verify prints `Verified OK`. The verified manifest carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same Sigstore-signed manifest drives the [upgrade flow](#upgrading) below, so this is the verifier's main checkpoint.
 
 ## 2. Standalone (zero config)
 
@@ -126,6 +126,30 @@ sudo systemctl enable --now bilbycast-relay
 ```
 
 Verify with `systemctl status bilbycast-relay` and `journalctl -u bilbycast-relay -f`.
+
+## Upgrading
+
+The relay ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching arch-specific tarball (x86_64 / aarch64), verifies SHA-256 against the signed manifest, atomically swaps the binary with a `.previous` backup, restarts the systemd unit, polls `/health`, and **auto-rolls back** to the previous binary on a failed health probe.
+
+The simplest path is curl-pipe-bash from the latest release:
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/upgrade-relay.sh \
+    | sudo bash
+```
+
+Operators who'd rather review the script first can grab it once and re-run it as needed (it's the same script that ships in the source repo at `packaging/upgrade-relay.sh`):
+
+```bash
+curl -fsSL -o upgrade-relay.sh \
+    https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/upgrade-relay.sh
+chmod +x upgrade-relay.sh
+sudo ./upgrade-relay.sh                        # apply latest stable
+sudo ./upgrade-relay.sh --dry-run              # download + verify only; print plan
+sudo ./upgrade-relay.sh --target-version 0.10.2
+```
+
+The relay is stateless — a restart drops connected edges, which all reconnect automatically. For zero-disruption upgrades, run multiple relay instances behind a load balancer and roll through them one at a time. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 
 ## Where to read next
 

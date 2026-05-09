@@ -44,7 +44,7 @@ cosign verify-blob \
   manifest.json
 ```
 
-A successful verify prints `Verified OK`. The manifest then carries the SHA-256 of the tarball — cross-check against your downloaded `.sha256` if you're being thorough. The manager is upgraded manually (no manager-driven upgrade pipeline today), so this is the verifier's main checkpoint.
+A successful verify prints `Verified OK`. The manifest then carries the SHA-256 of the tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same Sigstore-signed manifest drives the [upgrade flow](#upgrading) below, so this is the verifier's main checkpoint.
 
 ## 2. Postgres
 
@@ -117,6 +117,33 @@ Full detail: [TLS deployment](/manager/tls-deployment/).
 ## Manual install (advanced)
 
 If you don't want the `init` flow, set the same secrets and run `setup` + `serve` by hand. The detailed steps and every environment variable are in the in-repo guide at `bilbycast-manager/installer/README.md`.
+
+## Upgrading
+
+The manager ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching tarball, verifies SHA-256 against the signed manifest, atomically swaps the binary with a `.previous` backup, restarts the systemd unit, polls `/health`, and **auto-rolls back** to the previous binary on a failed health probe.
+
+The simplest path is curl-pipe-bash from the latest release:
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/upgrade-manager.sh \
+    | sudo bash
+```
+
+Operators who'd rather review the script first can grab it once and re-run it as needed (it's the same script that ships in the source repo at `packaging/upgrade-manager.sh`):
+
+```bash
+curl -fsSL -o upgrade-manager.sh \
+    https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/upgrade-manager.sh
+chmod +x upgrade-manager.sh
+sudo ./upgrade-manager.sh                        # apply latest stable
+sudo ./upgrade-manager.sh --dry-run              # download + verify only; print plan
+sudo ./upgrade-manager.sh --target-version 0.45.4
+sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via the
+                                                 # `bilbycast-manager upgrade --drain-secs`
+                                                 # CLI before the binary swap
+```
+
+Migrations apply automatically on every `serve` boot, so a successful binary swap + restart is a complete upgrade — no separate migration step. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 
 ## Where to read next
 

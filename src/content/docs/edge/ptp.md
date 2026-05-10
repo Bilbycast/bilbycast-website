@@ -52,6 +52,21 @@ The state is sampled on a low-frequency timer (default ~1 s) and cached. Reading
 
 ## Wiring it up
 
+### One-shot: `provision-edge-node.sh`
+
+For broadcast deployments (ST 2110, tier-1 PCR_AC), the shipped wrapper installs `linuxptp` and writes reboot-persistent systemd units for `ptp4l` + `phc2sys` on a chosen NIC, plus the ETF qdisc the wire pacer needs:
+
+```bash
+sudo MEDIA_IFACE=enp1s0 \
+     bash /opt/bilbycast/edge/current/packaging/provision-edge-node.sh
+```
+
+Pass `PTP_ONLY=1` to skip the ETF qdisc and static-ARP pieces — useful when the same NIC also carries SSH / management traffic.
+
+This is **optional**. The edge runs fine without PTP for compressed-TS workloads (tier 4, ~50–500 µs jitter, fine for VLC / ffplay / most cloud receivers). The script is for ST 2110 essence flows, broadcast-grade hardware decoders, and multi-edge 2022-7 hitless across legs.
+
+The manual walkthrough below is the equivalent if you'd rather lay each piece down by hand.
+
 ### 1. Install `linuxptp`
 
 ```bash

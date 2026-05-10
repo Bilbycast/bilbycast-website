@@ -19,27 +19,51 @@ PCR_AC isn't a magic broadcast-only metric. **VLC's STC clock recovery breaks do
 
 ## How the wire emitter works
 
-For every TS-carrying output the edge spawns one std::thread (decoupled from the Tokio runtime so timing doesn't depend on the timer wheel). The thread reads each datagram from a 1024-deep sync_channel, computes a target wallclock instant in ns, and releases the packet via one of two paths:
+For every TS-carrying output the edge spawns one `std::thread` (decoupled from the Tokio runtime so timing doesn't depend on the timer wheel). The thread reads each datagram from a 1024-deep `sync_channel`, computes a target wallclock instant in ns, and releases the packet via one of two paths:
 
-- **`SO_TXTIME`** *(preferred)* — set per-packet target via `SCM_TXTIME` cmsg. Kernel `etf` qdisc + (on supported NICs) hardware tx scheduling honours the timestamp without further userspace wakeups. Sub-µs jitter with HW offload, ~1–10 µs with software etf, indistinguishable from no pacing if the qdisc isn't installed.
-- **`clock_nanosleep` fallback** — userspace SCHED_FIFO thread sleeps to the target via `clock_nanosleep(CLOCK_TAI, TIMER_ABSTIME)`, then issues a blocking `send_to`. ~50–500 µs at SCHED_FIFO under typical desktop load, ~1–5 ms at SCHED_OTHER.
+- **`SO_TXTIME`** *(preferred)* — set per-packet target via `SCM_TXTIME` cmsg. Kernel `etf` qdisc + (on supported NICs) hardware tx scheduling honours the timestamp without further userspace wakeups.
+- **`clock_nanosleep` fallback** — userspace thread sleeps to the target via `clock_nanosleep(CLOCK_TAI, TIMER_ABSTIME)`, then issues a blocking `send_to`.
 
 The path is picked at spawn time by a one-shot probe — if `SO_TXTIME` setsockopt succeeds, the SO_TXTIME path activates; otherwise the thread falls back to `clock_nanosleep`. The active tier shows on every output's stats as `wire_pacing_tier`.
 
-**All targets are computed in CLOCK_TAI** (Linux kernel `CLOCK_TAI` clockid). When `ptp4l` + `phc2sys` are running, CLOCK_TAI is PTP-disciplined system-wide and SO_TXTIME on `etf` aligns to the NIC's PTP PHY clock. Without those, CLOCK_TAI is just `system clock + leap seconds` — same precision floor as CLOCK_MONOTONIC, but the value the kernel `etf` qdisc accepts.
+**All targets are computed in CLOCK_TAI** (Linux kernel `CLOCK_TAI` clockid). When `ptp4l` + `phc2sys` are running, CLOCK_TAI is PTP-disciplined system-wide and SO_TXTIME on `etf` aligns to the NIC's PTP PHY clock. Without those, CLOCK_TAI is just `system clock + leap seconds` — same precision floor as `CLOCK_MONOTONIC`, but the value the kernel `etf` qdisc accepts.
 
-## The PCR_AC ladder
+## The five capability tiers
 
-| Setup | Tier | Typical p50 PCR_AC | Notes |
+The release path the edge actually uses depends on what the host can deliver. The five tiers are ordered from best to worst; the edge picks the highest one available at output startup, logs it (`wire-emit '<id>': starting (anchor=…, tier=…)`), and surfaces it on `OutputStats.wire_pacing_tier`.
+
+| Tier | Active path | Typical inter-packet jitter | Requires |
 |---|---|---|---|
-| Default install, no qdisc, no `ptp4l` | `clock_nanosleep` | **~70 µs** | SO_TXTIME probe fails (no etf). Userspace sleep on SCHED_FIFO. Acceptable for VLC / non-broadcast receivers. |
-| `etf` qdisc installed, no `ptp4l` | `so_txtime` | **~50 µs** | Kernel-paced. Outliers tightened. CLOCK_TAI is undisciplined system clock + leaps. |
-| `etf` qdisc + `ptp4l` syncing to a local master | `so_txtime` | **~5 µs** | NIC PTP clock disciplines CLOCK_TAI. Multi-edge coherent on the same link. |
-| `etf` qdisc + `ptp4l` to facility GM + `phc2sys` + HW-PTP NIC | `so_txtime` | **<500 ns** | **Broadcast spec.** The only path that meets T-STD PCR_AC across multiple edges. |
+| **1** | `SO_TXTIME` + ETF qdisc with `offload` on a PTP-disciplined NIC | **Sub-µs** | Linux ≥ 4.19, ETF qdisc on `clockid CLOCK_TAI`, NIC with PTP HW tx timestamping (Mellanox CX-6/7, Intel E810/I225/I226), `ptp4l` + `phc2sys` running |
+| **2** | `SO_TXTIME` + software ETF qdisc | **~1–10 µs** | Linux ≥ 4.19, ETF qdisc on `clockid CLOCK_TAI`. No NIC offload (or `offload` requested but rejected). |
+| **3** | `SO_TXTIME` accepted, ETF qdisc absent | **No-op (same as no pacing)** | Linux ≥ 4.19. Probe succeeds at the setsockopt level, but every datagram sends ASAP because the kernel silently ignores `SCM_TXTIME` without ETF. **Diagnose with `BILBYCAST_FORCE_NANOSLEEP=1` to compare against tier 4.** |
+| **4** | `clock_nanosleep(CLOCK_TAI, TIMER_ABSTIME)` on a SCHED_FIFO thread | **~50–500 µs typical, ms-tail under load** | Linux + SCHED_FIFO grant. The shipped systemd unit ships `LimitRTPRIO=50` so this works out of the box on every Linux install. **This is what every default `install-edge.sh` install gets.** |
+| **5** | `clock_nanosleep` at SCHED_OTHER, or `std::thread::sleep` on non-Linux | **~1–5 ms** | None. Last-resort fallback — only seen on macOS, BSD, or Linux installs that explicitly stripped `LimitRTPRIO`. |
+
+**Tier 3 is the silent-failure trap.** When the edge logs `tier=so_txtime` but PCR_AC is still bad, the kernel accepted SO_TXTIME but no ETF qdisc is installed on the egress NIC — every datagram emits ASAP regardless of the `SCM_TXTIME` cmsg. Set `BILBYCAST_FORCE_NANOSLEEP=1` to drop into tier 4 and confirm: if PCR_AC improves, you were stuck at tier 3.
+
+### What tier do I actually need?
+
+| Use case | Minimum tier | Realistic setup |
+|---|---|---|
+| VLC / ffplay / OBS / web players / cloud receivers | Tier 4 | Default install (no extra setup). |
+| Most professional decoders in standard tolerance mode | Tier 4 | Default install. |
+| 2022-7 dual-leg hitless **on the same edge** | Tier 4 | Default install (legs share `MasterClock::now_27mhz()` in-process). |
+| 2022-7 dual-leg hitless **across two edges** | Tier 1 | Both edges PTP-synced to the same grandmaster. |
+| Broadcast-spec PCR_AC (T-STD ≤ 500 ns) | Tier 1 | ETF qdisc + `ptp4l` + `phc2sys` + HW-PTP NIC. |
+| ST 2110-21 narrow-profile uncompressed video | Tier 1 | Same as above; receiver VRX bound is the binding constraint. |
 
 p99 outliers track a similar pattern but worse — typically 50× the p50 figure for software paths and ~5× for the HW-PTP path. The p99 is what kills receivers before the p50 does.
 
 ## Three-step production setup
+
+The shipped `packaging/provision-edge-node.sh` automates all three steps in one command — installs `linuxptp`, writes systemd units for `ptp4l@${MEDIA_IFACE}.service` + `phc2sys@${MEDIA_IFACE}.service`, lays down the ETF qdisc via a `bilbycast-etf@${MEDIA_IFACE}.service` boot unit, and enables everything. Idempotent and reboot-persistent. Run it once on a fresh box:
+
+```bash
+sudo MEDIA_IFACE=enp1s0 bash /opt/bilbycast/edge/current/packaging/provision-edge-node.sh
+```
+
+The manual three-step walkthrough below is the equivalent if you want to lay it down piece by piece, audit each step against your own setup, or you're integrating into an existing config-management system.
 
 ### 1. Pick a NIC with hardware TX timestamping
 
@@ -95,10 +119,12 @@ sudo ptp4l -i <iface> -m -2 -H -s
 sudo ptp4l -i <iface> -m -2 -H
 
 # Discipline CLOCK_TAI from the NIC's PTP hardware clock:
-sudo phc2sys -s <iface> -O 0 -m
+sudo phc2sys -s <iface> -w -m
 ```
 
-`-2` selects the L2 transport (IEEE 802.1AS / 802.3 Ethernet PTP, the SMPTE 2110-10 profile uses this). `-H` enables hardware timestamping. `-O 0` tells `phc2sys` to apply zero offset — appropriate when the NIC's PTP clock is the reference.
+`-2` selects the L2 transport (IEEE 802.1AS / 802.3 Ethernet PTP, the SMPTE 2110-10 profile uses this). `-H` enables hardware timestamping.
+
+`-w` makes `phc2sys` wait for `ptp4l` to be in sync, then auto-apply the TAI-UTC offset advertised in PTP announce TLVs. **Don't pass `-O 0`** — it overrides the auto-detected offset and either skews `CLOCK_REALTIME` by 37 s (UTC vs TAI) or leaves `CLOCK_TAI` 37 s ahead of the grandmaster, depending on phc2sys version. Either way, multi-edge coherence breaks. The `-w` form is the modern recipe.
 
 The standard linuxptp configs ship with the package. Once `ptp4l` is steady-state synced, CLOCK_TAI on the box is PTP-disciplined and every wire-emit thread emits against PTP time — across multiple edges on the same GM, all of them agree to within sub-µs.
 

@@ -275,7 +275,24 @@ If you're driving consumer / soft decoders (VLC, ffplay, OBS, web players, the A
 
 ST 2110 specifically: at 1080p50 (≈ 250 k pps) and 4K60 (≈ 1 M pps), per-packet timing must be within microseconds of the frame raster. Userspace pacing can't hit that budget. The Linux solution is `SO_TXTIME` + the ETF qdisc, with HW offload on PTP-disciplined NICs.
 
-This is a three-step setup, all operator-side.
+### One-shot: `provision-edge-node.sh`
+
+The shipped wrapper does all three steps below in one idempotent, reboot-persistent run — installs `linuxptp`, writes systemd units for `ptp4l@${MEDIA_IFACE}.service` + `phc2sys@${MEDIA_IFACE}.service`, lays down ETF qdisc via a `bilbycast-etf@${MEDIA_IFACE}.service` boot unit, and (optionally) static ARP for known peers:
+
+```bash
+sudo MEDIA_IFACE=enp1s0 \
+     bash /opt/bilbycast/edge/current/packaging/provision-edge-node.sh
+```
+
+Optional flags:
+- `PTP_ONLY=1` — install only `ptp4l` + `phc2sys`, no ETF, no ARP. Safe to run on a NIC that also carries SSH / management.
+- `PEERS="10.0.0.5=00:0e:c6:4a:53:06 10.0.0.10=00:11:22:33:44:55"` — pin known peers to static ARP entries, eliminating ARP refresh stalls on low-latency unicast.
+
+The script is idempotent — re-running it updates the systemd units in place. It runs once per host; everything it writes is a systemd unit with `enable --now`, so the config survives reboots without further action. If the NIC name changes (for instance, because of a kernel/driver upgrade renaming `eno4` → `enp1s0`), re-run with the new `MEDIA_IFACE`.
+
+This script is **only** needed for tier-1 / tier-2 PCR_AC or ST 2110 essence flows. A default `install-edge.sh` install runs at tier 4 with no provisioning required.
+
+If you'd rather lay each piece down by hand, the manual three-step walkthrough below is the equivalent.
 
 ### Step 1: install the ETF qdisc on the egress NIC
 

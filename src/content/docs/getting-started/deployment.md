@@ -82,13 +82,20 @@ In the manager UI:
 - The node detail page surfaces the **capabilities** the edge advertised (`replay`, `display`, `st2110-30`, …) and a **Resources** card with the per-host hardware probe.
 - For a quick smoke test, see [Your first flow](/getting-started/first-flow/) — a localhost UDP loopback finishes in under five minutes.
 
-## Optional — PTP for ST 2110 essence flows
+## Optional — broadcast-grade wire-time precision (PTP + `etf` qdisc)
 
-If you're running SMPTE ST 2110-30 / -31 / -40 essence flows that need PTP timing, install `linuxptp` on each edge host:
+Two separate cases need this:
+
+1. **SMPTE ST 2110 essence flows** that interoperate with other ST 2110 equipment require a shared PTP grandmaster.
+2. **Broadcast-spec PCR_AC on TS outputs** (UDP / RTP / SRT / RIST / RTMP / 302M). Without PTP + the `etf` qdisc, the wire pacer's PCR accuracy lands at ~70 µs p50 with multi-millisecond p99 outliers — fine for VLC and casual receivers, **not** fine for broadcast-grade hardware decoders or multi-edge 2022-7 hitless. With PTP + `etf` + a hardware-PTP NIC, PCR_AC drops below 500 ns (T-STD spec).
+
+The full setup — three steps (NIC selection, `etf` qdisc install, `ptp4l` config), the verification ladder, and the operator escape hatch — is in [Wire-Time Precision](/edge/wire-pacing/). For the deeper PTP integration story (lock states, NMOS clock advertising, what `ptp4l` management messages bilbycast polls), see [PTP integration](/edge/ptp/).
+
+Quick install of `linuxptp` if you're going down that path:
 
 ```bash
 sudo apt update && sudo apt install linuxptp   # Debian / Ubuntu
 sudo dnf install linuxptp                      # RHEL / Fedora
 ```
 
-The edge polls `ptp4l`'s management socket — it doesn't run a PTP slave in-process. A worked example, including a sample `ptp4l.conf` and a systemd unit, is in [PTP integration](/edge/ptp/#wiring-it-up). Skip this entirely if you're not running ST 2110 — `rtp_audio`, SRT, RTP/MP2T, RTMP, RTSP, HLS, WebRTC, and the `audio_302m` transport mode have no PTP requirement.
+If you're running a single edge for monitoring or operator preview only — not production-grade contribution / distribution — you can skip both pages. The default install ships ~70 µs p50 PCR_AC out of the box, which is enough for VLC, ffplay, OBS, and most prosumer receivers.

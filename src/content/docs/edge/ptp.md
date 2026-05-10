@@ -1,8 +1,8 @@
 ---
 title: PTP Integration
-description: How bilbycast-edge integrates with an external linuxptp ptp4l daemon for SMPTE ST 2110 timing.
+description: How bilbycast-edge integrates with an external linuxptp ptp4l daemon — for SMPTE ST 2110 timing AND for broadcast-spec PCR_AC on TS UDP / RTP / SRT / RIST outputs.
 sidebar:
-  order: 10
+  order: 11
 ---
 
 bilbycast-edge integrates with PTP (Precision Time Protocol, IEEE 1588-2008) **best-effort, via an external `ptp4l` daemon**. There is no embedded PTP slave in the standard build — the design splits the high-precision kernel/hardware timestamping work into the well-tested `linuxptp` project and asks bilbycast only to *observe* the resulting clock state via `ptp4l`'s management socket.
@@ -11,19 +11,23 @@ This page covers the operational story: when PTP matters, what bilbycast actuall
 
 ## When PTP matters
 
-PTP is **required** for compliant SMPTE ST 2110-30 / -31 / -40 essence flows that need to interoperate with other ST 2110 equipment on the same broadcast plant. Specifically:
+PTP is required (or strongly recommended) in **two distinct cases**:
+
+**1. Compliant SMPTE ST 2110 essence flows.** ST 2110-30 / -31 / -40 essence flows that interoperate with other ST 2110 equipment on the same broadcast plant must reference a common PTP grandmaster:
 
 - ST 2110 PM (1 ms packet time, default) and AM (125 µs) profiles depend on a shared PTP grandmaster.
 - NMOS IS-04 advertises a `clock` resource per device when any flow declares `clock_domain` — receivers use this to confirm clock alignment before activating a connection.
 - BCP-004 receiver caps include media-clock constraints that imply PTP synchronisation.
 
+**2. Broadcast-spec PCR_AC on TS outputs (UDP / RTP / SRT / RIST / RTMP / 302M).** The wire emitter runs against `CLOCK_TAI`. When `ptp4l` + `phc2sys` are running, CLOCK_TAI is PTP-disciplined and SO_TXTIME paces TX against the NIC's PTP hardware clock — sub-µs PCR_AC, the only path that meets T-STD spec. Without `ptp4l`, CLOCK_TAI is just system clock + leap seconds and the wire pacer falls back to ~70 µs p50 / few-ms p99 — fine for VLC and casual receivers, **not** fine for broadcast-grade hardware decoders or multi-edge 2022-7 hitless across legs. See [Wire-Time Precision](/edge/wire-pacing/) for the full ladder, the `etf` qdisc step, NIC requirements, and the verification numbers.
+
 PTP is **not required** for:
 
 - `rtp_audio` inputs and outputs (no `clock_domain`, no NMOS PTP advertising — see [Audio Gateway](/edge/audio-gateway/)).
-- SRT, RTP/MP2T, UDP, RTMP, RTSP, HLS, WebRTC, ST 2022-1/2 transports.
-- WAN audio contribution via `audio_302m` over SRT.
+- Single-edge non-broadcast-grade outputs (e.g. operator monitoring on a Mac VLC) — the default ~70 µs p50 software path is enough for prosumer receivers.
+- WAN audio contribution via `audio_302m` over SRT *if* you don't need spec-compliant PCR_AC at the receiver.
 
-If you're not running ST 2110 essence flows, you can skip this page.
+If you're not running ST 2110 essence flows **and** you don't need broadcast-spec PCR_AC on TS outputs, you can skip this page.
 
 ## What bilbycast actually polls
 

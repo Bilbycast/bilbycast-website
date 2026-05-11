@@ -39,6 +39,16 @@ Each preset card carries a **matches current state** badge. The manager periodic
 
 Presets can be activated by [**Routines**](/manager/routines/) on a cron schedule. A "Sunday 18:00 evening news" routine that activates the "Evening News" switcher preset reuses the same per-node Operate permission checks as a manual director click — no second permission model, no second audit trail.
 
+## Composes with Flow Assembly — three behaviours of "active input"
+
+A preset action is `(node_id, flow_id, input_id)` — *"make input Y the active input on flow X"*. The same shape covers three on-the-wire behaviours, depending on the target flow's `assembly` mode (set on the flow modal):
+
+- **Passthrough flow** — Take flips which input's bytes are forwarded byte-for-byte. Output PIDs follow the new active input; receivers see new PMT versions and re-tune. The continuity fixer cushions CC + PMT version + DI to keep cutover seamless.
+- **Assembled flow without Switch slots** — Take is a no-op for the data path. Every input contributes ES simultaneously; the assembly's slot list owns what's emitted regardless of which is "active".
+- **Assembled flow with Switch slots** — Take flips the active leg of every Switch slot whose leg list contains the named input. **Output PIDs stay unified across switches** (each slot's `out_pid` is fixed); only the source leg flips. PMT version bumps mod 32 + DI=1 fires on the next PCR for the affected `out_pid` so receivers re-anchor STC without re-tuning. Slots without that input as a leg are silent.
+
+Operators build presets exactly as before in all three cases — there's no separate Switch-aware preset type. The flow modal's [Flow Assembly](/edge/flow-assembly/) section is where the operator picks the mode (and, for the third case, builds the Switch slot's leg list); the Switcher then drives whichever mode the flow runs in.
+
 ## Permissions
 
 - **Listing and activating** presets requires the **Operator** role in the preset's owner group, plus per-node **Operate** permission on every action's target node.

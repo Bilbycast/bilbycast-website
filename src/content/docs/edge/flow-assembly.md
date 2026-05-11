@@ -19,8 +19,21 @@ Internally the mechanism is a per-flow **PID bus**: every referenced input demux
 | Build an MPTS carrying Studio 1 + Studio 2 from different sources | Had to pre-mux upstream and ingest the finished MPTS | `assembly.kind = mpts`, two programs each with their own slots |
 | Publish a single SPTS built from two redundant ingress legs | SMPTE 2022-7 at the transport layer only (RTP/SRT/RIST) | Pre-bus `Hitless` source with primary-preference and a 200 ms stall timer |
 | Swap which PID / input feeds a given program's audio at runtime | Had to stop + restart the flow | `UpdateFlowAssembly` — unchanged slots keep running, PMT version bumps mod 32 |
+| Operator-driven multi-cam switching with **unified output PIDs** — receivers don't re-tune | Switching meant new PMT versions and re-tuning at the receiver | `Switch` slot — N legs, one `out_pid`, the manager Switcher's Take flips legs and the assembler bumps PMT version + DI=1 so receivers stay locked |
 
 Passthrough flows keep working exactly as before. `assembly = null` (or `assembly.kind = passthrough`) is the default, and existing configs are unaffected.
+
+## Three operating modes — pick one per flow
+
+A flow runs in one of three modes. All three coexist in the same edge build, all three reach every output type. Pick by the combination of `assembly.kind` and the slot source types you use.
+
+| Mode | When to pick it | Output PIDs across an input switch | What the Switcher's `ActivateInput` does on the wire |
+|---|---|---|---|
+| **Passthrough** (`assembly = null` or `kind = "passthrough"`) | One input is "live" at a time and you want receivers to see whatever PIDs that input declared, byte-for-byte. | **Change** to whatever the new active input declared. Receivers see new PMT versions and re-tune. The edge's continuity fixer cushions CC + PMT version + DI to keep cutover seamless. | Flips which input's bytes are forwarded. Classic broadcast switcher behaviour. |
+| **Assembly without Switch slots** (`kind = "spts"`/`"mpts"`, slots use `pid` / `essence` / `hitless`) | You want a fresh PMT layout — unified output PIDs, e.g. always video on `0x100` — built from one input, or from a 2022-7-style redundant pair. Every input contributes ES simultaneously. | **Stay unified.** Each slot's `out_pid` is fixed by the assembly. | No-op for the data path. Every input contributes ES simultaneously regardless of which is "active". |
+| **Assembly with Switch slots** (`kind = "spts"`/`"mpts"`, one or more slots use `switch`) | Operator-driven N-input switching with unified output PIDs — the Switcher's PGM/PVW/Take drives which input feeds the slot. All N legs subscribe concurrently (warm), so cutover is instant. | **Stay unified.** The slot's `out_pid` is fixed; only the source leg flips. PMT version bumps mod 32 + DI=1 fires on the next PCR for the affected `out_pid` so receivers re-anchor STC without re-tuning. | Flips the active leg of every Switch slot whose leg list contains the named input. Slots without that input as a leg stay on their current leg. |
+
+The three modes can be mixed within an MPTS — one program can carry explicit `pid` slots, another can use `hitless` for redundancy, a third can use `switch` for operator-driven multi-cam. PIDs always behave per the slot source type.
 
 ## Assembly kinds
 
@@ -89,13 +102,36 @@ Passthrough flows keep working exactly as before. `assembly = null` (or `assembl
 
 ## Slot sources — where the bytes come from
 
-Every slot in a program's `streams[]` picks its source from one of three variants:
+Every slot in a program's `streams[]` picks its source from one of four variants:
 
 - **`"pid"`** — explicit PID off a named input: `{ "type": "pid", "input_id": "...", "source_pid": 256 }`. Use when the operator knows the exact upstream PID (from the input's live PSI catalogue, or a written spec).
 - **`"essence"`** — first elementary stream of a given kind off a named input: `{ "type": "essence", "input_id": "...", "kind": "video" | "audio" | "subtitle" | "data" }`. Useful when the upstream is single-program and the operator just wants "its video" / "its audio" without binding to a specific PID. Resolves at flow start against the input's PSI catalogue, and re-resolves on every `UpdateFlowAssembly`.
 - **`"hitless"`** — primary-preference pre-bus merger: `{ "type": "hitless", "primary": { <pid|essence> }, "backup": { <pid|essence> } }`. A merger task subscribes to both legs and forwards the primary verbatim; if no primary packet arrives for 200 ms it flips to the backup, and a short hold-off brings it back when primary traffic resumes. Either leg must itself be `pid` or `essence` — nested Hitless is rejected.
+- **`"switch"`** — operator-driven N-input switch (1..=64 legs): `{ "type": "switch", "legs": [ { "type": "pid"|"essence", "input_id": "...", ... } ], "initial_input_id": "..." }`. All legs subscribe concurrently (warm) so cutover is instant; the assembler forwards bytes only from the leg whose `input_id` matches the flow's currently-active input. The Switcher's `ActivateInput` (PGM/PVW/Take) flips every Switch slot whose leg list contains the named input — slots without that input as a leg are silent. **Output PIDs stay unified across switches** (the slot's fixed `out_pid`); PMT version bumps mod 32 and DI=1 fires on the next PCR for that `out_pid` so receivers stay locked without re-tuning. The active leg survives flow restart via `flow.active_input_id`; if the saved active input is no longer in the leg list, the slot silently falls back to `initial_input_id`.
 
 The `hitless` slot source is **not** SMPTE 2022-7 sequence-aware dedup — the PID bus today doesn't carry upstream RTP sequence numbers, so the merger compares on packet arrival timing rather than sequence. For byte-perfect dual-leg dedup use SMPTE 2022-7 at the input transport layer (RTP/SRT/RIST) — assembly can sit on top of that.
+
+### Switch slot example — three-camera multi-cam bus on a single video PID
+
+```json
+{
+  "out_pid": 256,
+  "stream_type": 27,
+  "source": {
+    "type": "switch",
+    "legs": [
+      { "type": "essence", "input_id": "cam-a", "kind": "video" },
+      { "type": "essence", "input_id": "cam-b", "kind": "video" },
+      { "type": "essence", "input_id": "cam-c", "kind": "video" }
+    ],
+    "initial_input_id": "cam-a"
+  }
+}
+```
+
+To drive it from the [Live Switcher](/manager/switcher/), build a preset for each camera with a single `activate_input` action (target this flow + the camera's input id) and Take. Receivers stay locked through every cut — the output PID is always `0x100` regardless of which camera is live. Hitless and Switch slots can coexist in the same assembly (e.g. one Hitless slot for an auto-failover audio pair plus one Switch slot for the multi-cam video bus).
+
+**`pid_bus_switch_slot` capability:** the manager UI's Switch source-type option in the Advanced assembly editor is gated on the edge advertising this capability. Older edges hide the option; the operator gets the same Pid / Essence / Hitless choices they always had.
 
 ## PCR rules
 
@@ -174,10 +210,12 @@ All enforced at config-save time (plus belt-and-braces checks at flow bring-up).
 - MPTS: every program's effective `pcr_source` (own or flow-level fallback) must be set.
 - When `pcr_source` resolves concretely, it must hit one of that program's slots (Pid match) or one of its Essence-slot inputs.
 - Hitless nested inside another Hitless is rejected.
+- **Switch slot rules:** `legs.length` in `1..=64`; every leg's `input_id` must be in `flow.input_ids`; no two legs may share identity (`(input_id, source_pid)` for `pid` legs, `(input_id, kind)` for `essence` legs); `initial_input_id` must equal exactly one leg's `input_id`; when every leg is `essence`-typed, all `kind` values must agree; Switch nested inside Hitless is rejected; Switch nested inside Switch is type-system impossible.
 - Non-TS inputs without a valid `audio_encode` are rejected at flow bring-up with a specific `pid_bus_*` error code.
 
 ## Related
 
+- **[Live Switcher](/manager/switcher/)** — the manager-side PGM/PVW director console that drives `ActivateInput` across flows. Drives Switch-slot active legs in assembled flows in addition to its legacy passthrough behaviour.
 - **[MPTS → SPTS filtering](/edge/configuration/#mpts--spts-filtering)** — the simpler story: forward an upstream MPTS verbatim and optionally down-select a single program per output. Complementary to Flow Assembly — assembly builds *fresh* TS from elementary streams; filtering re-packs an existing TS.
-- **[Events & Alarms](/edge/events-and-alarms/)** — the `pid_bus_*` error code reference.
+- **[Events & Alarms](/edge/events-and-alarms/)** — the `pid_bus_*` error code reference (including the Switch-slot codes).
 - **[Hot Input Switching](/edge/overview/)** — format-agnostic zero-gap cutover between a flow's inputs, via `TsContinuityFixer`, for passthrough flows.

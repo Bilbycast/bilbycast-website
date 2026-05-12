@@ -16,7 +16,7 @@ default — AAC-LC, HE-AAC v1/v2, multichannel up to 7.1) and re-encodes
 them to AAC, HE-AAC v1/v2, Opus, MP2, or AC-3 on RTMP, HLS, WebRTC,
 SRT, UDP, RTP, and RIST outputs. On the default build all codecs
 encode in-process — AAC via FDK AAC (`fdk-aac` feature) and Opus /
-MP2 / AC-3 via FFmpeg libavcodec + libopus (`video-thumbnail`
+MP2 / AC-3 via FFmpeg libavcodec + libopus (`media-codecs`
 feature). An ffmpeg subprocess fallback is used only when those
 features are disabled.
 
@@ -53,7 +53,7 @@ operation, WAN transport, and compressed-audio egress.
 | Send 24-bit LPCM to a hardware decoder that expects MPEG-TS over UDP | UDP output with `transport_mode: "audio_302m"` |
 | Send 24-bit LPCM to a hardware decoder that expects RTP/MP2T (RFC 2250) | `rtp_audio` output with `transport_mode: "audio_302m"` |
 | Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; symphonia fallback: AAC-LC mono/stereo) |
-| Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `video-thumbnail` build (ffmpeg subprocess fallback otherwise) |
+| Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `media-codecs` build (ffmpeg subprocess fallback otherwise) |
 | Deliver an AAC contribution to browsers as Opus in one hop | Combined Phase A + Phase B chain — RTMP AAC input → WebRTC WHEP Opus output |
 
 ---
@@ -467,7 +467,7 @@ both gaps. When set, the output decodes the input AAC in-process via
 the Phase A `engine::audio_decode::AacDecoder`, then re-encodes via
 Phase B's `engine::audio_encode::AudioEncoder`.
 
-**Default build (`fdk-aac` + `video-thumbnail`, both on by default):**
+**Default build (`fdk-aac` + `media-codecs`, both on by default):**
 all codecs encode in-process. AAC codecs (AAC-LC, HE-AAC v1, HE-AAC
 v2) use Fraunhofer FDK AAC; Opus / MP2 / AC-3 use FFmpeg libavcodec
 (+ libopus). No external subprocess, no ffmpeg binary on PATH

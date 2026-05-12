@@ -89,7 +89,7 @@ The most useful Cargo feature flags on the edge:
 | `tls` | on | HTTPS + RTMPS |
 | `webrtc` | on | WebRTC WHIP / WHEP via str0m |
 | `fdk-aac` | on | In-process AAC decode and encode |
-| `video-thumbnail` | on | In-process video decode + thumbnail JPEG, plus Opus / MP2 / AC-3 audio encode |
+| `media-codecs` | on | In-process video decode + thumbnail JPEG, plus Opus / MP2 / AC-3 audio encode |
 | `replay` | on | Continuous flow recording to disk + clip playback as a fresh input |
 | `display` | on (Linux) | Local-display output (HDMI / DisplayPort + ALSA) |
 | `video-encoder-x264` | off | H.264 software transcoding via libx264 (GPL-2.0-or-later) |

@@ -14,6 +14,19 @@ The relay is a stateless QUIC forwarder for NAT traversal between edges. It carr
 
 The relay is statically linked against musl, has no runtime dependencies, and runs on `x86_64` and `aarch64`.
 
+## Ports & firewall
+
+The relay listens on two ports:
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| **4433** | UDP (QUIC / TLS 1.3) | Every edge that pairs through this relay | Tunnel data plane. Override with `--quic-addr`. |
+| **4480** | TCP (HTTP) | Manager host, your monitoring host | REST stats + `/health`. Optional — close it if you don't query stats remotely. Override with `--api-addr`. |
+
+The relay itself connects **outbound** to the manager on TCP 8443 (`wss://`), so no inbound port is needed for control. If you front the relay with a load balancer (multiple relay instances for HA), the LB needs UDP/QUIC pass-through on 4433 — not TLS termination, since QUIC carries its own TLS 1.3.
+
+Full network map: [Deployment overview](/getting-started/deployment/).
+
 ## 1. Download
 
 ```bash
@@ -151,9 +164,16 @@ sudo ./upgrade-relay.sh --target-version 0.10.2
 
 The relay is stateless — a restart drops connected edges, which all reconnect automatically. For zero-disruption upgrades, run multiple relay instances behind a load balancer and roll through them one at a time. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 
+## Going further
+
+The single-host systemd install above is the right shape for most deployments. For larger or more redundant setups:
+
+- **Multiple relays behind a load balancer** — the relay is stateless, so an LB doing UDP/QUIC pass-through on 4433 across several relay instances gives you horizontal scale + zero-disruption upgrades. Roll one relay at a time using the upgrade script above; edges reconnect transparently.
+- **Geographic redundancy** — run a relay in each region; edges can be configured with multiple relay candidates and will fail over on tunnel loss.
+- [Relay security](/relay/security/) — bind tokens, end-to-end tunnel encryption, why operators can't see media.
+
 ## Where to read next
 
 - [Relay architecture](/relay/architecture/) — internal design and stateless forwarding.
-- [Relay security](/relay/security/) — bind tokens, end-to-end tunnel encryption, why operators can't see media.
 - [Relay events and alarms](/relay/events-and-alarms/) — what's emitted when tunnels go up or down.
 - [Relay stats reference](/relay/stats-reference/) — Prometheus metrics.

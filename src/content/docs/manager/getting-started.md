@@ -7,14 +7,31 @@ sidebar:
 
 The manager is the central control plane — a Postgres-backed Rust binary that serves the web UI, the REST API, and the WebSocket endpoint that edges and relays connect to. Deploy it first; everything else attaches to it.
 
+This page walks through a **single-host install** — manager + Postgres on one Linux box. That's the right shape for evaluation, lab / testbed work, and small single-tenant deployments. For production patterns (LB-terminated TLS, two-instance HA against shared Postgres, redundant Postgres), see [Going further](#going-further) at the end.
+
 ## What you'll need
 
-- A Linux host (Ubuntu 24.04 / Debian 12 or newer recommended).
-- A reachable **Postgres 18** cluster.
+- A Linux host (Ubuntu 24.04 / Debian 12 or newer recommended). A 2 vCPU / 4 GB RAM VM is plenty for evaluation.
+- A reachable **Postgres 18** cluster — or just Docker on the same host (we'll bring one up in step 2).
 - A DNS name or static IP your operators can hit on TCP 8443.
 - About 10 minutes.
 
 The manager binary is statically linked against musl, so the host distribution doesn't matter much beyond having a recent kernel. `x86_64` is the supported architecture today.
+
+## Ports & firewall
+
+The manager listens on a small fixed set of ports. Open these inbound on the manager host:
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| **8443** | TCP (HTTPS + WSS) | Operator browsers, every edge / relay / gateway site | Web UI, REST API, device WebSocket. Override with `BILBYCAST_PORT`. |
+| **80** | TCP (HTTP) | Public internet | Only when `BILBYCAST_ACME_ENABLED=true` — used for the ACME HTTP-01 challenge. Close it otherwise. |
+
+All control connections from edges, relays, and gateway sidecars are **outbound to the manager** over `wss://`. Devices behind NAT or restrictive firewalls don't need any inbound port — that's the whole point of the design.
+
+Postgres listens on **5432** (or `5433` if you use the Docker compose file below). Keep it firewalled to the manager host only — never expose Postgres to the public internet.
+
+The full network map (edge ports, relay ports, ST 2110 multicast) is in [Deployment overview](/getting-started/deployment/).
 
 ## 1. Download
 
@@ -50,13 +67,13 @@ A successful verify prints `Verified OK`. The manifest then carries the SHA-256 
 
 Pick one:
 
-**Docker (fastest for evaluation)** — inside the extracted directory:
+**Docker (fastest for evaluation / local VM)** — inside the extracted directory:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d
 ```
 
-This brings up Postgres 18 on `localhost:5433` with the default DSN.
+This brings up Postgres 18 on `localhost:5433` with the default DSN baked into `config/default.toml`. No further DB setup needed — `init` in step 3 will probe it automatically. This is the recommended path if you're spinning up a test VM, a lab box, or a small single-tenant deployment.
 
 **Existing cluster (production)**:
 
@@ -145,10 +162,13 @@ sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via t
 
 Migrations apply automatically on every `serve` boot, so a successful binary swap + restart is a complete upgrade — no separate migration step. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 
-## Where to read next
+## Going further
 
+The single-host install above is the right shape for evaluation, lab work, and small deployments. As your install grows, layer on these:
+
+- [TLS deployment modes](/manager/tls-deployment/) — switch from the self-signed cert to **ACME / Let's Encrypt**, an operator-supplied PEM, or **behind-proxy** mode where a load balancer terminates TLS.
+- [Active / Active HA](/manager/active-active-ha/) — run two manager instances against a **shared Postgres cluster** for zero-downtime failover, rolling deploys, and geographic redundancy. Assumes you've already provisioned a redundant Postgres (streaming replication, managed Postgres, Patroni, etc.) — that piece is out of scope for this guide but any standard Postgres 18 HA topology works.
+- [Backup & restore](/manager/backup/) — operator-initiated encrypted backup of config + secrets, with an advisory-locked `pg_dump` that's safe across an HA pair.
 - [Multi-tenant Groups](/manager/multi-tenant-groups/) — isolation and quotas for multi-team installs.
-- [Active/Active HA](/manager/active-active-ha/) — two-node manager cluster.
-- [Backup & restore](/manager/backup/) — operator-initiated config + secrets backup.
-- [Security](/manager/security/) — auth, MFA, OIDC SSO, and the threat model.
+- [Security](/manager/security/) — auth, MFA, OIDC SSO, threat model.
 - [Install an edge](/edge/getting-started/) — the next step in a fresh deployment.

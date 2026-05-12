@@ -9,7 +9,7 @@ sidebar:
 
 bilbycast-edge is a media gateway supporting multiple transport protocols for professional broadcast and streaming workflows.
 
-Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `video-thumbnail` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC software video encoding requires `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), or `video-encoder-nvenc` (NVIDIA GPU required); the `*-full` release channel bundles all three. The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
+Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `media-codecs` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC software video encoding requires `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), or `video-encoder-nvenc` (NVIDIA GPU required); the `*-full` release channel bundles all three. The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
 
 ## Input Protocols
 
@@ -196,7 +196,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   - Optional Bearer token authentication
   - Async HTTP upload, non-blocking to other outputs
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number` — filtered segments carry a rewritten single-program TS
-  - **Optional `audio_encode` block (Phase B):** each segment is re-encoded with the configured audio codec and re-muxed back into MPEG-TS in-process (video PIDs pass through unchanged). Allowed codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3`. AAC codecs use the in-process FDK AAC encoder (default `fdk-aac` feature); MP2 / AC-3 use in-process libavcodec on the default `video-thumbnail` build, with an ffmpeg subprocess fallback when the feature is disabled.
+  - **Optional `audio_encode` block (Phase B):** each segment is re-encoded with the configured audio codec and re-muxed back into MPEG-TS in-process (video PIDs pass through unchanged). Allowed codecs: `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3`. AAC codecs use the in-process FDK AAC encoder (default `fdk-aac` feature); MP2 / AC-3 use in-process libavcodec on the default `media-codecs` build, with an ffmpeg subprocess fallback when the feature is disabled.
 - **Limitations:**
   - Output only. Segment-based transport inherently adds 1-4 seconds of latency.
   - Uses a minimal built-in HTTP client (not a full HTTP/2 client).
@@ -248,7 +248,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Payload:** YCbCr 4:2:2 8-bit or 10-bit uncompressed. ST 2110-23 adds two partition modes on top of -20: **2SI** (two-sample interleave) for UHD over multiple 10 GbE pipes, and **sample-row** for higher framerates
 - **PTP:** Best-effort PTP slave via external `ptp4l` — same wiring as the audio essences
 - **Dual-network:** SMPTE 2022-7 Red/Blue bind on input and output
-- **Egress pipeline:** The flow's MPEG-TS video ES is demuxed, decoded via `video-engine::VideoDecoder`, scaled into planar 4:2:2 8/10-bit via `VideoScaler`, then RFC 4175-packetised onto the wire (Red plus optional Blue). Outputs only need the default `video-thumbnail` feature
+- **Egress pipeline:** The flow's MPEG-TS video ES is demuxed, decoded via `video-engine::VideoDecoder`, scaled into planar 4:2:2 8/10-bit via `VideoScaler`, then RFC 4175-packetised onto the wire (Red plus optional Blue). Outputs only need the default `media-codecs` feature
 - **Ingress pipeline:** RFC 4175 depacketise to raw frames, feed through `video-engine::VideoEncoder` in a blocking worker, then `TsMuxer` into the flow. Inputs require a `video_encode` block and a compiled-in `video-encoder-*` feature (libx264, libx265, or NVENC)
 - **Status:** Phase 2 shipped. ST 2110-22 (JPEG XS) is deferred pending a libjxs wrapper crate
 - **NMOS:** Advertised as `urn:x-nmos:format:video` in IS-04, with BCP-004 receiver caps reflecting the configured width/height/framerate/sampling
@@ -301,7 +301,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   - **WHEP output** (server): Serve browser viewers — endpoint at `/api/v1/flows/{id}/whep`
   - **WHEP input** (client): Pull media from external WHEP servers
 - **Video:** H.264 only on egress (browsers don't decode HEVC over WebRTC). HEVC sources are auto-transcoded to H.264 by the same `VideoDecoder` / `VideoEncoder` pair used for explicit `video_encode` — drop an HEVC SRT feed onto a WHEP output and browsers just work. Validation rejects `x265` / `hevc_nvenc` targets for WebRTC outputs. The encoder is opened with `global_header = false` so SPS/PPS ride in-band on every IDR and the RFC 6184 packetizer forwards them as ordinary NAL units
-- **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RIST/RTP/UDP outputs. **Without `audio_encode`, AAC sources going to a WebRTC output automatically fall back to video-only.** Setting an `audio_encode` block (codec: `opus`) enables the Phase B chain: input AAC is decoded in-process via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC / HE-AAC v1/v2 / multichannel) and re-encoded as Opus in-process via libavcodec + libopus (on the default `video-thumbnail` build; ffmpeg subprocess fallback when the feature is disabled), then written to the WebRTC audio MID via str0m. This is the marquee Phase A+B chain — **AAC RTMP contribution → Opus WebRTC distribution** — all inside one bilbycast-edge process with no external transcoder. Requires `video_only=false`.
+- **Audio:** Opus passthrough by default — Opus flows natively on WebRTC paths and gets muxed into MPEG-TS for SRT/RIST/RTP/UDP outputs. **Without `audio_encode`, AAC sources going to a WebRTC output automatically fall back to video-only.** Setting an `audio_encode` block (codec: `opus`) enables the Phase B chain: input AAC is decoded in-process via the Phase A `engine::audio_decode::AacDecoder` (FDK AAC by default, supporting AAC-LC / HE-AAC v1/v2 / multichannel) and re-encoded as Opus in-process via libavcodec + libopus (on the default `media-codecs` build; ffmpeg subprocess fallback when the feature is disabled), then written to the WebRTC audio MID via str0m. This is the marquee Phase A+B chain — **AAC RTMP contribution → Opus WebRTC distribution** — all inside one bilbycast-edge process with no external transcoder. Requires `video_only=false`.
 - **MPTS-aware outputs:** on an MPTS input, WHIP/WHEP outputs select program by `program_number` or (default) lock onto the lowest-numbered program in the PAT. Single-program by spec.
 - **Interoperability:** Compatible with OBS, browsers, Cloudflare, LiveKit, and other standard WHIP/WHEP implementations.
 - **Security:** Bearer token authentication on WHIP/WHEP endpoints, DTLS/SRTP encryption, ICE-lite for server modes.
@@ -393,7 +393,7 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `tls` | Enable RTMPS (RTMP over TLS) via `rustls` / `tokio-rustls` | **Yes** |
 | `webrtc` | Enable WebRTC WHIP/WHEP input and output via `str0m` | **Yes** |
 | `fdk-aac` | In-process AAC decode + encode via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1). Replaces symphonia decode and the ffmpeg AAC encode subprocess | **Yes** |
-| `video-thumbnail` | In-process video decode, JPEG thumbnail encode, uncompressed ST 2110-20/-23 video decode, and Opus / MP2 / AC-3 audio encode via FFmpeg libavcodec / libswscale / libopus. Eliminates all ffmpeg subprocess dependencies on the default build | **Yes** |
+| `media-codecs` | In-process video decode, JPEG thumbnail encode, uncompressed ST 2110-20/-23 video decode, and Opus / MP2 / AC-3 audio encode via FFmpeg libavcodec / libswscale / libopus. Eliminates all ffmpeg subprocess dependencies on the default build | **Yes** |
 | `video-encoder-x264` | H.264 video transcoding via libx264. **GPL v2+** — binaries with this feature are an AGPL-3.0-or-later combined work | No |
 | `video-encoder-x265` | HEVC video transcoding via libx265. **GPL v2+** — same combined-work implications as x264 | No |
 | `video-encoder-nvenc` | NVIDIA NVENC H.264 / HEVC hardware encoders. LGPL-clean API layer; requires an NVIDIA GPU + proprietary driver at runtime | No |

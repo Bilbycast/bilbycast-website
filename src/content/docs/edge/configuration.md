@@ -701,7 +701,7 @@ Generates a synthetic colour-bars-and-tone test pattern as an MPEG-TS stream wit
 | `tone_hz` | number | No | `1000.0` | Audio tone frequency. Range 50–8000. |
 | `tone_dbfs` | number | No | `-20.0` | Audio level in dBFS (negative). `-20 dBFS` is the broadcast reference. |
 
-Requires the edge build to include the `video-thumbnail` and `fdk-aac` features (both on by default).
+Requires the edge build to include the `media-codecs` and `fdk-aac` features (both on by default).
 
 ### Bonded Input
 

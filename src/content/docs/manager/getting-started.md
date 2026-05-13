@@ -24,10 +24,12 @@ The manager listens on a small fixed set of ports. Open these inbound on the man
 
 | Port | Protocol | Source | Purpose |
 |------|----------|--------|---------|
-| **8443** | TCP (HTTPS + WSS) | Operator browsers, every edge / relay / gateway site | Web UI, REST API, device WebSocket. Override with `BILBYCAST_PORT`. |
+| **8443** | TCP (HTTPS + WSS) | Operator browsers, every edge / relay / gateway site | Web UI, REST API, device WebSocket. Override port with `BILBYCAST_PORT`. |
 | **80** | TCP (HTTP) | Public internet | Only when `BILBYCAST_ACME_ENABLED=true` — used for the ACME HTTP-01 challenge. Close it otherwise. |
 
 All control connections from edges, relays, and gateway sidecars are **outbound to the manager** over `wss://`. Devices behind NAT or restrictive firewalls don't need any inbound port — that's the whole point of the design.
+
+**Dual-stack (IPv4 + IPv6) is the default.** The manager binds `0.0.0.0` and `[::]` simultaneously on every listener (8443 plus the ACME challenge port). IPv6 entries get `IPV6_V6ONLY=1` so the two families coexist on the same port without colliding. Operators with v6 connectivity get it automatically — just point an AAAA record at the box alongside the A record. To restrict to one family, set `BILBYCAST_LISTEN_ADDRS=0.0.0.0` (v4 only) or `BILBYCAST_LISTEN_ADDRS=[::]` (v6 only); the ACME challenge listener has its own companion `BILBYCAST_ACME_LISTEN_ADDRS` with the same shape.
 
 Postgres listens on **5432** (or `5433` if you use the Docker compose file below). Keep it firewalled to the manager host only — never expose Postgres to the public internet.
 
@@ -81,13 +83,36 @@ A successful verify prints `Verified OK`. The manifest then carries the SHA-256 
 
 Pick one:
 
-**Docker (fastest for evaluation / local VM)** — inside the extracted directory:
+**Docker (fastest for evaluation / local VM)** — inside the extracted directory, write a minimal compose file and bring it up:
 
 ```bash
+cat > docker-compose.dev.yml <<'EOF'
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: bilbycast-manager-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bilbycast
+      POSTGRES_USER: bilbycast
+      POSTGRES_PASSWORD: bilbycast_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - bilbycast_pg_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bilbycast -d bilbycast"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  bilbycast_pg_data:
+EOF
 docker compose -f docker-compose.dev.yml up -d
 ```
 
-This brings up Postgres 18 on `localhost:5433` with the default DSN baked into `config/default.toml`. No further DB setup needed — `init` in step 3 will probe it automatically. This is the recommended path if you're spinning up a test VM, a lab box, or a small single-tenant deployment.
+This brings up Postgres 18 on `localhost:5433` with the default DSN baked into `config/default.toml`. No further DB setup needed — `init` in step 3 will probe it automatically. This is the recommended path if you're spinning up a test VM, a lab box, or a small single-tenant deployment. **Dev-only credentials** — never expose this Postgres beyond localhost and never reuse `POSTGRES_PASSWORD: bilbycast_dev` for production.
 
 **Existing cluster (production)**:
 

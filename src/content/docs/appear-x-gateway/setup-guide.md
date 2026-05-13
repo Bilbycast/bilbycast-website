@@ -25,6 +25,12 @@ sidebar:
 
 ## Step 2: Install the gateway
 
+One-time prereqs (the installer pre-flight-checks these and exits if missing — `curl`, `sha256sum`, `systemctl` are normally pre-installed on Ubuntu, `jq` is not):
+
+```bash
+sudo apt install -y jq
+```
+
 The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching arch-specific tarball (x86_64 or aarch64), verifies SHA-256 against the signed manifest, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit. Auto-installs `cosign` (with its own checksum verified against the upstream release) if it isn't already on the host.
 
 **Replace the five `REPLACE_*` values below with your own before running** — the placeholders are intentional all-caps so bash doesn't interpret them as shell redirection (e.g. `<token>` would treat the angle bracket as input redirection). Each value is single-quoted so URLs / passwords with special characters don't trip word-splitting:

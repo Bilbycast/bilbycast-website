@@ -25,6 +25,15 @@ The relay listens on two ports:
 
 The relay itself connects **outbound** to the manager on TCP 8443 (`wss://`), so no inbound port is needed for control. If you front the relay with a load balancer (multiple relay instances for HA), the LB needs UDP/QUIC pass-through on 4433 — not TLS termination, since QUIC carries its own TLS 1.3.
 
+### Bind address vs advertised address
+
+QUIC binds on `0.0.0.0:4433` (every interface) by default — that's what the relay **listens** on. Remote edges need a different value: the **public address they dial** to reach you. These two are distinct any time the relay sits behind NAT, a cloud-instance public-IP mapping, or a load balancer:
+
+- **Bind address** (`quic_addr` / `quic_addrs`) — the listen socket. `0.0.0.0:4433` is correct for most installs.
+- **Advertised address** (`public_quic_addr`) — what edges connect to. Set this to a hostname or IP edges can actually reach. The manager reads it from health and pre-populates the tunnel-creation dropdown. Without it, the manager can't auto-fill a usable relay address for tunnel configs and the relay shows as disabled in the dropdown.
+
+Prefer a DNS name when you have one (`relay.example.com:4433`). It survives Lightsail static-IP releases, cloud instance migrations, and lets you front a pool of relays behind one record. Falls back to a raw IP literal cleanly when DNS isn't an option.
+
 Full network map: [Deployment overview](/getting-started/deployment/).
 
 ## 1. Download
@@ -95,12 +104,13 @@ In the manager UI:
 1. Go to **Admin → Nodes**, click **+ Add Node**, pick device type **Relay**.
 2. Copy the one-shot registration token.
 
-Next to the relay binary, write `relay.json` (replace `REPLACE_WITH_YOUR_MANAGER_HOSTNAME` and `<token-from-manager>` with the real values — don't paste this verbatim):
+Next to the relay binary, write `relay.json` (replace `REPLACE_WITH_YOUR_MANAGER_HOSTNAME`, `REPLACE_WITH_YOUR_RELAY_HOSTNAME`, and `<token-from-manager>` with the real values — don't paste this verbatim):
 
 ```json
 {
   "quic_addr": "0.0.0.0:4433",
   "api_addr": "0.0.0.0:4480",
+  "public_quic_addr": "REPLACE_WITH_YOUR_RELAY_HOSTNAME:4433",
   "require_bind_auth": true,
   "manager": {
     "enabled": true,
@@ -111,6 +121,8 @@ Next to the relay binary, write `relay.json` (replace `REPLACE_WITH_YOUR_MANAGER
   }
 }
 ```
+
+`public_quic_addr` is the address edges will dial — see [Bind address vs advertised address](#bind-address-vs-advertised-address) above. Prefer a DNS name (e.g. `relay.example.com:4433`) over a raw IP. If the relay shares a host with the manager (typical for small deployments on a single cloud instance), neither the manager nor the relay can discover this from the WS connection alone — you have to set it explicitly. Unspecified values (`0.0.0.0:4433`, `[::]:4433`) are rejected at config load.
 
 `urls` is an array (1-16 entries, each must be `wss://`). For a single manager that's one entry; for an HA-paired manager cluster you'd list both hostnames — the relay tries them in order and rotates on WebSocket close with a 5-second backoff.
 

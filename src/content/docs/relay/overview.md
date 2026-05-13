@@ -48,6 +48,6 @@ cargo build --release
 ./target/release/bilbycast-relay -c relay.json
 ```
 
-Default ports: QUIC on `0.0.0.0:4433`, REST API on `0.0.0.0:4480`.
+Default ports: QUIC on `0.0.0.0:4433`, REST API on `0.0.0.0:4480`. When edges live outside the relay's host, also set `public_quic_addr` in the config (or pass `--public-quic-addr`) to the hostname or public IP edges will dial — that's what gets advertised to the manager and pre-populates the tunnel-creation dropdown.
 
 See [Architecture](/relay/architecture/) for the full design and connection lifecycle.

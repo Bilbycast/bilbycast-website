@@ -32,7 +32,7 @@ QUIC binds on `0.0.0.0:4433` (every interface) by default — that's what the re
 - **Bind address** (`quic_addr` / `quic_addrs`) — the listen socket. `0.0.0.0:4433` is correct for most installs.
 - **Advertised address** (`public_quic_addr`) — what edges connect to. Set this to a hostname or IP edges can actually reach. The manager reads it from health and pre-populates the tunnel-creation dropdown. Without it, the manager can't auto-fill a usable relay address for tunnel configs and the relay shows as disabled in the dropdown.
 
-Prefer a DNS name when you have one (`relay.example.com:4433`). It survives Lightsail static-IP releases, cloud instance migrations, and lets you front a pool of relays behind one record. Falls back to a raw IP literal cleanly when DNS isn't an option.
+Prefer a DNS name when you have one (`relay.example.com:4433`). It survives Lightsail static-IP releases, cloud instance migrations, and lets you front a pool of relays behind one record. Edges resolve the name on every connect attempt, so an IP change behind the record is picked up automatically without a tunnel reconfig. Falls back to a raw IP literal cleanly when DNS isn't an option (`54.1.2.3:4433`, `[2001:db8::1]:4433`).
 
 Full network map: [Deployment overview](/getting-started/deployment/).
 

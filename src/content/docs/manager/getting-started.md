@@ -36,12 +36,10 @@ The full network map (edge ports, relay ports, ST 2110 multicast) is in [Deploym
 ## 1. Download
 
 ```bash
-curl -fsSL -o bilbycast-manager.tar.gz \
-  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
-curl -fsSL -o bilbycast-manager.tar.gz.sha256 \
-  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
-sha256sum -c bilbycast-manager.tar.gz.sha256
-tar xzf bilbycast-manager.tar.gz
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
+sha256sum -c bilbycast-manager-x86_64-linux.tar.gz.sha256
+tar xzf bilbycast-manager-x86_64-linux.tar.gz
 ```
 
 The tarball expands to a directory containing the `bilbycast-manager` binary, the `migrations-pg/` directory (applied automatically on first run), and `config/default.toml`.

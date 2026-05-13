@@ -334,7 +334,7 @@ sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via t
                                                  # CLI before the binary swap
 ```
 
-The script expects the systemd path from step 5 (`bilbycast-manager.service`, binary at `/opt/bilbycast-manager/`). For a foreground install, just download a fresh tarball and re-run setup-not-needed/serve — migrations apply automatically on the next `serve` boot.
+The script expects the systemd path from step 5 (`bilbycast-manager.service`, binary at `/opt/bilbycast-manager/`). For a foreground install, just download a fresh tarball, replace the old `bilbycast-manager` binary in place, and restart `serve` — migrations apply automatically on the next boot. Don't re-run `setup` on an existing install (it bails when users exist; use `reset-password` or `rotate-master-key` for those workflows).
 
 Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 

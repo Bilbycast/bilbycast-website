@@ -55,9 +55,15 @@ Install [cosign](https://github.com/sigstore/cosign) — on Ubuntu / Debian the 
 
 ```bash
 COSIGN_VERSION=v2.4.1
+case "$(uname -m)" in
+    x86_64)  COSIGN_ARCH=amd64 ;;
+    aarch64) COSIGN_ARCH=arm64 ;;
+    *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+esac
+COSIGN_ASSET="cosign-linux-${COSIGN_ARCH}"
 curl -fsSL -o /tmp/cosign \
-  "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
-expected="$(curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" | awk '$2 == "cosign-linux-amd64" {print $1}')"
+  "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/${COSIGN_ASSET}"
+expected="$(curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" | awk -v a="${COSIGN_ASSET}" '$2 == a {print $1}')"
 got="$(sha256sum /tmp/cosign | awk '{print $1}')"
 [[ -n "${expected}" && "${got}" == "${expected}" ]] || { echo "cosign checksum mismatch"; exit 1; }
 sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign && rm /tmp/cosign

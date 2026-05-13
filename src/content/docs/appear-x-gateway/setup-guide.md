@@ -25,10 +25,19 @@ sidebar:
 
 ## Step 2: Install the gateway
 
-One-time prereqs (the installer pre-flight-checks these and exits if missing — `curl`, `sha256sum`, `systemctl` are normally pre-installed on Ubuntu, `jq` is not):
+One-time prereqs:
 
 ```bash
+# jq — needed to parse the signed manifest. curl / sha256sum /
+# systemctl are normally pre-installed on Ubuntu; jq is not.
 sudo apt install -y jq
+
+# If you already installed cosign manually for an earlier manager/edge/relay
+# install on a DIFFERENT host architecture (e.g. x86_64 cosign on a Raspberry
+# Pi), remove it first — the appear-x installer will reinstall the matching
+# arch automatically. Skip this on a fresh host.
+[ -x /usr/local/bin/cosign ] && /usr/local/bin/cosign version >/dev/null 2>&1 \
+    || sudo rm -f /usr/local/bin/cosign
 ```
 
 The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching arch-specific tarball (x86_64 or aarch64), verifies SHA-256 against the signed manifest, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit. Auto-installs `cosign` (with its own checksum verified against the upstream release) if it isn't already on the host.

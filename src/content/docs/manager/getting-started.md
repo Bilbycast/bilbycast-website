@@ -31,7 +31,7 @@ All control connections from edges, relays, and gateway sidecars are **outbound 
 
 **Dual-stack (IPv4 + IPv6) is the default.** The manager binds `0.0.0.0` and `[::]` simultaneously on every listener (8443 plus the ACME challenge port). IPv6 entries get `IPV6_V6ONLY=1` so the two families coexist on the same port without colliding. Operators with v6 connectivity get it automatically — just point an AAAA record at the box alongside the A record. To restrict to one family, set `BILBYCAST_LISTEN_ADDRS=0.0.0.0` (v4 only) or `BILBYCAST_LISTEN_ADDRS=[::]` (v6 only); the ACME challenge listener has its own companion `BILBYCAST_ACME_LISTEN_ADDRS` with the same shape.
 
-Postgres listens on **5432** (or `5433` if you use the Docker compose file below). Keep it firewalled to the manager host only — never expose Postgres to the public internet.
+Postgres listens on **5433** when you use the Docker compose below, or **5432** when you point at an existing cluster. Keep Postgres firewalled to the manager host only — never expose it to the public internet.
 
 The full network map (edge ports, relay ports, ST 2110 multicast) is in [Deployment overview](/getting-started/deployment/).
 
@@ -42,9 +42,10 @@ curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/l
 curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
 sha256sum -c bilbycast-manager-x86_64-linux.tar.gz.sha256
 tar xzf bilbycast-manager-x86_64-linux.tar.gz
+cd bilbycast-manager-*/
 ```
 
-The tarball expands to a directory containing the `bilbycast-manager` binary, the `migrations-pg/` directory (applied automatically on first run), and `config/default.toml`.
+The tarball expands to a directory containing the `bilbycast-manager` binary, the `migrations-pg/` directory (applied automatically on first run), and `config/default.toml`. **The rest of this page assumes you're inside that directory.**
 
 ### Verify the Sigstore signature (optional)
 
@@ -75,15 +76,25 @@ cosign verify-blob \
   manifest.json
 ```
 
-The bundled [`upgrade-manager.sh`](#upgrading) auto-installs cosign on demand with the same checksum verification — you only need to install it by hand when verifying the very first install.
+A successful verify prints `Verified OK`. The manifest then carries the SHA-256 of the tarball — cross-check against your downloaded `.sha256` if you're being thorough.
 
-A successful verify prints `Verified OK`. The manifest then carries the SHA-256 of the tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same Sigstore-signed manifest drives the [upgrade flow](#upgrading) below, so this is the verifier's main checkpoint.
+## 2. Bring up Postgres
 
-## 2. Postgres
+Pick one path. The Docker path is fastest for evaluation; the existing-cluster path is the production pattern.
 
-Pick one:
+### Path A — Docker (recommended for evaluation)
 
-**Docker (fastest for evaluation / local VM)** — inside the extracted directory, write a minimal compose file and bring it up:
+If Docker isn't installed yet:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2
+sudo systemctl enable --now docker
+```
+
+You can either run `docker` via `sudo` (used throughout this page) or add yourself to the `docker` group: `sudo usermod -aG docker $USER` then log out + back in.
+
+Write a minimal compose file in the current directory and bring it up. **These are dev-only credentials** — never expose this Postgres beyond localhost and never reuse `bilbycast_dev` for production:
 
 ```bash
 cat > docker-compose.dev.yml <<'EOF'
@@ -109,52 +120,180 @@ services:
 volumes:
   bilbycast_pg_data:
 EOF
-docker compose -f docker-compose.dev.yml up -d
+sudo docker compose -f docker-compose.dev.yml up -d
 ```
 
-This brings up Postgres 18 on `localhost:5433` with the default DSN baked into `config/default.toml`. No further DB setup needed — `init` in step 3 will probe it automatically. This is the recommended path if you're spinning up a test VM, a lab box, or a small single-tenant deployment. **Dev-only credentials** — never expose this Postgres beyond localhost and never reuse `POSTGRES_PASSWORD: bilbycast_dev` for production.
-
-**Existing cluster (production)**:
+Wait a few seconds for the healthcheck to go green, then confirm:
 
 ```bash
-sudo -u postgres createuser --pwprompt bilbycast
+sudo docker compose -f docker-compose.dev.yml ps
+```
+
+Expected: one row showing `bilbycast-manager-pg` with status `Up ... (healthy)` and port mapping `0.0.0.0:5433->5432/tcp`. If status is `(starting)`, wait another few seconds and re-run.
+
+Your DSN is now `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — this matches the `database_url` baked into `config/default.toml`, so you don't have to override it.
+
+### Path B — Existing Postgres cluster
+
+Create a database and a role on your Postgres 18 cluster:
+
+```bash
+sudo -u postgres createuser --pwprompt bilbycast      # set a strong password
 sudo -u postgres createdb -O bilbycast bilbycast
 ```
 
-Note the connection string — you'll need it in the next step:
+Your DSN is `postgres://bilbycast:<password-you-just-set>@<host>:5432/bilbycast`. You'll set this as `BILBYCAST_DATABASE_URL` in step 3.
 
-```
-postgres://bilbycast:<password>@<host>:5432/bilbycast
-```
+## 3. Configure secrets and TLS
 
-## 3. Install — guided (recommended)
+The manager needs three pieces of configuration in its environment:
 
-The binary ships an `init` subcommand that does the work for you. It probes Postgres, generates `BILBYCAST_MASTER_KEY` and `BILBYCAST_JWT_SECRET` from the OS CSPRNG, generates a self-signed TLS cert under `/etc/bilbycast-manager/tls/`, writes `/etc/bilbycast-manager/manager.env` (mode `0640`), and drops a systemd unit stub at `/etc/bilbycast-manager/bilbycast-manager.service`:
+- `BILBYCAST_JWT_SECRET` — 32 bytes of random hex, signs session JWTs.
+- `BILBYCAST_MASTER_KEY` — 32 bytes of random hex, derives KEKs that encrypt every secret stored in the DB.
+- `BILBYCAST_DATABASE_URL` — only needed if you took Path B (the Docker path's DSN is the config default).
 
-```bash
-cd bilbycast-manager-*/
-sudo ./bilbycast-manager init \
-  --mode solo \
-  --database-url 'postgres://bilbycast:<password>@localhost:5432/bilbycast'
-```
+Plus a TLS cert/key pair for `https://` on 8443. For evaluation we generate a self-signed cert; switch to ACME or a file-based cert from a real CA for production (see the [TLS](#tls) section below).
 
-Review the generated unit, then install and enable it:
+Generate everything into a single `manager.env` file in the current directory:
 
 ```bash
-sudo install -m 0644 /etc/bilbycast-manager/bilbycast-manager.service /etc/systemd/system/
+# Self-signed TLS cert for evaluation
+mkdir -p certs
+HOST_IP="$(hostname -I | awk '{print $1}')"
+openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt \
+  -days 365 -nodes -subj "/CN=${HOST_IP}" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${HOST_IP}"
+chmod 600 certs/server.key
+
+# manager.env — secrets + cert paths, source this before setup / serve
+cat > manager.env <<EOF
+BILBYCAST_JWT_SECRET=$(openssl rand -hex 32)
+BILBYCAST_MASTER_KEY=$(openssl rand -hex 32)
+BILBYCAST_TLS_CERT=$(pwd)/certs/server.crt
+BILBYCAST_TLS_KEY=$(pwd)/certs/server.key
+EOF
+chmod 600 manager.env
+
+# Path B only — also append the DSN you noted in step 2:
+# echo 'BILBYCAST_DATABASE_URL=postgres://bilbycast:<password>@<host>:5432/bilbycast' >> manager.env
+```
+
+Then load it into your current shell so the next commands see it:
+
+```bash
+set -a; . ./manager.env; set +a
+```
+
+> **Don't lose `BILBYCAST_MASTER_KEY`.** It's what decrypts every node secret, AI key, and tunnel key in your database. If you lose it, those rows become unreadable. Back up `manager.env` to a secure location (password manager, sealed secret, etc.) before going further.
+
+## 4. Create the database schema + first admin
+
+The `setup` subcommand applies every migration in `migrations-pg/` and then prompts you for the first super-admin's username, display name, email, and password.
+
+```bash
+./bilbycast-manager setup --config config/default.toml
+```
+
+You'll be prompted for:
+
+- **Username** — what you'll log in with (e.g. `admin`)
+- **Display name** — shown in the UI (e.g. `Operations`)
+- **Email** — used for SSO / password reset later
+- **Password** — 8–128 chars, must mix upper, lower, and digit
+
+Once setup finishes you'll see `Database already has 1 user(s)` if you re-run it — that's the idempotent guard.
+
+> **Forgot the admin password?** Re-run setup is **not** the recovery path (it bails when users exist). Use `./bilbycast-manager reset-password --username <name>` instead.
+
+## 5. Start the manager
+
+Two ways to run — pick one. The foreground path is right for evaluation; the systemd path is right for any host you want to keep running across reboots.
+
+### Quick — foreground
+
+Useful for evaluation, demos, and debugging. Runs in your terminal; Ctrl-C to stop:
+
+```bash
+./bilbycast-manager serve --config config/default.toml
+```
+
+The first boot applies any migrations the binary added since the tarball was built (no-op on a fresh install — setup already did them). You should see a line like `listening on 0.0.0.0:8443 and [::]:8443` once it's ready.
+
+To run it in the background across SSH disconnects, use `tmux` or `screen`. For a real production install, use systemd (next section).
+
+### Production — systemd
+
+The doc-quality systemd setup creates a dedicated service user, copies the binary out of your home directory, and locks down filesystem access. Run from inside the extracted tarball directory:
+
+```bash
+# 1. Service user + install paths
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin bilbycast || true
+sudo mkdir -p /opt/bilbycast-manager /var/lib/bilbycast-manager /etc/bilbycast-manager
+sudo cp -r ./* /opt/bilbycast-manager/
+sudo chown -R bilbycast:bilbycast /opt/bilbycast-manager /var/lib/bilbycast-manager
+
+# 2. Move the secrets file under /etc with root:bilbycast 0640,
+#    then rewrite the TLS paths to point at the /opt copy
+#    (the originals are under your home dir, which the service user can't read).
+sudo install -m 0640 -o root -g bilbycast manager.env /etc/bilbycast-manager/manager.env
+sudo sed -i \
+  -e 's|^BILBYCAST_TLS_CERT=.*|BILBYCAST_TLS_CERT=/opt/bilbycast-manager/certs/server.crt|' \
+  -e 's|^BILBYCAST_TLS_KEY=.*|BILBYCAST_TLS_KEY=/opt/bilbycast-manager/certs/server.key|' \
+  /etc/bilbycast-manager/manager.env
+
+# 3. Systemd unit
+sudo tee /etc/systemd/system/bilbycast-manager.service > /dev/null <<'EOF'
+[Unit]
+Description=Bilbycast Manager
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bilbycast
+Group=bilbycast
+EnvironmentFile=/etc/bilbycast-manager/manager.env
+WorkingDirectory=/opt/bilbycast-manager
+ExecStart=/opt/bilbycast-manager/bilbycast-manager serve --config /opt/bilbycast-manager/config/default.toml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/bilbycast-manager
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 4. Enable + start, then verify
 sudo systemctl daemon-reload
 sudo systemctl enable --now bilbycast-manager
+sudo systemctl status bilbycast-manager --no-pager
 ```
 
-`init` does **not** call `systemctl` itself — you install the unit explicitly so you can review it first. On the first `serve`, the manager applies every migration in `migrations-pg/` automatically.
+`systemctl status` should show `active (running)`. If it's `failed`, the most likely causes are:
 
-For active/active HA installs, use `--mode ha-primary` and `--mode ha-standby`. See [Active/Active HA](/manager/active-active-ha/) for the operational details.
+- **Postgres unreachable** — confirm the DSN in `/etc/bilbycast-manager/manager.env` matches the running Postgres. For Docker users: container started after the manager? `sudo systemctl restart bilbycast-manager`.
+- **Permission on TLS cert** — the service runs as `bilbycast`, so `BILBYCAST_TLS_CERT` / `_KEY` must be readable by that user. The `cp -r ./* /opt/bilbycast-manager/` + `chown` above handles this for the self-signed cert under `certs/`.
+- **Port 8443 already bound** — `sudo ss -ltnp | grep 8443` will show the conflict.
 
-## 4. First login
+Logs: `sudo journalctl -u bilbycast-manager -f`.
 
-Open `https://<manager-host>:8443/` in a browser. The `init` flow prints the bootstrap super-admin credentials at the end — sign in with them. For the self-signed cert, your browser will warn once; accept it for your local box.
+## 6. First login
 
-From here:
+Open the manager in a browser:
+
+- On the box itself: `https://localhost:8443/`
+- From elsewhere: `https://<box-ip-or-dns>:8443/`
+
+Browsers will warn on the self-signed cert. In Chrome / Chromium / Edge, click **Advanced → Proceed anyway**, or — if the warning page has no "Proceed" link (a recent Chrome quirk) — focus the page and type `thisisunsafe` (it doesn't show up; just press the letters). In Firefox, click **Advanced → Accept the Risk and Continue**.
+
+Sign in with the admin credentials you set in step 4. From here:
 
 - **Add nodes** at `/admin/nodes` — each issues a one-shot **registration token** to paste into the matching edge / relay / sidecar setup wizard.
 - **Create groups** at `/admin/groups` — multi-tenant Groups, optional but recommended if you have more than one team.
@@ -162,17 +301,13 @@ From here:
 
 ## TLS
 
-The `init` flow gives you a self-signed cert that works for evaluation. For production, switch to one of three modes by editing `/etc/bilbycast-manager/manager.env`:
+The self-signed cert generated in step 3 works for evaluation. For production, switch to one of three modes by editing `manager.env` (foreground) or `/etc/bilbycast-manager/manager.env` (systemd), then restart the service:
 
-- **ACME / Let's Encrypt** — set `BILBYCAST_ACME_ENABLED=true` plus `BILBYCAST_ACME_DOMAIN` and `BILBYCAST_ACME_EMAIL`. The manager auto-provisions and renews. Needs port 80 reachable from the public internet for HTTP-01 validation.
-- **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to your PEM paths.
-- **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and trust your LB's forwarded headers via `BILBYCAST_TRUST_PROXY_HEADER` + `BILBYCAST_TRUSTED_PROXIES`.
+- **ACME / Let's Encrypt** — set `BILBYCAST_ACME_ENABLED=true` plus `BILBYCAST_ACME_DOMAIN` and `BILBYCAST_ACME_EMAIL`. The manager auto-provisions and renews. Needs port 80 reachable from the public internet for HTTP-01 validation. Drop `BILBYCAST_TLS_CERT` / `_KEY` from the env file when using ACME.
+- **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to PEM paths from a real CA.
+- **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and trust your LB's forwarded headers via `BILBYCAST_TRUST_PROXY_HEADER=1` + `BILBYCAST_TRUSTED_PROXIES=<CIDR list>`.
 
 Full detail: [TLS deployment](/manager/tls-deployment/).
-
-## Manual install (advanced)
-
-If you don't want the `init` flow, set the same secrets and run `setup` + `serve` by hand. The detailed steps and every environment variable are in the in-repo guide at `bilbycast-manager/installer/README.md`.
 
 ## Upgrading
 
@@ -185,7 +320,7 @@ curl -fsSL https://github.com/Bilbycast/bilbycast-manager-releases/releases/late
     | sudo bash
 ```
 
-Operators who'd rather review the script first can grab it once and re-run it as needed (it's the same script that ships in the source repo at `packaging/upgrade-manager.sh`):
+Operators who'd rather review the script first can grab it once and re-run it as needed:
 
 ```bash
 curl -fsSL -o upgrade-manager.sh \
@@ -199,7 +334,9 @@ sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via t
                                                  # CLI before the binary swap
 ```
 
-Migrations apply automatically on every `serve` boot, so a successful binary swap + restart is a complete upgrade — no separate migration step. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
+The script expects the systemd path from step 5 (`bilbycast-manager.service`, binary at `/opt/bilbycast-manager/`). For a foreground install, just download a fresh tarball and re-run setup-not-needed/serve — migrations apply automatically on the next `serve` boot.
+
+Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
 
 ## Going further
 

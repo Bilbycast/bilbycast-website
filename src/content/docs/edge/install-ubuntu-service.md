@@ -5,14 +5,18 @@ sidebar:
   order: 3
 ---
 
-This guide takes a freshly-extracted edge tarball and turns it into a proper systemd-managed service on Ubuntu (24.04 or newer). After this you'll have:
+This guide takes a freshly-extracted edge tarball and turns it into a proper systemd-managed service on Ubuntu (24.04 or newer). The layout below matches what `packaging/install-edge.sh` produces, so the manager UI's **Upgrade** button works out of the box (it relies on the `current` → `versions/<v>/` symlink convention to swap binaries atomically).
 
-- The binary at `/opt/bilbycast-edge/bilbycast-edge`.
-- The config at `/etc/bilbycast/edge.json`, owned by the service user.
-- Persistent data dirs under `/var/lib/bilbycast/`.
-- A systemd unit that auto-starts on boot and auto-restarts on crash.
+After this you'll have:
 
-If you haven't completed the [edge install + setup-wizard registration](/edge/getting-started/) yet, do that first — this guide picks up from there with a working `config.json` + `secrets.json` pair.
+- Binary at `/opt/bilbycast/edge/versions/<version>/bilbycast-edge`, with `/opt/bilbycast/edge/current` symlinked to the active version.
+- Config + secrets at `/opt/bilbycast/edge/{config.json,secrets.json}`, owned by the service user.
+- Persistent data dirs under `/var/lib/bilbycast/edge/`.
+- A systemd unit that auto-starts on boot, auto-restarts on crash, and follows the `current` symlink so a manager-driven upgrade lands the moment the old binary exits.
+
+If you haven't completed the [edge install + setup-wizard registration](/edge/getting-started/) yet, do that first — this guide picks up from there with a working `config.json` + `secrets.json` pair next to the binary in your tarball directory.
+
+> **Shortcut for fresh installs**: if you'd rather not run these steps by hand, the same layout drops in via one command — `sudo bash packaging/install-edge.sh --manager wss://YOUR_MANAGER:8443/ws/node --registration-token <token>`. The walkthrough below is the explicit version of what that script does.
 
 ## 1. Create the service user
 
@@ -26,60 +30,63 @@ sudo useradd -r -s /sbin/nologin -d /var/lib/bilbycast bilbycast || true
 
 ## 2. Lay out the directories
 
+The install root holds the binary tree (`versions/<v>/` + `current` symlink, the same shape the upgrade module manipulates). The data root holds anything the edge writes at runtime (replay segments, media library, instance state). The bilbycast user owns both so it can write through.
+
 ```bash
-sudo mkdir -p /opt/bilbycast-edge
-sudo mkdir -p /etc/bilbycast
-sudo mkdir -p /var/lib/bilbycast/replay
-sudo mkdir -p /var/lib/bilbycast/media
+# Pick the version you extracted in step 1 — listed at the top of the tarball
+# path or in the binary itself (`./bilbycast-edge --version`).
+VERSION=0.58.0
 
-# /etc/bilbycast must be writable by the bilbycast user — the edge persists
-# manager-pushed config changes via an atomic write-temp-then-rename, which
-# requires write access on the *directory* (to create the .tmp file and the
-# rename target), not just on the files inside. Root-owned 0755 would silently
-# fail config-persistence the first time the manager pushes UpdateConfig.
-sudo chown bilbycast:bilbycast /etc/bilbycast
-sudo chmod 0750 /etc/bilbycast
+sudo mkdir -p /opt/bilbycast/edge/versions/${VERSION}
+sudo mkdir -p /var/lib/bilbycast/edge/replay
+sudo mkdir -p /var/lib/bilbycast/edge/media
 
-sudo chown -R bilbycast:bilbycast /var/lib/bilbycast
-sudo chmod 750 /var/lib/bilbycast
-sudo chmod 750 /var/lib/bilbycast/replay
-sudo chmod 750 /var/lib/bilbycast/media
+sudo chown -R bilbycast:bilbycast /opt/bilbycast /var/lib/bilbycast
+sudo chmod 0750 /opt/bilbycast/edge /var/lib/bilbycast/edge
+sudo chmod 0750 /var/lib/bilbycast/edge/replay /var/lib/bilbycast/edge/media
 ```
+
+Why bilbycast owns the install root: the upgrade module (`bilbycast-edge/src/upgrade/`) creates `versions/<new>/`, atomically swaps the `current` symlink, and prunes old versions — all running as the service user. Root-owned would block the swap silently.
 
 Recordings (replay) and the media-player library can grow large — give them their own filesystem if you can.
 
-## 3. Install the binary
+## 3. Install the tarball into `versions/<v>/`
 
-From inside the extracted tarball directory:
-
-```bash
-sudo install -m 0755 -o bilbycast -g bilbycast bilbycast-edge /opt/bilbycast-edge/bilbycast-edge
-```
-
-If you'd like the licence files alongside the binary:
+From inside the extracted tarball directory, copy the **whole tree** (binary + licence files + `packaging/` scripts) into the matching `versions/` subdirectory and atomically point `current` at it:
 
 ```bash
-sudo install -m 0644 LICENSE NOTICE /opt/bilbycast-edge/
-# Full variant only — the GPL'd component licences:
-sudo install -m 0644 COPYING.GPL /opt/bilbycast-edge/ 2>/dev/null || true
+# `./* `expands to everything in the extracted tarball
+sudo cp -r ./* /opt/bilbycast/edge/versions/${VERSION}/
+sudo chown -R bilbycast:bilbycast /opt/bilbycast/edge/versions/${VERSION}
+sudo chmod 0755 /opt/bilbycast/edge/versions/${VERSION}/bilbycast-edge
+
+# Atomic symlink swap so `current` always points at a real version dir.
+sudo -u bilbycast ln -sfn versions/${VERSION} /opt/bilbycast/edge/current.tmp
+sudo -u bilbycast mv -Tf /opt/bilbycast/edge/current.tmp /opt/bilbycast/edge/current
 ```
+
+Verify the symlink resolves:
+
+```bash
+ls -la /opt/bilbycast/edge/current/bilbycast-edge
+# → /opt/bilbycast/edge/current -> versions/0.58.0
+# → versions/0.58.0/bilbycast-edge (executable)
+```
+
+The `packaging/` scripts referenced later (`provision-edge-node.sh`, `setup-etf-qdisc.sh`) land under `/opt/bilbycast/edge/current/packaging/` automatically.
 
 ## 4. Install the config
 
-The setup wizard (or your manual config in step 5 of [Install an edge node](/edge/getting-started/)) wrote `config.json` and `secrets.json` next to the binary. Move them into the standard locations:
+The setup wizard (or your manual config in step 5 of [Install an edge node](/edge/getting-started/)) wrote `config.json` and `secrets.json` next to the binary. Move them into the install root so they sit alongside the `current` symlink — both the running edge and any future-installed version reference the same files:
 
 ```bash
-# edge.json: bilbycast OWNS it (not root) — the edge writes back to
-# this file when the manager pushes UpdateConfig / Create*/Update*/
-# Delete* commands for inputs, outputs, flows, or tunnels
-# (`config/persistence.rs::save_config_split`). Root-owned 0640 would
-# block those writes silently — operator-visible UI changes would
-# disappear on the next restart.
-sudo install -m 0640 -o bilbycast -g bilbycast config.json /etc/bilbycast/edge.json
-sudo install -m 0600 -o bilbycast -g bilbycast secrets.json /etc/bilbycast/edge.secrets.json
+sudo install -m 0640 -o bilbycast -g bilbycast \
+  config.json  /opt/bilbycast/edge/config.json
+sudo install -m 0600 -o bilbycast -g bilbycast \
+  secrets.json /opt/bilbycast/edge/secrets.json
 ```
 
-The edge auto-pairs `secrets.json` from the same directory as the config file, so no path reference inside `edge.json` is required. If you renamed `secrets.json` to something else, point at it via the `secrets_path` field — see [Configuration reference](/edge/configuration/).
+`config.json` is bilbycast-owned (not root) because the edge writes back to it when the manager pushes `UpdateConfig` / Create-/Update-/Delete-Input/Output/Flow/Tunnel commands (`config/persistence.rs::save_config_split`). Root-owned would block the persistence silently — every UI-driven config change would disappear on the next restart. The edge auto-pairs `secrets.json` from the same directory as the config, so no path reference is required inside `config.json`.
 
 ## 5. Drop the systemd unit
 
@@ -95,8 +102,11 @@ Wants=network-online.target
 Type=simple
 User=bilbycast
 Group=bilbycast
-WorkingDirectory=/var/lib/bilbycast
-ExecStart=/opt/bilbycast-edge/bilbycast-edge --config /etc/bilbycast/edge.json
+WorkingDirectory=/var/lib/bilbycast/edge
+
+# ExecStart resolves through the `current` symlink, so a successful
+# manager-driven upgrade lands automatically when the old binary exits.
+ExecStart=/opt/bilbycast/edge/current/bilbycast-edge --config /opt/bilbycast/edge/config.json
 Restart=on-failure
 RestartSec=2s
 
@@ -112,24 +122,26 @@ LimitRTPRIO=50
 
 # Logging + storage roots
 Environment=RUST_LOG=info
-Environment=BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/replay
-Environment=BILBYCAST_MEDIA_DIR=/var/lib/bilbycast/media
+Environment=BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/edge/replay
+Environment=BILBYCAST_MEDIA_DIR=/var/lib/bilbycast/edge/media
 
 # Uncomment if your manager uses a self-signed certificate:
 # Environment=BILBYCAST_ALLOW_INSECURE=1
 
-# Hardening — sensible defaults that don't break anything the edge does
+# Hardening — sensible defaults that don't break anything the edge does.
+# ReadWritePaths covers both the install root (for upgrades + config
+# persistence) and the data root (replay / media / instance state).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/bilbycast /etc/bilbycast
+ReadWritePaths=/opt/bilbycast/edge /var/lib/bilbycast/edge
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optional but recommended. The edge only needs read-write access to `/var/lib/bilbycast/` and reads `/etc/bilbycast/`; everything else stays read-only.
+The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optional but recommended. `ReadWritePaths` allows writes to the install root (so the upgrade module can manipulate `versions/` and the edge can persist `config.json`) and the data root (so replay / media / instance state can land).
 
 **Wire pacing runs automatically on every UDP-socket-owning output**
 (UDP, RTP including FEC and 2022-7 dual-leg, 302M, ST 2110-20/-23/-30/-31/-40).
@@ -254,24 +266,40 @@ See [Remote Upgrade](/manager/remote-upgrade/) for the full operator runbook (pe
 
 **Upgrade manually (fallback):**
 
-If you can't reach the manager UI, or you're upgrading the very first edge before the manager-driven path is wired up, you can still upgrade by hand:
+If you can't reach the manager UI, or you're upgrading the very first edge before the manager-driven path is wired up, you can still upgrade by hand. Drop the new binary next to the old one under `versions/`, then atomically swap the `current` symlink:
 
 ```bash
+NEW_VERSION=0.59.0   # the version you just downloaded
+
+# Re-run step 1 of "Install an edge node" to fetch + extract the new tarball.
+
 sudo systemctl stop bilbycast-edge
-# Re-download + extract the latest tarball (see step 1 of "Install an edge node")
-sudo install -m 0755 -o bilbycast -g bilbycast bilbycast-edge /opt/bilbycast-edge/bilbycast-edge
+
+sudo mkdir -p /opt/bilbycast/edge/versions/${NEW_VERSION}
+sudo install -m 0755 -o bilbycast -g bilbycast \
+  bilbycast-edge /opt/bilbycast/edge/versions/${NEW_VERSION}/bilbycast-edge
+
+# Atomic symlink swap. Old version stays in versions/ for instant rollback.
+sudo ln -sfn versions/${NEW_VERSION} /opt/bilbycast/edge/current.tmp
+sudo mv -Tf /opt/bilbycast/edge/current.tmp /opt/bilbycast/edge/current
+
 sudo systemctl start bilbycast-edge
+
+# Rollback (if the new version misbehaves): point current at the old version dir.
+#   sudo ln -sfn versions/0.58.0 /opt/bilbycast/edge/current.tmp
+#   sudo mv -Tf /opt/bilbycast/edge/current.tmp /opt/bilbycast/edge/current
+#   sudo systemctl restart bilbycast-edge
 ```
 
-The config + secrets in `/etc/bilbycast/` carry across upgrades untouched.
+The config + secrets at `/opt/bilbycast/edge/{config.json,secrets.json}` carry across upgrades untouched.
 
 ## Common failures
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Failed to start bilbycast-edge` with `Permission denied` on `/var/lib/bilbycast` | The `bilbycast` user can't write to a path. | `sudo chown -R bilbycast:bilbycast /var/lib/bilbycast` |
+| `Failed to start bilbycast-edge` with `Permission denied` on `/var/lib/bilbycast/edge` or `/opt/bilbycast/edge` | The `bilbycast` user can't write to a path. | `sudo chown -R bilbycast:bilbycast /var/lib/bilbycast /opt/bilbycast` |
 | `bind: address already in use` on port 8080 | Something else is already on `:8080`. | Free the port, or override with `--port 8090` in the unit's `ExecStart`. |
-| `auth_failed` events in the manager log, edge keeps re-trying | Registration token already used or expired, or the node was deleted from the manager. | Re-register: in the manager UI generate a fresh token, paste it into `/etc/bilbycast/edge.secrets.json`, restart the service. |
+| `auth_failed` events in the manager log, edge keeps re-trying | Registration token already used or expired, or the node was deleted from the manager. | Re-register: in the manager UI generate a fresh token, paste it into `/opt/bilbycast/edge/secrets.json`, restart the service. |
 | Edge connects but `accept_self_signed_cert` is silently ignored | The `BILBYCAST_ALLOW_INSECURE=1` safety guard isn't set. | Uncomment the matching line in the unit, then `daemon-reload && restart`. |
 | AppArmor blocks `/dev/dri` or ALSA on a display-output flow | Distribution AppArmor profile is too strict. | Add `/dev/dri/** rw,` and `/dev/snd/** rw,` to the profile, or run with hardening relaxed (`ProtectSystem=full`). |
 
@@ -313,7 +341,7 @@ If you'd rather lay each piece down by hand, the manual three-step walkthrough b
 ### Step 1: install the ETF qdisc on the egress NIC
 
 ```bash
-sudo bash /opt/bilbycast-edge/packaging/setup-etf-qdisc.sh enp1s0
+sudo bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
 ```
 
 Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 offload` on the prioritized class. `offload` enables hardware tx pacing on supported NICs (Mellanox CX-6 / CX-7, Intel E810, Intel i210); silently degrades to software ETF on unsupported NICs (still 1–10 µs jitter).

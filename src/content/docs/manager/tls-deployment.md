@@ -25,23 +25,25 @@ The simplest path for any manager that has a stable public DNS name. The manager
 
 ### Setup
 
-Append the ACME env vars to your existing `manager.env` (and drop any prior file-based TLS lines so they don't conflict), then restart the manager:
+Two paths to enable ACME, same outcome:
 
-```bash
-sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
-cat >> manager.env <<'EOF'
-BILBYCAST_ACME_ENABLED=true
-BILBYCAST_ACME_DOMAIN=manager.example.com
-BILBYCAST_ACME_EMAIL=ops@example.com
-# BILBYCAST_ACME_HTTP_PORT=80         # Default; only set if non-standard
-BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
-EOF
+- **Manager UI** (recommended for interactive installs). Settings → TLS / ACME → tick **Enable Let's Encrypt** → fill in **Domain** and **Contact email** → **Save**. The manager kicks off issuance, hot-reloads the cert when it lands, and lets you watch status flip from Requesting → Active in the UI.
+- **Env vars** (declarative provisioning — Ansible / Terraform / Compose). Append to your existing `manager.env`, drop any prior file-based TLS lines, restart:
 
-set -a; . ./manager.env; set +a
-sudo -E ./bilbycast-manager serve --config config/default.toml
-```
+  ```bash
+  sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
+  cat >> manager.env <<'EOF'
+  BILBYCAST_ACME_ENABLED=true
+  BILBYCAST_ACME_DOMAIN=manager.example.com
+  BILBYCAST_ACME_EMAIL=ops@example.com
+  # BILBYCAST_ACME_HTTP_PORT=80         # Default; only set if non-standard
+  BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
+  EOF
+  set -a; . ./manager.env; set +a
+  sudo -E ./bilbycast-manager serve --config config/default.toml
+  ```
 
-The end-to-end flow (DNS pre-flight, port-80 reachability check, log lines that confirm issuance, staging vs production endpoints) is documented in the install guide's [ACME walkthrough](/manager/getting-started/#acme--lets-encrypt-walkthrough).
+The end-to-end flow (DNS pre-flight, port-80 reachability check, log lines that confirm issuance, staging vs production endpoints, UI vs env-var precedence) is documented in the install guide's [ACME walkthrough](/manager/getting-started/#acme--lets-encrypt-walkthrough).
 
 Requirements:
 

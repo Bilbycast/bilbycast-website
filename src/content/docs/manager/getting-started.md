@@ -377,73 +377,105 @@ Sign in with the admin credentials you set in step 4. From here:
 
 ## TLS
 
-The self-signed cert generated in step 3 works for evaluation. For production, switch to one of three modes by editing `manager.env` (foreground) or `/etc/bilbycast-manager/manager.env` (systemd), then restart the service:
+The self-signed cert from step 3 works for evaluation. For production, switch to a real cert in one of three modes:
 
-- **ACME / Let's Encrypt** — see the [ACME walkthrough](#acme--lets-encrypt-walkthrough) below for the full pre-flight + env-file change + restart sequence. Short version: the manager auto-provisions and renews; you need a public DNS record for the manager hostname and inbound TCP 80 reachable from the internet (Let's Encrypt's HTTP-01 challenge connects to the box on port 80).
-- **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to PEM paths from a real CA.
-- **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and trust your LB's forwarded headers via `BILBYCAST_TRUST_PROXY_HEADER=1` + `BILBYCAST_TRUSTED_PROXIES=<CIDR list>`.
+- **ACME / Let's Encrypt** — recommended for any public-internet manager with a stable DNS name. Configure from the **manager UI** (Settings → TLS / ACME — see the [ACME walkthrough](#acme--lets-encrypt-walkthrough) below) or via env vars for declarative provisioning. The manager auto-issues and auto-renews. Needs a public DNS record + inbound TCP 80 reachable.
+- **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to PEM paths from your own CA (internal PKI, manual certbot, HSM-backed keys).
+- **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and your LB terminates TLS.
 
-Full detail: [TLS deployment](/manager/tls-deployment/).
+Full detail (including the file-based and behind-proxy setup blocks): [TLS deployment](/manager/tls-deployment/).
 
 ### ACME / Let's Encrypt walkthrough
 
-Replaces the self-signed cert from step 3 with a real Let's Encrypt cert that browsers trust out of the box. Once enabled, the manager auto-renews the cert ~30 days before expiry.
+Replaces the self-signed cert from step 3 with a real Let's Encrypt cert that browsers trust out of the box. Once enabled, the manager auto-renews ~30 days before expiry — set and forget.
 
-**Prerequisites** — all four must be true before changing the env file, otherwise issuance fails and you fall back to the self-signed cert.
+**Prerequisites** — all four must be true; otherwise issuance fails and the manager keeps serving the self-signed fallback.
 
-1. The manager is already running on `https://<vm-ip>:8443/` against the self-signed cert from step 3 (you can log in).
-2. A public **DNS A record** (and ideally AAAA for IPv6) for the hostname you'll request — e.g. `manager.example.com` → your VM's public IP. Verify with `dig +short manager.example.com` against the output of `curl -s https://api.ipify.org` from the VM; they must match.
-3. **Inbound TCP port 80** is reachable from the public internet (Let's Encrypt's HTTP-01 challenge connects on 80). Check the cloud provider's security group / firewall *and* `sudo ufw status` on the VM. From your laptop: `curl -v http://manager.example.com/ --max-time 5` — a "connection refused" is fine (means the packet reached the host); a *timeout* means the firewall is blocking.
-4. An **email address** for the Let's Encrypt account — receives renewal failure alerts.
+1. The manager is already running on `https://<vm-ip>:8443/` and you can log in (step 6 completed).
+2. A public **DNS A record** (and ideally AAAA for IPv6) for the hostname you'll request — e.g. `manager.example.com` → your VM's public IP. Verify with `dig +short manager.example.com` against `curl -s https://api.ipify.org` from the VM; they must match. If your DNS is behind a CDN/proxy (Cloudflare's orange cloud, etc.), set it to "DNS only" or Let's Encrypt's challenge won't reach the manager.
+3. **Inbound TCP port 80** reachable from the public internet (Let's Encrypt's HTTP-01 challenge connects on 80). Check the cloud provider's security group / firewall. From your laptop: `curl -v http://manager.example.com/ --max-time 5` — `308 Permanent Redirect` from the manager is fine; a *timeout* means the firewall is blocking.
+4. An **email address** for the Let's Encrypt account (renewal failure alerts).
 
-**Apply the change.** The env file you edit and the restart command both depend on which install mode you used in step 5. Pick the matching block.
+#### Recommended — UI
 
-#### Foreground install
+Easiest for one-off installs and the only path that lets you watch ACME status live without tailing the journal.
+
+1. Sign in to the manager at `https://<vm-ip>:8443/` (or `https://localhost:8443/` if you SSH-tunnelled).
+2. Go to **Settings → TLS / ACME** (under the admin area).
+3. Tick **Enable Let's Encrypt**.
+4. Fill in **Domain** (the FQDN you set up DNS for) and **Contact email**.
+5. Leave **Use staging environment** unticked unless you're testing the plumbing (staging certs are valid but not trusted by browsers — see [TLS deployment](/manager/tls-deployment/) for when to use it).
+6. Click **Save**.
+
+The manager kicks off issuance immediately. Status flips to **Requesting → Active** in the UI within ~10 seconds when issuance succeeds. The new cert hot-reloads into the TLS listener — no restart, no operator action.
+
+Verify the live cert from the VM:
 
 ```bash
-# 1. Stop the foreground serve in its terminal (Ctrl-C).
-# 2. Edit the manager.env in your tarball directory (the one you wrote in step 3).
+echo | openssl s_client -servername <your-domain> -connect <your-domain>:8443 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+```
+
+`issuer=… O = Let's Encrypt, CN = E…` confirms the real cert is being served. Then in your browser open `https://<your-domain>:8443/` in a **private window** (your earlier session may have cached the self-signed cert exception) — you should see the green lock.
+
+#### Alternative — declarative env vars
+
+For Ansible / Terraform / Docker-Compose / CI provisioning where the manager should boot straight into ACME with no UI step. Same outcome as the UI path; you're setting the same DB-backed fields, just from the environment instead.
+
+Pick the block for your install mode in step 5:
+
+##### Foreground install
+
+```bash
+# 1. Stop the foreground serve (Ctrl-C in its terminal).
+# 2. Drop self-signed cert lines, add ACME lines to the manager.env in your tarball dir.
 sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
 cat >> manager.env <<'EOF'
 BILBYCAST_ACME_ENABLED=true
-BILBYCAST_ACME_DOMAIN=manager.example.com
-BILBYCAST_ACME_EMAIL=ops@example.com
+BILBYCAST_ACME_DOMAIN=REPLACE_WITH_YOUR_DOMAIN   # e.g. manager.acme-corp.com
+BILBYCAST_ACME_EMAIL=REPLACE_WITH_YOUR_EMAIL     # e.g. ops@acme-corp.com
 BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
 EOF
 
-# 3. ACME state directory — your user owns it
 sudo mkdir -p /var/lib/bilbycast-manager/acme
 sudo chown -R "$USER":"$USER" /var/lib/bilbycast-manager/acme
 
-# 4. Reload env into shell, then restart. Port 80 < 1024 needs root or
-#    CAP_NET_BIND_SERVICE — sudo -E is the easy path.
 set -a; . ./manager.env; set +a
-sudo -E ./bilbycast-manager serve --config config/default.toml
+sudo -E ./bilbycast-manager serve --config config/default.toml   # sudo -E to bind port 80
 ```
 
-#### Systemd install
+##### Systemd install
 
 ```bash
-# 1. Stop the running service so ports 8443 / 80 free up cleanly
 sudo systemctl stop bilbycast-manager
-
-# 2. Edit the env file the unit actually reads (NOT the one in your home dir)
 sudo sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' /etc/bilbycast-manager/manager.env
 sudo tee -a /etc/bilbycast-manager/manager.env > /dev/null <<'EOF'
 BILBYCAST_ACME_ENABLED=true
-BILBYCAST_ACME_DOMAIN=manager.example.com
-BILBYCAST_ACME_EMAIL=ops@example.com
+BILBYCAST_ACME_DOMAIN=REPLACE_WITH_YOUR_DOMAIN
+BILBYCAST_ACME_EMAIL=REPLACE_WITH_YOUR_EMAIL
 BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
 EOF
 
-# 3. ACME state directory — bilbycast service user owns it
 sudo mkdir -p /var/lib/bilbycast-manager/acme
 sudo chown -R bilbycast:bilbycast /var/lib/bilbycast-manager/acme
 
-# 4. Start. The unit already has CAP_NET_BIND_SERVICE so it can bind 80.
 sudo systemctl start bilbycast-manager
 sudo journalctl -u bilbycast-manager -f
 ```
+
+#### UI vs env vars — pick one source of truth
+
+Env vars **override** the UI for `_ENABLED` / `_DOMAIN` / `_EMAIL` / `_STAGING` at boot. If you set both, the UI form appears to do nothing — silently. If you started with env vars and want to switch to UI-managed (so the form is live), remove the env lines first:
+
+```bash
+# Systemd
+sudo sed -i '/^BILBYCAST_ACME_/d' /etc/bilbycast-manager/manager.env
+sudo systemctl restart bilbycast-manager
+
+# Foreground: same `sed -i '/^BILBYCAST_ACME_/d' manager.env`, then re-run serve
+```
+
+The cert itself lives in `BILBYCAST_ACME_DIR` (default `/var/lib/bilbycast-manager/acme/`) and survives the env-var cleanup — you're only changing where future config comes from, not the cert state.
 
 **Watch for these log lines** to confirm issuance:
 

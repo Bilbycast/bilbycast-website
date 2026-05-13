@@ -94,10 +94,19 @@ sudo systemctl enable --now docker
 
 You can either run `docker` via `sudo` (used throughout this page) or add yourself to the `docker` group: `sudo usermod -aG docker $USER` then log out + back in.
 
-Write a minimal compose file in the current directory and bring it up. **These are dev-only credentials** — never expose this Postgres beyond localhost and never reuse `bilbycast_dev` for production:
+Pick a Postgres password for this install. The doc threads it through the compose file (step 2), the verify step (step 2), and the manager DSN (step 3) — change it once and everything downstream uses your value. **Never use this password outside localhost or for production.**
 
 ```bash
-cat > docker-compose.dev.yml <<'EOF'
+# Either pick one yourself, or generate a strong random one:
+PG_PASSWORD="clean3954"                     # ← edit to whatever you want
+# PG_PASSWORD="$(openssl rand -hex 16)"     # ← uncomment for a random 32-hex-char password
+echo "Postgres password for this install: ${PG_PASSWORD}"
+```
+
+Write the compose file (unquoted `EOF` so `${PG_PASSWORD}` substitutes in), then bring Postgres up:
+
+```bash
+cat > docker-compose.dev.yml <<EOF
 services:
   postgres:
     image: postgres:18-alpine
@@ -106,7 +115,7 @@ services:
     environment:
       POSTGRES_DB: bilbycast
       POSTGRES_USER: bilbycast
-      POSTGRES_PASSWORD: bilbycast_dev
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
     ports:
       - "5433:5432"
     volumes:
@@ -121,16 +130,16 @@ volumes:
   bilbycast_pg_data:
 EOF
 
-# Tear down anything leftover from a previous attempt so the
-# POSTGRES_PASSWORD above actually takes effect. Both lines are
-# idempotent (no-op when nothing exists), and safe at this point in
-# the install because no real data has been created yet.
+# Tear down anything leftover from a previous attempt so the new
+# POSTGRES_PASSWORD actually takes effect. Both lines are idempotent
+# (no-op when nothing exists), and safe at this point in the install
+# because no real data has been created yet.
 sudo docker rm -f bilbycast-manager-pg 2>/dev/null || true
 sudo docker compose -p bilbycast -f docker-compose.dev.yml down -v 2>/dev/null || true
 
 sudo docker compose -p bilbycast -f docker-compose.dev.yml up -d
 
-# Wait (up to 60s) for the healthcheck to go green before continuing.
+# Wait (up to 60s) for the healthcheck to go green.
 for i in $(seq 1 30); do
     state="$(sudo docker inspect --format='{{.State.Health.Status}}' bilbycast-manager-pg 2>/dev/null || echo missing)"
     [ "$state" = "healthy" ] && echo "Postgres healthy" && break
@@ -139,17 +148,17 @@ done
 [ "$state" = "healthy" ] || echo "WARNING: Postgres did not become healthy within 60s. Run 'sudo docker logs bilbycast-manager-pg' before continuing."
 ```
 
-Confirm the container is up and the manager's credentials work over TCP (a Unix-socket check from inside the container would pass on `trust` auth even if the password is wrong, so this step has to force `-h localhost` to exercise the real TCP/`scram-sha-256` path):
+Confirm the container is up **and** the password actually works over TCP. A `psql` connection without `-h` would use the Unix socket — postgres:alpine maps that to `trust` auth, so it returns rows even on a wrong password. Forcing `-h localhost -p 5432` inside the container exercises the real TCP/`scram-sha-256` path the manager uses:
 
 ```bash
 sudo docker ps --filter "name=bilbycast-manager-pg" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-sudo docker exec -e PGPASSWORD=bilbycast_dev bilbycast-manager-pg \
+sudo docker exec -e PGPASSWORD="${PG_PASSWORD}" bilbycast-manager-pg \
     psql -h localhost -p 5432 -U bilbycast -d bilbycast -c "SELECT 'ok' AS password_check;"
 ```
 
 Expected: one row from `docker ps` showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`, and a `psql` row of `password_check | ok`. If `psql` errors with `password authentication failed`, the container is from a previous attempt with a stale password — re-run the teardown block above (the `docker rm -f` line is the critical one) and try again.
 
-Your DSN is now `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — this matches the `database_url` baked into `config/default.toml`, so you don't have to override it.
+Your DSN is `postgres://bilbycast:${PG_PASSWORD}@localhost:5433/bilbycast`. You'll add it to `manager.env` in step 3 — keep this terminal open so `PG_PASSWORD` carries over.
 
 ### Path B — Existing Postgres cluster
 
@@ -160,7 +169,13 @@ sudo -u postgres createuser --pwprompt bilbycast      # set a strong password
 sudo -u postgres createdb -O bilbycast bilbycast
 ```
 
-Your DSN is `postgres://bilbycast:<password-you-just-set>@<host>:5432/bilbycast`. You'll set this as `BILBYCAST_DATABASE_URL` in step 3.
+Then set a shell variable holding the full DSN — step 3 reads it:
+
+```bash
+MANAGER_DATABASE_URL="postgres://bilbycast:YOUR_PASSWORD@YOUR_HOST:5432/bilbycast"   # ← fill in
+```
+
+(Path A users skip this — step 3 builds the DSN from `PG_PASSWORD` automatically.)
 
 ## 3. Configure secrets and TLS
 
@@ -188,24 +203,21 @@ openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.cr
   -addext "subjectAltName=${SAN}"
 chmod 600 certs/server.key
 
-# manager.env — secrets + cert paths, source this before setup / serve
+# Resolve the DSN. Path A built PG_PASSWORD in step 2; Path B built
+# MANAGER_DATABASE_URL directly. If only PG_PASSWORD is set, assume
+# the Docker localhost:5433 shape.
+: "${MANAGER_DATABASE_URL:=postgres://bilbycast:${PG_PASSWORD}@localhost:5433/bilbycast}"
+
+# manager.env — secrets + DSN + cert paths, sourced before setup / serve
 cat > manager.env <<EOF
 BILBYCAST_JWT_SECRET=$(openssl rand -hex 32)
 BILBYCAST_MASTER_KEY=$(openssl rand -hex 32)
+BILBYCAST_DATABASE_URL=${MANAGER_DATABASE_URL}
 BILBYCAST_TLS_CERT=$(pwd)/certs/server.crt
 BILBYCAST_TLS_KEY=$(pwd)/certs/server.key
 EOF
 chmod 600 manager.env
 ```
-
-### Database URL — Path A vs Path B
-
-- **Path A (Docker, recommended for evaluation)** — no extra step. The compose file's DSN matches the `database_url` baked into `config/default.toml`, so the manager picks it up automatically.
-- **Path B (existing Postgres cluster)** — append the DSN you set up in step 2 so it overrides the config default. Replace `<password>` and `<host>` with the values you used:
-
-  ```bash
-  echo 'BILBYCAST_DATABASE_URL=postgres://bilbycast:<password>@<host>:5432/bilbycast' >> manager.env
-  ```
 
 ### Load the env into your shell
 

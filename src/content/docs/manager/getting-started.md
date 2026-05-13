@@ -465,17 +465,19 @@ sudo journalctl -u bilbycast-manager -f
 
 #### UI vs env vars — pick one source of truth
 
-Env vars **override** the UI for `_ENABLED` / `_DOMAIN` / `_EMAIL` / `_STAGING` at boot. If you set both, the UI form appears to do nothing — silently. If you started with env vars and want to switch to UI-managed (so the form is live), remove the env lines first:
+Env vars **override** the UI for `_ENABLED` / `_DOMAIN` / `_EMAIL` / `_STAGING` at boot. If you set both, the UI form appears to do nothing — silently. If you started with env vars and want to switch to UI-managed (so the form is live), remove **only those four** env lines:
 
 ```bash
 # Systemd
-sudo sed -i '/^BILBYCAST_ACME_/d' /etc/bilbycast-manager/manager.env
+sudo sed -i '/^BILBYCAST_ACME_ENABLED=/d; /^BILBYCAST_ACME_DOMAIN=/d; /^BILBYCAST_ACME_EMAIL=/d; /^BILBYCAST_ACME_STAGING=/d' /etc/bilbycast-manager/manager.env
 sudo systemctl restart bilbycast-manager
 
-# Foreground: same `sed -i '/^BILBYCAST_ACME_/d' manager.env`, then re-run serve
+# Foreground: same sed against `manager.env`, then re-run serve
 ```
 
-The cert itself lives in `BILBYCAST_ACME_DIR` (default `/var/lib/bilbycast-manager/acme/`) and survives the env-var cleanup — you're only changing where future config comes from, not the cert state.
+**Keep `BILBYCAST_ACME_DIR`** in the env file. That one's env-only — there's no DB fallback for it — and the systemd unit's hardened filesystem (`ProtectSystem=strict`) makes the default location (`data/acme` under the working dir) read-only. Removing `BILBYCAST_ACME_DIR` makes the manager forget where the cert lives and fall back to self-signed at next boot.
+
+The cert files themselves live in `BILBYCAST_ACME_DIR` (`/var/lib/bilbycast-manager/acme/`) and survive the env cleanup — you're only changing where future config (domain/email/etc.) comes from.
 
 **Watch for these log lines** to confirm issuance:
 

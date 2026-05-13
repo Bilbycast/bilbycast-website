@@ -178,7 +178,14 @@ The file doesn't have to exist yet — pointing `--config` at a path whose **par
 
 Two things happen on first boot:
 
-- The edge prints a **setup token** to stdout. Copy it down if you'll be using the wizard from a different machine — from the local console (`http://localhost:8080/setup`) the wizard accepts requests directly without it.
+- The edge prints a **setup token** to stdout. Copy it down if you'll be using the wizard from a different machine — the LAN-side `/setup` form has a **Setup Token** field that requires this value. **Loopback callers** (`http://localhost:8080/setup` or `http://127.0.0.1:8080/setup`) bypass the token check entirely, so you only need it when reaching the wizard from a separate machine. If you missed the banner, re-print it without restarting the wizard:
+
+  ```bash
+  ./bilbycast-edge --config config.json --print-setup-token
+  ```
+
+  This prints the same token and exits; the persistent value stays valid until you complete registration with the manager.
+
 - The REST API and setup wizard come up on **port 8080**.
 
 Open the wizard:

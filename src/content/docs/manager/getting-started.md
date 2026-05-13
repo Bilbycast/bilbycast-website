@@ -120,6 +120,12 @@ services:
 volumes:
   bilbycast_pg_data:
 EOF
+
+# If you tried this install before, tear down any leftover Postgres container
+# AND its volume so the new POSTGRES_PASSWORD above actually takes effect.
+# (Safe for evaluation — you haven't created any data yet.)
+sudo docker compose -p bilbycast -f docker-compose.dev.yml down -v 2>/dev/null || true
+
 sudo docker compose -p bilbycast -f docker-compose.dev.yml up -d
 ```
 

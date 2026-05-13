@@ -309,13 +309,21 @@ sudo cp -r ./* /opt/bilbycast-manager/
 sudo chown -R bilbycast:bilbycast /opt/bilbycast-manager /var/lib/bilbycast-manager
 
 # 2. Move the secrets file under /etc with root:bilbycast 0640,
-#    then rewrite the TLS paths to point at the /opt copy
-#    (the originals are under your home dir, which the service user can't read).
+#    rewrite the TLS paths to point at the /opt copy (the originals
+#    are under your home dir, which the service user can't read),
+#    and pin the ACME state directory to a writable location (the
+#    default `data/acme` would land under the read-only /opt mount
+#    once ProtectSystem=strict kicks in below — so any future ACME
+#    enablement, UI or env-var, can write there).
 sudo install -m 0640 -o root -g bilbycast manager.env /etc/bilbycast-manager/manager.env
 sudo sed -i \
   -e 's|^BILBYCAST_TLS_CERT=.*|BILBYCAST_TLS_CERT=/opt/bilbycast-manager/certs/server.crt|' \
   -e 's|^BILBYCAST_TLS_KEY=.*|BILBYCAST_TLS_KEY=/opt/bilbycast-manager/certs/server.key|' \
   /etc/bilbycast-manager/manager.env
+echo 'BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme' | sudo tee -a /etc/bilbycast-manager/manager.env > /dev/null
+
+sudo mkdir -p /var/lib/bilbycast-manager/acme
+sudo chown -R bilbycast:bilbycast /var/lib/bilbycast-manager/acme
 
 # 3. Systemd unit
 sudo tee /etc/systemd/system/bilbycast-manager.service > /dev/null <<'EOF'
@@ -398,7 +406,7 @@ Replaces the self-signed cert from step 3 with a real Let's Encrypt cert that br
 
 #### Recommended — UI
 
-Easiest for one-off installs and the only path that lets you watch ACME status live without tailing the journal.
+Easiest for one-off installs and the only path that lets you watch ACME status live without tailing the journal. **No env-file edits required** — step 5 already pinned `BILBYCAST_ACME_DIR` to a writable location (`/var/lib/bilbycast-manager/acme` on systemd; tarball-relative `data/acme` on foreground), so the UI can issue and renew without filesystem surprises.
 
 1. Sign in to the manager at `https://<vm-ip>:8443/` (or `https://localhost:8443/` if you SSH-tunnelled).
 2. Go to **Settings → TLS / ACME** (under the admin area).
@@ -446,6 +454,8 @@ sudo -E ./bilbycast-manager serve --config config/default.toml   # sudo -E to bi
 
 ##### Systemd install
 
+`BILBYCAST_ACME_DIR` is already set by step 5's systemd block — you only need the three UI-mirrored vars here.
+
 ```bash
 sudo systemctl stop bilbycast-manager
 sudo sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' /etc/bilbycast-manager/manager.env
@@ -453,11 +463,7 @@ sudo tee -a /etc/bilbycast-manager/manager.env > /dev/null <<'EOF'
 BILBYCAST_ACME_ENABLED=true
 BILBYCAST_ACME_DOMAIN=REPLACE_WITH_YOUR_DOMAIN
 BILBYCAST_ACME_EMAIL=REPLACE_WITH_YOUR_EMAIL
-BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
 EOF
-
-sudo mkdir -p /var/lib/bilbycast-manager/acme
-sudo chown -R bilbycast:bilbycast /var/lib/bilbycast-manager/acme
 
 sudo systemctl start bilbycast-manager
 sudo journalctl -u bilbycast-manager -f

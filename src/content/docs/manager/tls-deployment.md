@@ -53,9 +53,9 @@ Requirements:
 
 ### Renewal and hot-reload
 
-The manager checks the cert for renewal needs daily. When the cert is within 30 days of expiry, it triggers a renewal in the background. **The new cert is hot-reloaded without restarting the manager** — active WebSocket connections stay up, and new connections immediately use the new cert.
+The manager runs a background task that checks the cert **every 12 hours** (plus an immediate check on process startup). When the cert is within 30 days of expiry — or missing entirely — it triggers a renewal in the background. **The new cert is hot-reloaded without restarting the manager** — active WebSocket connections stay up, and new connections immediately use the new cert.
 
-Renewal failures are logged as `tls.renewal_failed` events. If renewal fails repeatedly and the cert reaches its expiry, new connections will fail; the manager keeps trying to renew until it succeeds.
+Renewal failures are logged as `tls.renewal_failed` events. The retry uses exponential backoff (1h initial, capped at 24h). The manager keeps retrying until renewal succeeds or the cert actually expires.
 
 ### Backups
 

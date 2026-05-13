@@ -17,7 +17,9 @@ If you haven't completed the [edge install + setup-wizard registration](/edge/ge
 ## 1. Create the service user
 
 ```bash
-sudo useradd -r -s /sbin/nologin -d /var/lib/bilbycast bilbycast
+# `|| true` — the bilbycast user may already exist from a manager or
+# relay install on this box; useradd would otherwise exit non-zero.
+sudo useradd -r -s /sbin/nologin -d /var/lib/bilbycast bilbycast || true
 ```
 
 `-r` makes a system user (no login, no home created). `/sbin/nologin` blocks interactive login. The home stub at `/var/lib/bilbycast` is just a sentinel — we'll create the real data dirs below.
@@ -59,11 +61,17 @@ sudo install -m 0644 COPYING.GPL /opt/bilbycast-edge/ 2>/dev/null || true
 The setup wizard (or your manual config in step 5 of [Install an edge node](/edge/getting-started/)) wrote `config.json` and `secrets.json` next to the binary. Move them into the standard locations:
 
 ```bash
-sudo install -m 0640 -o root -g bilbycast config.json /etc/bilbycast/edge.json
+# edge.json: bilbycast OWNS it (not root) — the edge writes back to
+# this file when the manager pushes UpdateConfig / Create*/Update*/
+# Delete* commands for inputs, outputs, flows, or tunnels
+# (`config/persistence.rs::save_config_split`). Root-owned 0640 would
+# block those writes silently — operator-visible UI changes would
+# disappear on the next restart.
+sudo install -m 0640 -o bilbycast -g bilbycast config.json /etc/bilbycast/edge.json
 sudo install -m 0600 -o bilbycast -g bilbycast secrets.json /etc/bilbycast/edge.secrets.json
 ```
 
-Also drop the matching pointer inside `/etc/bilbycast/edge.json` so the binary finds the secrets — open it with `sudoedit /etc/bilbycast/edge.json` and confirm any path references inside point at `/etc/bilbycast/edge.secrets.json`. Most installs don't need this — the edge auto-pairs `secrets.json` from the same directory as the config file.
+The edge auto-pairs `secrets.json` from the same directory as the config file, so no path reference inside `edge.json` is required. If you renamed `secrets.json` to something else, point at it via the `secrets_path` field — see [Configuration reference](/edge/configuration/).
 
 ## 5. Drop the systemd unit
 
@@ -261,7 +269,7 @@ The config + secrets in `/etc/bilbycast/` carry across upgrades untouched.
 
 ## What about the manager?
 
-The `bilbycast-manager init` flow (see [Install the manager](/manager/getting-started/#3-install--guided-recommended)) already drops a working systemd unit at `/etc/bilbycast-manager/bilbycast-manager.service` — there's no separate "manager Ubuntu service" guide because the installer is the guide. Inspect the generated unit, then `install` and `enable --now` it the same way you would the edge unit above.
+The manager install guide's [Production — systemd block](/manager/getting-started/#production--systemd) walks through the same pattern for the manager (service user, `/opt/bilbycast-manager/`, `/etc/bilbycast-manager/manager.env`, hardened unit with `ProtectSystem=strict`). There's no separate "manager Ubuntu service" guide because the install guide already covers it inline.
 
 ## ETF qdisc setup for tier-1 PCR accuracy and ST 2110-21 narrow profile
 

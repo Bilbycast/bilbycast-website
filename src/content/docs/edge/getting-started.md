@@ -50,7 +50,21 @@ Each tarball expands to a directory containing `bilbycast-edge`, the licence fil
 
 ### Verify the Sigstore signature (optional)
 
-Every release ships a Sigstore-signed `manifest.json` alongside the tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit, defending against a compromised GitHub release upload swapping the binary post-publish. Install [cosign](https://github.com/sigstore/cosign), then:
+Every release ships a Sigstore-signed `manifest.json` alongside the tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit, defending against a compromised GitHub release upload swapping the binary post-publish.
+
+Install [cosign](https://github.com/sigstore/cosign) — on Ubuntu / Debian the simplest path is the upstream static binary with SHA-256 verification:
+
+```bash
+COSIGN_VERSION=v2.4.1
+curl -fsSL -o /tmp/cosign \
+  "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+expected="$(curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" | awk '$2 == "cosign-linux-amd64" {print $1}')"
+got="$(sha256sum /tmp/cosign | awk '{print $1}')"
+[[ -n "${expected}" && "${got}" == "${expected}" ]] || { echo "cosign checksum mismatch"; exit 1; }
+sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign && rm /tmp/cosign
+```
+
+Then verify the manifest:
 
 ```bash
 curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/manifest.json"

@@ -518,15 +518,50 @@ curl -fsSL -o upgrade-manager.sh \
 chmod +x upgrade-manager.sh
 sudo ./upgrade-manager.sh                        # apply latest stable
 sudo ./upgrade-manager.sh --dry-run              # download + verify only; print plan
-sudo ./upgrade-manager.sh --target-version 0.45.4
+sudo ./upgrade-manager.sh --target-version 0.52.2  # pin to a specific tag
 sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via the
                                                  # `bilbycast-manager upgrade --drain-secs`
                                                  # CLI before the binary swap
 ```
 
-The script expects the systemd path from step 5 (`bilbycast-manager.service`, binary at `/opt/bilbycast-manager/`). For a foreground install, just download a fresh tarball, replace the old `bilbycast-manager` binary in place, and restart `serve` — migrations apply automatically on the next boot. Don't re-run `setup` on an existing install (it bails when users exist; use `reset-password` or `rotate-master-key` for those workflows).
-
 Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
+
+### Foreground installs
+
+The script **requires** the systemd unit from step 5 — it reads `systemctl cat bilbycast-manager` to locate the running binary. On a foreground install it errors out immediately with `systemd unit 'bilbycast-manager' not found`. To upgrade a foreground install with the same Sigstore + SHA-256 trust chain, run the step-1 download block again against the latest release, then atomically replace the binary in your tarball directory:
+
+```bash
+# Set this to the tarball directory you originally extracted in step 1.
+INSTALL_DIR=~/bilbycast-manager-0.52.2
+
+# 1. Stop the foreground serve (Ctrl-C in its terminal).
+
+# 2. Fetch + verify the new release into a clean staging directory.
+#    Sigstore verification is optional but recommended — see the cosign
+#    instructions in step 1's "Verify the Sigstore signature" section.
+mkdir -p /tmp/bcm-upgrade && cd /tmp/bcm-upgrade
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
+sha256sum -c bilbycast-manager-x86_64-linux.tar.gz.sha256
+tar xzf bilbycast-manager-x86_64-linux.tar.gz
+
+# 3. Atomically swap the binary in your install dir (config + migrations
+#    + certs + manager.env are all untouched).
+mv "${INSTALL_DIR}/bilbycast-manager" "${INSTALL_DIR}/bilbycast-manager.previous"
+cp /tmp/bcm-upgrade/bilbycast-manager-*/bilbycast-manager "${INSTALL_DIR}/bilbycast-manager"
+chmod +x "${INSTALL_DIR}/bilbycast-manager"
+rm -rf /tmp/bcm-upgrade
+
+# 4. Start serve again. Migrations apply on the next boot automatically.
+cd "${INSTALL_DIR}"
+set -a; . ./manager.env; set +a
+./bilbycast-manager serve --config config/default.toml
+
+# Rollback (if the new version misbehaves): mv .previous back over the live binary.
+#   mv "${INSTALL_DIR}/bilbycast-manager.previous" "${INSTALL_DIR}/bilbycast-manager"
+```
+
+Don't re-run `setup` on an existing install — it bails when users exist. Use `./bilbycast-manager reset-password --username <name>` to recover a forgotten admin password, or `rotate-master-key` to swap encryption keys.
 
 ## Going further
 

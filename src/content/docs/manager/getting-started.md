@@ -146,15 +146,14 @@ Your DSN is `postgres://bilbycast:<password-you-just-set>@<host>:5432/bilbycast`
 
 ## 3. Configure secrets and TLS
 
-The manager needs three pieces of configuration in its environment:
+The manager needs two random 32-byte secrets in its environment:
 
-- `BILBYCAST_JWT_SECRET` — 32 bytes of random hex, signs session JWTs.
-- `BILBYCAST_MASTER_KEY` — 32 bytes of random hex, derives KEKs that encrypt every secret stored in the DB.
-- `BILBYCAST_DATABASE_URL` — only needed if you took Path B (the Docker path's DSN is the config default).
+- `BILBYCAST_JWT_SECRET` — signs session JWTs.
+- `BILBYCAST_MASTER_KEY` — derives KEKs that encrypt every node secret, AI key, and tunnel key stored in the database.
 
 Plus a TLS cert/key pair for `https://` on 8443. For evaluation we generate a self-signed cert; switch to ACME or a file-based cert from a real CA for production (see the [TLS](#tls) section below).
 
-Generate everything into a single `manager.env` file in the current directory:
+Generate everything into a `manager.env` file in the current directory:
 
 ```bash
 # Self-signed TLS cert for evaluation
@@ -173,12 +172,20 @@ BILBYCAST_TLS_CERT=$(pwd)/certs/server.crt
 BILBYCAST_TLS_KEY=$(pwd)/certs/server.key
 EOF
 chmod 600 manager.env
-
-# Path B only — also append the DSN you noted in step 2:
-# echo 'BILBYCAST_DATABASE_URL=postgres://bilbycast:<password>@<host>:5432/bilbycast' >> manager.env
 ```
 
-Then load it into your current shell so the next commands see it:
+### Database URL — Path A vs Path B
+
+- **Path A (Docker, recommended for evaluation)** — no extra step. The compose file's DSN matches the `database_url` baked into `config/default.toml`, so the manager picks it up automatically.
+- **Path B (existing Postgres cluster)** — append the DSN you set up in step 2 so it overrides the config default. Replace `<password>` and `<host>` with the values you used:
+
+  ```bash
+  echo 'BILBYCAST_DATABASE_URL=postgres://bilbycast:<password>@<host>:5432/bilbycast' >> manager.env
+  ```
+
+### Load the env into your shell
+
+So the next commands (setup, serve) see the secrets and the cert paths:
 
 ```bash
 set -a; . ./manager.env; set +a

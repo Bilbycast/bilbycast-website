@@ -25,11 +25,38 @@ sidebar:
 
 ## Step 2: Install the gateway
 
-:::caution[No GitHub Release published yet — use the from-source path]
-The curl-pipe-bash installer (further down) depends on a tagged release on [`Bilbycast/bilbycast-appear-x-api-gateway`](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases). The release workflow is wired up but **no release has been tagged yet** — the `releases/latest/download/install-appear-x-gateway.sh` URL returns `404` today. **Use the from-source build below until the first release ships**; switch to the installer once you see versions listed on that releases page.
-:::
+Two paths, same outcome — the recommended one is curl-pipe-bash so a fresh install lands directly in the manager-driven upgrade layout.
 
-### From source (the path that works today)
+### Recommended — curl-pipe-bash installer
+
+The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching arch-specific tarball (x86_64 or aarch64), verifies SHA-256 against the signed manifest, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit. Auto-installs `cosign` (with its own checksum verified against the upstream release) if it isn't already on the host.
+
+**Replace the five `REPLACE_*` values below with your own before running** — the placeholders are intentional all-caps so bash doesn't interpret them as shell redirection (e.g. `<token>` would treat the angle bracket as input redirection). Each value is single-quoted so URLs / passwords with special characters don't trip word-splitting:
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/install-appear-x-gateway.sh \
+  | sudo bash -s -- \
+      --manager 'wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node' \
+      --registration-token 'REPLACE_WITH_REGISTRATION_TOKEN_FROM_STEP_1' \
+      --appear-x-address 'REPLACE_WITH_CHASSIS_IP' \
+      --appear-x-username 'REPLACE_WITH_CHASSIS_USERNAME' \
+      --appear-x-password 'REPLACE_WITH_CHASSIS_PASSWORD'
+```
+
+The installer is idempotent — re-running with `--upgrade-installer` refreshes the systemd unit + install script without touching config or staged versions.
+
+After install, the sidecar runs as a systemd service (`bilbycast-appear-x-gateway`):
+
+```bash
+sudo systemctl status bilbycast-appear-x-gateway
+sudo journalctl -u bilbycast-appear-x-gateway -f
+```
+
+Skip to [Step 3 — Verify in the manager](#step-3-verify-in-the-manager).
+
+### Alternative — build and run from source
+
+Useful when you're tracking the development branch, want to inspect / modify the gateway code, or are on an architecture the release matrix doesn't ship (only `x86_64-linux` and `aarch64-linux` are published today).
 
 Install the Rust toolchain + build prereqs, clone the repo, and build the release binary:
 
@@ -111,25 +138,7 @@ Launch:
 
 On first launch the gateway connects to the manager, presents the registration token, receives the permanent `node_id` + `node_secret`, **persists them to `credentials.json`**, and starts polling. Subsequent launches reuse the credentials — the registration token is one-shot.
 
-For a permanent install, follow the systemd pattern in [`packaging/`](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/tree/main/packaging) — same shape as the edge install: `bilbycast-gateway` system user, `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` symlink-based install root, `ReadWritePaths` on the install root so the upgrade module can swap binaries.
-
-### Once releases ship — curl-pipe-bash installer
-
-When the first `vX.Y.Z` tag is pushed and the [release workflow](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/actions) runs, the install script and signed tarballs become available on the [releases page](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases). The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching tarball, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/,…}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit.
-
-**Replace the five `REPLACE_*` values below with your own before running** — the placeholders are intentional all-caps so bash doesn't interpret them as shell redirection (e.g. `<token>` would treat the angle bracket as input redirection):
-
-```bash
-curl -fsSL https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/install-appear-x-gateway.sh \
-  | sudo bash -s -- \
-      --manager 'wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node' \
-      --registration-token 'REPLACE_WITH_REGISTRATION_TOKEN_FROM_STEP_1' \
-      --appear-x-address 'REPLACE_WITH_CHASSIS_IP' \
-      --appear-x-username 'REPLACE_WITH_CHASSIS_USERNAME' \
-      --appear-x-password 'REPLACE_WITH_CHASSIS_PASSWORD'
-```
-
-The installer is idempotent — re-running with `--upgrade-installer` refreshes the systemd unit + install script without touching config or staged versions.
+For a permanent install on this from-source path, follow the systemd pattern in [`packaging/`](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/tree/main/packaging) — same shape the curl-pipe-bash installer produces (which is what enables the manager UI's Upgrade button): `bilbycast-gateway` system user, `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` symlink-based install root, `ReadWritePaths` on the install root so the upgrade module can swap binaries.
 
 ## Step 3: Verify in the manager
 

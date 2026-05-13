@@ -131,11 +131,24 @@ volumes:
 EOF
 
 # Tear down anything leftover from a previous attempt so the new
-# POSTGRES_PASSWORD actually takes effect. Both lines are idempotent
-# (no-op when nothing exists), and safe at this point in the install
-# because no real data has been created yet.
+# POSTGRES_PASSWORD actually takes effect. All five lines are
+# idempotent (no-op when nothing exists), and safe at this point in
+# the install because no real data has been created yet.
+#
+# Why the broad volume sweep: Postgres only honours POSTGRES_PASSWORD
+# on FIRST initialization of an empty data directory. If a leftover
+# named volume from an earlier compose run gets reused, the new
+# password is silently ignored and the old one is what actually works.
+# `docker compose down -v` only removes volumes for the current
+# project; sibling volumes created from a different working directory
+# or project flag would survive — so the grep+xargs explicitly nukes
+# every volume whose name contains `bilbycast_pg_data`.
 sudo docker rm -f bilbycast-manager-pg 2>/dev/null || true
 sudo docker compose -p bilbycast -f docker-compose.dev.yml down -v 2>/dev/null || true
+sudo docker volume ls -q | grep bilbycast_pg_data | xargs -r sudo docker volume rm 2>/dev/null || true
+# Also wipe any stale manager.env from a prior run so step 3 is
+# forced to regenerate one with the correct DSN.
+rm -f manager.env
 
 sudo docker compose -p bilbycast -f docker-compose.dev.yml up -d
 
@@ -156,7 +169,7 @@ sudo docker exec -e PGPASSWORD="${PG_PASSWORD}" bilbycast-manager-pg \
     psql -h localhost -p 5432 -U bilbycast -d bilbycast -c "SELECT 'ok' AS password_check;"
 ```
 
-Expected: one row from `docker ps` showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`, and a `psql` row of `password_check | ok`. If `psql` errors with `password authentication failed`, the container is from a previous attempt with a stale password — re-run the teardown block above (the `docker rm -f` line is the critical one) and try again.
+Expected: one row from `docker ps` showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`, and a `psql` row of `password_check | ok`. If `psql` errors with `password authentication failed`, you've hit the Postgres-image initialization gotcha: a leftover volume from an earlier compose run got reused, and `POSTGRES_PASSWORD` is ignored for an already-initialized data directory. Re-run the teardown block above — the **`docker volume ls ... grep bilbycast_pg_data ... volume rm`** sweep is the line that actually clears that, and the `up -d` after it will reinitialize the volume with your current `PG_PASSWORD`.
 
 Your DSN is `postgres://bilbycast:${PG_PASSWORD}@localhost:5433/bilbycast`. You'll add it to `manager.env` in step 3 — keep this terminal open so `PG_PASSWORD` carries over.
 

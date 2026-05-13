@@ -15,24 +15,33 @@ bilbycast-manager supports three TLS deployment modes. Pick the one that matches
 
 All three modes serve the same ports and APIs — the only difference is *who* terminates TLS. Edge nodes always connect over `wss://` regardless of which mode you pick; plaintext `ws://` is rejected at the edge.
 
+:::caution[You already have JWT_SECRET and MASTER_KEY]
+This page assumes you've completed the [install guide](/manager/getting-started/) and already have a working `manager.env` with `BILBYCAST_JWT_SECRET` and `BILBYCAST_MASTER_KEY` in it. **Do not regenerate those values** when switching TLS modes — `BILBYCAST_MASTER_KEY` in particular decrypts every node secret, AI key, and tunnel key stored in your database, and there's no recovery path if it changes. The examples below show only the TLS-related env vars; keep your existing secrets as-is.
+:::
+
 ## ACME / Let's Encrypt (recommended)
 
 The simplest path for any manager that has a stable public DNS name. The manager handles certificate issuance, renewal, and hot-reload internally — no certbot, no cron jobs, no operator action required after initial setup.
 
 ### Setup
 
+Append the ACME env vars to your existing `manager.env` (and drop any prior file-based TLS lines so they don't conflict), then restart the manager:
+
 ```bash
-export BILBYCAST_ACME_ENABLED=true
-export BILBYCAST_ACME_DOMAIN=manager.example.com
-export BILBYCAST_ACME_EMAIL=ops@example.com
-export BILBYCAST_ACME_HTTP_PORT=80   # Default: 80; only needed if non-standard
+sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
+cat >> manager.env <<'EOF'
+BILBYCAST_ACME_ENABLED=true
+BILBYCAST_ACME_DOMAIN=manager.example.com
+BILBYCAST_ACME_EMAIL=ops@example.com
+# BILBYCAST_ACME_HTTP_PORT=80         # Default; only set if non-standard
+BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
+EOF
 
-# Standard secrets
-export BILBYCAST_JWT_SECRET=$(openssl rand -hex 32)
-export BILBYCAST_MASTER_KEY=$(openssl rand -hex 32)
-
-bilbycast-manager serve
+set -a; . ./manager.env; set +a
+sudo -E ./bilbycast-manager serve --config config/default.toml
 ```
+
+The end-to-end flow (DNS pre-flight, port-80 reachability check, log lines that confirm issuance, staging vs production endpoints) is documented in the install guide's [ACME walkthrough](/manager/getting-started/#acme--lets-encrypt-walkthrough).
 
 Requirements:
 
@@ -60,15 +69,17 @@ Use this when:
 
 ### Setup
 
+Replace the cert/key paths in your existing `manager.env` (and drop any ACME lines so they don't conflict), then restart the manager:
+
 ```bash
-export BILBYCAST_TLS_CERT=/etc/bilbycast/manager.crt
-export BILBYCAST_TLS_KEY=/etc/bilbycast/manager.key
+sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d; /^BILBYCAST_ACME_/d' manager.env
+cat >> manager.env <<'EOF'
+BILBYCAST_TLS_CERT=/etc/bilbycast/manager.crt
+BILBYCAST_TLS_KEY=/etc/bilbycast/manager.key
+EOF
 
-# Standard secrets
-export BILBYCAST_JWT_SECRET=$(openssl rand -hex 32)
-export BILBYCAST_MASTER_KEY=$(openssl rand -hex 32)
-
-bilbycast-manager serve
+set -a; . ./manager.env; set +a
+./bilbycast-manager serve --config config/default.toml
 ```
 
 Both files must exist and be readable by the manager process. The manager validates them at startup and refuses to start if they're missing or unreadable.
@@ -91,16 +102,17 @@ Use this when a load balancer, reverse proxy, or service mesh is already termina
 
 ### Setup
 
+Drop every TLS-related line from your existing `manager.env` and add the behind-proxy switch + plain-HTTP port, then restart:
+
 ```bash
-export BILBYCAST_TLS_MODE=behind_proxy
-export BILBYCAST_PORT=8080            # Plain HTTP port the manager listens on
-# Do NOT set BILBYCAST_TLS_CERT or BILBYCAST_ACME_ENABLED in this mode
+sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d; /^BILBYCAST_ACME_/d' manager.env
+cat >> manager.env <<'EOF'
+BILBYCAST_TLS_MODE=behind_proxy
+BILBYCAST_PORT=8080
+EOF
 
-# Standard secrets
-export BILBYCAST_JWT_SECRET=$(openssl rand -hex 32)
-export BILBYCAST_MASTER_KEY=$(openssl rand -hex 32)
-
-bilbycast-manager serve
+set -a; . ./manager.env; set +a
+./bilbycast-manager serve --config config/default.toml
 ```
 
 The manager listens on plain HTTP. Your proxy is responsible for:

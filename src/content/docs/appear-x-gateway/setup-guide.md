@@ -25,10 +25,6 @@ sidebar:
 
 ## Step 2: Install the gateway
 
-Two paths, same outcome — the recommended one is curl-pipe-bash so a fresh install lands directly in the manager-driven upgrade layout.
-
-### Recommended — curl-pipe-bash installer
-
 The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching arch-specific tarball (x86_64 or aarch64), verifies SHA-256 against the signed manifest, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit. Auto-installs `cosign` (with its own checksum verified against the upstream release) if it isn't already on the host.
 
 **Replace the five `REPLACE_*` values below with your own before running** — the placeholders are intentional all-caps so bash doesn't interpret them as shell redirection (e.g. `<token>` would treat the angle bracket as input redirection). Each value is single-quoted so URLs / passwords with special characters don't trip word-splitting:
@@ -52,93 +48,7 @@ sudo systemctl status bilbycast-appear-x-gateway
 sudo journalctl -u bilbycast-appear-x-gateway -f
 ```
 
-Skip to [Step 3 — Verify in the manager](#step-3-verify-in-the-manager).
-
-### Alternative — build and run from source
-
-Useful when you're tracking the development branch, want to inspect / modify the gateway code, or are on an architecture the release matrix doesn't ship (only `x86_64-linux` and `aarch64-linux` are published today).
-
-Install the Rust toolchain + build prereqs, clone the repo, and build the release binary:
-
-```bash
-# One-time: Rust + build prereqs
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-sudo apt install -y build-essential pkg-config libssl-dev
-
-# Build
-git clone https://github.com/Bilbycast/bilbycast-appear-x-api-gateway.git
-cd bilbycast-appear-x-api-gateway
-cargo build --release
-```
-
-Copy `config/example.toml` to `config.toml` next to the binary, then edit. The minimal shape:
-
-```toml
-[manager]
-# Ordered list of bilbycast-manager WebSocket URLs (each wss://, 1–16 entries).
-# For a single-instance manager use a one-element array — there is no scalar
-# `url` field.
-urls = [
-    "wss://your-manager-host:8443/ws/node",
-]
-registration_token = "paste-your-token-from-step-1"
-credentials_file = "credentials.json"
-
-# For a self-signed manager cert (dev/testing only):
-# accept_self_signed_cert = true
-# Requires the BILBYCAST_ALLOW_INSECURE=1 env var as a safety guard.
-
-# For production with cert pinning instead of accept_self_signed_cert:
-# cert_fingerprint = "ab:cd:ef:..."
-
-[appear_x]
-address = "192.168.1.100"
-username = "admin"
-password = "your-password"
-accept_self_signed_cert = true   # Appear X units typically use self-signed HTTPS
-
-# Optional — how many consecutive failed alarm polls before the manager
-# dashboard renders the third "Target down" amber state. Default 2.
-# reachability_failure_threshold = 2
-
-# Optional — minimum dwell in the new reachability state before firing
-# target_unreachable / target_recovered events (defeats slow-flap noise on
-# degraded uplinks). Default 60.
-# reachability_event_dwell_secs = 60
-
-[polling]
-alarms_interval_secs = 10
-chassis_interval_secs = 30
-inputs_interval_secs = 15
-outputs_interval_secs = 15
-cards_interval_secs = 30
-
-# Periodic re-emission of every currently-active alarm as a fresh event,
-# in seconds (default 1800 — 30 minutes). Without this, chronic alarms
-# emit once on first observation and never again; setting 0 disables.
-alarms_refresh_interval_secs = 1800
-
-# MMI interface versions for chassis-level endpoints. These vary across
-# Appear firmware versions; the gateway logs "Method '...' was not found"
-# if the configured version is wrong. Known-working values for the
-# X5 / X20 demo firmware tested 2026-04: 2.8 / 4.1 / 2.8.
-alarms_mmi_version  = "2.8"
-chassis_mmi_version = "4.1"
-cards_mmi_version   = "2.8"
-```
-
-**There is no `[[polling.boards]]` section** — the gateway runs a capability-discovery pass at startup (`src/appear_x/capabilities.rs`), reads `cards/GetChassisInfo` to learn the chassis type and per-slot card identities, and probes the registry in `src/appear_x/probe_registry.rs` to find which JSON-RPC interface families this firmware actually exposes. Polling tasks are spawned only for what discovery confirmed works.
-
-Launch:
-
-```bash
-./target/release/bilbycast-appear-x-api-gateway --config config.toml
-```
-
-On first launch the gateway connects to the manager, presents the registration token, receives the permanent `node_id` + `node_secret`, **persists them to `credentials.json`**, and starts polling. Subsequent launches reuse the credentials — the registration token is one-shot.
-
-For a permanent install on this from-source path, follow the systemd pattern in [`packaging/`](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/tree/main/packaging) — same shape the curl-pipe-bash installer produces (which is what enables the manager UI's Upgrade button): `bilbycast-gateway` system user, `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/}` symlink-based install root, `ReadWritePaths` on the install root so the upgrade module can swap binaries.
+The installer wrote `/opt/bilbycast/appear-x-gateway/config.toml` for you with the values you passed plus sensible polling-interval defaults. To tune polling cadence, MMI versions, reachability thresholds, or add a manager-cluster URL list, edit that file (the schema is documented in [`config/example.toml`](https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/blob/main/config/example.toml)) and `sudo systemctl restart bilbycast-appear-x-gateway`.
 
 ## Step 3: Verify in the manager
 

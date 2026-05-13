@@ -139,13 +139,15 @@ done
 [ "$state" = "healthy" ] || echo "WARNING: Postgres did not become healthy within 60s. Run 'sudo docker logs bilbycast-manager-pg' before continuing."
 ```
 
-Confirm the container is up and healthy:
+Confirm the container is up and the manager's credentials work over TCP (a Unix-socket check from inside the container would pass on `trust` auth even if the password is wrong, so this step has to force `-h localhost` to exercise the real TCP/`scram-sha-256` path):
 
 ```bash
 sudo docker ps --filter "name=bilbycast-manager-pg" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+sudo docker exec -e PGPASSWORD=bilbycast_dev bilbycast-manager-pg \
+    psql -h localhost -p 5432 -U bilbycast -d bilbycast -c "SELECT 'ok' AS password_check;"
 ```
 
-Expected: one row showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`.
+Expected: one row from `docker ps` showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`, and a `psql` row of `password_check | ok`. If `psql` errors with `password authentication failed`, the container is from a previous attempt with a stale password — re-run the teardown block above (the `docker rm -f` line is the critical one) and try again.
 
 Your DSN is now `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — this matches the `database_url` baked into `config/default.toml`, so you don't have to override it.
 

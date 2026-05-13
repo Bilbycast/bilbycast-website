@@ -24,11 +24,12 @@ git clone https://github.com/Bilbycast/bilbycast-ffmpeg-video-rs.git --recurse-s
 git clone https://github.com/Bilbycast/bilbycast-rist.git
 git clone https://github.com/Bilbycast/bilbycast-bonding.git
 git clone https://github.com/Bilbycast/bilbycast-edge.git
-git clone https://github.com/Bilbycast/bilbycast-manager.git
 git clone https://github.com/Bilbycast/bilbycast-relay.git
 ```
 
 Cargo resolves the sibling crates automatically via the path-dependency entries in `bilbycast-edge/Cargo.toml`.
+
+The **manager** source is proprietary (EULA-licensed) and not publicly cloneable — install the signed pre-built tarball via [Install the manager](/manager/getting-started/) instead. The manager has no feature-flag combinations that would warrant a source build.
 
 ## Install build-time apt packages
 
@@ -61,9 +62,6 @@ cd bilbycast-edge && cargo build --release && cd ..
 # Or the full edge — matches the *-linux-full release tarball
 cd bilbycast-edge && cargo build --release --features video-encoders-full && cd ..
 
-# Manager (needs Postgres at runtime)
-cd bilbycast-manager && cargo build --release && cd ..
-
 # Relay
 cd bilbycast-relay && cargo build --release && cd ..
 ```
@@ -74,11 +72,10 @@ The release binaries land in each crate's `target/release/`.
 
 ```bash
 ./bilbycast-edge/target/release/bilbycast-edge --config config.json
-cd bilbycast-manager && cargo run --release -- serve   # needs BILBYCAST_JWT_SECRET + BILBYCAST_MASTER_KEY
 ./bilbycast-relay/target/release/bilbycast-relay
 ```
 
-For the manager + relay setup steps that the release tarballs guide you through (Postgres, secrets, registration tokens, systemd units), follow [Install the manager](/manager/getting-started/) and [Install the relay](/relay/getting-started/) — substitute the path to your `target/release/` binary for the tarball one.
+For the manager + relay setup steps that the release tarballs guide you through (Postgres, secrets, registration tokens, systemd units), follow [Install the manager](/manager/getting-started/) and [Install the relay](/relay/getting-started/) — for the relay, substitute the path to your `target/release/` binary for the tarball one.
 
 ## Feature flags
 

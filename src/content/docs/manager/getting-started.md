@@ -37,9 +37,9 @@ The full network map (edge ports, relay ports, ST 2110 multicast) is in [Deploym
 
 ```bash
 curl -fsSL -o bilbycast-manager.tar.gz \
-  https://github.com/Bilbycast/bilbycast-manager/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
+  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz
 curl -fsSL -o bilbycast-manager.tar.gz.sha256 \
-  https://github.com/Bilbycast/bilbycast-manager/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
+  https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/bilbycast-manager-x86_64-linux.tar.gz.sha256
 sha256sum -c bilbycast-manager.tar.gz.sha256
 tar xzf bilbycast-manager.tar.gz
 ```

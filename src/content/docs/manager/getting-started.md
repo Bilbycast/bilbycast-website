@@ -98,7 +98,7 @@ Pick a Postgres password for this install. The doc threads it through the compos
 
 ```bash
 # Either pick one yourself, or generate a strong random one:
-PG_PASSWORD="clean3954"                     # ← edit to whatever you want
+PG_PASSWORD="bilbycast_dev"                 # ← edit to whatever you want
 # PG_PASSWORD="$(openssl rand -hex 16)"     # ← uncomment for a random 32-hex-char password
 echo "Postgres password for this install: ${PG_PASSWORD}"
 ```

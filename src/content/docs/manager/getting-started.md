@@ -120,16 +120,16 @@ services:
 volumes:
   bilbycast_pg_data:
 EOF
-sudo docker compose -f docker-compose.dev.yml up -d
+sudo docker compose -p bilbycast -f docker-compose.dev.yml up -d
 ```
 
-Wait a few seconds for the healthcheck to go green, then confirm:
+Wait a few seconds for the healthcheck to go green, then confirm the container is up and healthy:
 
 ```bash
-sudo docker compose -f docker-compose.dev.yml ps
+sudo docker ps --filter "name=bilbycast-manager-pg" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
-Expected: one row showing `bilbycast-manager-pg` with status `Up ... (healthy)` and port mapping `0.0.0.0:5433->5432/tcp`. If status is `(starting)`, wait another few seconds and re-run.
+Expected: one row showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`. If status reads `(health: starting)`, wait another 2–3 seconds and re-run. If the row is missing entirely, re-run the `docker compose ... up -d` command above — it's safe to run repeatedly (no-op when the container is already up under project `bilbycast`).
 
 Your DSN is now `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — this matches the `database_url` baked into `config/default.toml`, so you don't have to override it.
 

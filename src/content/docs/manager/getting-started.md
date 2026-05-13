@@ -379,11 +379,62 @@ Sign in with the admin credentials you set in step 4. From here:
 
 The self-signed cert generated in step 3 works for evaluation. For production, switch to one of three modes by editing `manager.env` (foreground) or `/etc/bilbycast-manager/manager.env` (systemd), then restart the service:
 
-- **ACME / Let's Encrypt** — set `BILBYCAST_ACME_ENABLED=true` plus `BILBYCAST_ACME_DOMAIN` and `BILBYCAST_ACME_EMAIL`. The manager auto-provisions and renews. Needs port 80 reachable from the public internet for HTTP-01 validation. Drop `BILBYCAST_TLS_CERT` / `_KEY` from the env file when using ACME. **If you took the systemd path**, also set `BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme` — the default (`data/acme` under the working dir) is read-only under the hardened unit.
+- **ACME / Let's Encrypt** — see the [ACME walkthrough](#acme--lets-encrypt-walkthrough) below for the full pre-flight + env-file change + restart sequence. Short version: the manager auto-provisions and renews; you need a public DNS record for the manager hostname and inbound TCP 80 reachable from the internet (Let's Encrypt's HTTP-01 challenge connects to the box on port 80).
 - **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to PEM paths from a real CA.
 - **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and trust your LB's forwarded headers via `BILBYCAST_TRUST_PROXY_HEADER=1` + `BILBYCAST_TRUSTED_PROXIES=<CIDR list>`.
 
 Full detail: [TLS deployment](/manager/tls-deployment/).
+
+### ACME / Let's Encrypt walkthrough
+
+Replaces the self-signed cert from step 3 with a real Let's Encrypt cert that browsers trust out of the box. Once enabled, the manager auto-renews the cert ~30 days before expiry.
+
+**Prerequisites** — all four must be true before changing the env file, otherwise issuance fails and you fall back to the self-signed cert.
+
+1. The manager is already running on `https://<vm-ip>:8443/` against the self-signed cert from step 3 (you can log in).
+2. A public **DNS A record** (and ideally AAAA for IPv6) for the hostname you'll request — e.g. `manager.example.com` → your VM's public IP. Verify with `dig +short manager.example.com` against the output of `curl -s https://api.ipify.org` from the VM; they must match.
+3. **Inbound TCP port 80** is reachable from the public internet (Let's Encrypt's HTTP-01 challenge connects on 80). Check the cloud provider's security group / firewall *and* `sudo ufw status` on the VM. From your laptop: `curl -v http://manager.example.com/ --max-time 5` — a "connection refused" is fine (means the packet reached the host); a *timeout* means the firewall is blocking.
+4. An **email address** for the Let's Encrypt account — receives renewal failure alerts.
+
+**Apply the change** — stop whatever's running the manager (Ctrl-C for foreground, `sudo systemctl stop bilbycast-manager` for systemd), then:
+
+```bash
+# Drop file-based TLS lines, add ACME lines
+sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
+cat >> manager.env <<'EOF'
+BILBYCAST_ACME_ENABLED=true
+BILBYCAST_ACME_DOMAIN=manager.example.com
+BILBYCAST_ACME_EMAIL=ops@example.com
+BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
+EOF
+
+# Make sure the ACME state directory exists and the manager can write to it
+sudo mkdir -p /var/lib/bilbycast-manager/acme
+sudo chown -R "$USER":"$USER" /var/lib/bilbycast-manager/acme   # foreground install
+# (systemd install: chown to bilbycast:bilbycast instead)
+
+# Re-source manager.env so the next launch sees the new vars
+set -a; . ./manager.env; set +a
+```
+
+**Restart the manager.** Port 80 is below 1024, so binding requires `CAP_NET_BIND_SERVICE` or root:
+
+- **Foreground**: `sudo -E ./bilbycast-manager serve --config config/default.toml` — `-E` preserves the env vars you just sourced.
+- **Systemd**: the unit from step 5 already grants `AmbientCapabilities=CAP_NET_BIND_SERVICE`. `sudo systemctl start bilbycast-manager` and watch the journal: `sudo journalctl -u bilbycast-manager -f`.
+
+**Watch for these log lines** to confirm issuance:
+
+```
+ACME enabled for domain manager.example.com
+Listening on 0.0.0.0:80 (ACME HTTP-01 challenge)
+Listening on 0.0.0.0:8443 and [::]:8443
+ACME challenge received from <let's-encrypt-ip>
+ACME certificate issued, valid until <date>
+```
+
+Then open `https://manager.example.com:8443/` from a browser — you should see a valid green-lock cert with no self-signed warning. The cert renews automatically; you don't have to touch this again.
+
+**If issuance fails** the manager logs the precise error from the ACME challenge and falls back to the self-signed cert so you can still log in and debug. The most common causes are: DNS A record not yet propagated, port 80 still blocked by the security group, or Let's Encrypt's rate limit hit (5 duplicate certs per 7 days — use the staging environment by setting `BILBYCAST_ACME_STAGING=true` while iterating).
 
 ## Upgrading
 

@@ -9,7 +9,7 @@ The relay is a stateless QUIC forwarder for NAT traversal between edges. It carr
 
 ## What you'll need
 
-- A Linux host on a public IP, or behind a static port-forward of UDP 4433.
+- A Linux host on a public IP, or behind a static port-forward of UDP 4433. Can share a box with the manager — the relay installs alongside under different paths (`/opt/bilbycast-relay/`, `/etc/bilbycast/`) so the two coexist cleanly.
 - About 5 minutes.
 
 The relay is statically linked against musl, has no runtime dependencies, and runs on `x86_64` and `aarch64`.
@@ -30,22 +30,34 @@ Full network map: [Deployment overview](/getting-started/deployment/).
 ## 1. Download
 
 ```bash
-curl -fsSL -o bilbycast-relay \
-  https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux
+curl -fsSL -O https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux.sha256
+sha256sum -c bilbycast-relay-$(uname -m)-linux.sha256
+
+# Rename to bilbycast-relay so subsequent commands are arch-agnostic
+mv bilbycast-relay-$(uname -m)-linux bilbycast-relay
 chmod +x bilbycast-relay
 ```
 
-Verify the checksum:
-
-```bash
-curl -fsSL -o bilbycast-relay.sha256 \
-  https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/bilbycast-relay-$(uname -m)-linux.sha256
-sha256sum -c bilbycast-relay.sha256
-```
+You should see `bilbycast-relay-x86_64-linux: OK` (or `aarch64`). The rename keeps the rest of this page concise; the canonical name is what the `.sha256` file expects, so we verify under that name before moving.
 
 ### Verify the Sigstore signature (optional)
 
-Every release ships a Sigstore-signed `manifest.json` alongside the bare binaries and matching tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit. Install [cosign](https://github.com/sigstore/cosign), then:
+Every release ships a Sigstore-signed `manifest.json` alongside the bare binaries. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit.
+
+Install [cosign](https://github.com/sigstore/cosign) — on Ubuntu / Debian the simplest path is the upstream static binary with SHA-256 verification:
+
+```bash
+COSIGN_VERSION=v2.4.1
+curl -fsSL -o /tmp/cosign \
+  "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+expected="$(curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" | awk '$2 == "cosign-linux-amd64" {print $1}')"
+got="$(sha256sum /tmp/cosign | awk '{print $1}')"
+[[ -n "${expected}" && "${got}" == "${expected}" ]] || { echo "cosign checksum mismatch"; exit 1; }
+sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign && rm /tmp/cosign
+```
+
+Then verify the manifest:
 
 ```bash
 curl -fsSL -O https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/manifest.json
@@ -58,7 +70,7 @@ cosign verify-blob \
   manifest.json
 ```
 
-A successful verify prints `Verified OK`. The verified manifest carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same Sigstore-signed manifest drives the [upgrade flow](#upgrading) below, so this is the verifier's main checkpoint.
+A successful verify prints `Verified OK`. The same Sigstore-signed manifest drives the [upgrade flow](#upgrading) below, so this is the verifier's main checkpoint.
 
 ## 2. Standalone (zero config)
 
@@ -68,7 +80,7 @@ The simplest deployment — useful for testing or when you don't need the relay 
 ./bilbycast-relay
 ```
 
-Defaults: QUIC on `0.0.0.0:4433`, REST on `0.0.0.0:4480`. Override with `--quic-addr` or `--api-addr`.
+Defaults: QUIC on `0.0.0.0:4433`, REST on `0.0.0.0:4480`. Override with `--quic-addr` or `--api-addr`. Ctrl-C to stop.
 
 ## 3. Attached to the manager (recommended)
 
@@ -77,7 +89,7 @@ In the manager UI:
 1. Go to **Admin → Nodes**, click **+ Add Node**, pick device type **Relay**.
 2. Copy the one-shot registration token.
 
-Next to the relay binary, write `relay.json`:
+Next to the relay binary, write `relay.json` (replace `REPLACE_WITH_YOUR_MANAGER_HOSTNAME` and `<token-from-manager>` with the real values — don't paste this verbatim):
 
 ```json
 {
@@ -86,7 +98,7 @@ Next to the relay binary, write `relay.json`:
   "require_bind_auth": true,
   "manager": {
     "enabled": true,
-    "url": "wss://manager.example.com:8443/ws/node",
+    "url": "wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node",
     "registration_token": "<token-from-manager>"
   }
 }
@@ -98,7 +110,7 @@ Launch:
 ./bilbycast-relay --config relay.json
 ```
 
-For a self-signed manager cert, add `"accept_self_signed_cert": true` inside the `manager` block **and** export `BILBYCAST_ALLOW_INSECURE=1` before launching. The env var is a deliberate safety guard.
+For a self-signed manager cert (only relevant if you skipped ACME / Let's Encrypt on the manager), add `"accept_self_signed_cert": true` inside the `manager` block **and** export `BILBYCAST_ALLOW_INSECURE=1` before launching. The env var is a deliberate safety guard.
 
 On first connect the relay swaps the registration token for a permanent `node_id` plus `node_secret`, persists them locally, and reconnects automatically going forward.
 
@@ -130,19 +142,34 @@ WantedBy=multi-user.target
 Then:
 
 ```bash
-sudo useradd -r -s /sbin/nologin bilbycast
+# `|| true` — bilbycast user may already exist from a manager install on this box
+sudo useradd -r -s /sbin/nologin bilbycast || true
 sudo mkdir -p /opt/bilbycast-relay /etc/bilbycast
 sudo install -m 0755 -o bilbycast -g bilbycast bilbycast-relay /opt/bilbycast-relay/
 sudo install -m 0640 -o root -g bilbycast relay.json /etc/bilbycast/relay.json
 sudo systemctl daemon-reload
 sudo systemctl enable --now bilbycast-relay
+sudo systemctl status bilbycast-relay --no-pager
 ```
 
-Verify with `systemctl status bilbycast-relay` and `journalctl -u bilbycast-relay -f`.
+Expected: `active (running)`. Logs: `sudo journalctl -u bilbycast-relay -f`.
+
+### Co-existing with the manager on the same box
+
+If this box also runs the manager, the two installs occupy separate trees so they don't collide:
+
+| | Manager | Relay |
+|---|---|---|
+| Binary | `/opt/bilbycast-manager/bilbycast-manager` | `/opt/bilbycast-relay/bilbycast-relay` |
+| Config + secrets | `/etc/bilbycast-manager/manager.env` | `/etc/bilbycast/relay.json` |
+| Systemd unit | `bilbycast-manager.service` | `bilbycast-relay.service` |
+| Service user | `bilbycast` (shared) | `bilbycast` (shared) |
+
+Same `bilbycast` user owns both — `useradd ... \|\| true` above is idempotent.
 
 ## Upgrading
 
-The relay ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching arch-specific tarball (x86_64 / aarch64), verifies SHA-256 against the signed manifest, atomically swaps the binary with a `.previous` backup, restarts the systemd unit, polls `/health`, and **auto-rolls back** to the previous binary on a failed health probe.
+The relay ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching arch-specific binary (x86_64 / aarch64), verifies SHA-256 against the signed manifest, atomically swaps the binary with a `.previous` backup, restarts the systemd unit, polls `/health`, and **auto-rolls back** to the previous binary on a failed health probe.
 
 The simplest path is curl-pipe-bash from the latest release:
 
@@ -151,18 +178,38 @@ curl -fsSL https://github.com/Bilbycast/bilbycast-relay/releases/latest/download
     | sudo bash
 ```
 
-Operators who'd rather review the script first can grab it once and re-run it as needed (it's the same script that ships in the source repo at `packaging/upgrade-relay.sh`):
+Operators who'd rather review the script first can grab it once and re-run it as needed:
 
 ```bash
 curl -fsSL -o upgrade-relay.sh \
     https://github.com/Bilbycast/bilbycast-relay/releases/latest/download/upgrade-relay.sh
 chmod +x upgrade-relay.sh
-sudo ./upgrade-relay.sh                        # apply latest stable
-sudo ./upgrade-relay.sh --dry-run              # download + verify only; print plan
-sudo ./upgrade-relay.sh --target-version 0.10.2
+sudo ./upgrade-relay.sh                         # apply latest stable
+sudo ./upgrade-relay.sh --dry-run               # download + verify only; print plan
+sudo ./upgrade-relay.sh --target-version 0.7.0  # pin to a specific tag
 ```
 
 The relay is stateless — a restart drops connected edges, which all reconnect automatically. For zero-disruption upgrades, run multiple relay instances behind a load balancer and roll through them one at a time. Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
+
+The script **requires** the systemd unit from step 4 — it reads `systemctl cat bilbycast-relay` to auto-detect the binary path. On a foreground-only install it errors out with `systemd unit 'bilbycast-relay' not found`. For a foreground install, do the swap by hand:
+
+```bash
+# 1. Stop the foreground ./bilbycast-relay process (Ctrl-C in its terminal).
+
+# 2. Backup the running binary so you can roll back if needed.
+rm -f bilbycast-relay.previous
+mv bilbycast-relay bilbycast-relay.previous
+
+# 3. Re-run step 1's download block to fetch + verify the new binary
+#    into CWD (the final `mv … bilbycast-relay && chmod +x` lands it
+#    next to the .previous backup).
+
+# 4. Restart.
+./bilbycast-relay --config relay.json
+
+# Rollback (if the new version misbehaves):
+#   mv bilbycast-relay.previous bilbycast-relay
+```
 
 ## Going further
 

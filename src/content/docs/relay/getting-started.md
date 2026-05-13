@@ -112,7 +112,7 @@ Launch:
 
 For a self-signed manager cert (only relevant if you skipped ACME / Let's Encrypt on the manager), add `"accept_self_signed_cert": true` inside the `manager` block **and** export `BILBYCAST_ALLOW_INSECURE=1` before launching. The env var is a deliberate safety guard.
 
-On first connect the relay swaps the registration token for a permanent `node_id` plus `node_secret`, persists them locally, and reconnects automatically going forward.
+On first connect the relay swaps the registration token for a permanent `node_id` + `node_secret`, **rewrites `relay.json` in place** with those values (removing the now-spent registration token), and reconnects automatically going forward. Don't be surprised when your `relay.json` looks different after the first boot — that's the credential persistence working as intended. The file's runtime user (`bilbycast` on the systemd install in step 4) must therefore be able to write it; step 4 sets the ownership accordingly.
 
 ## 4. systemd service
 
@@ -146,7 +146,11 @@ Then:
 sudo useradd -r -s /sbin/nologin bilbycast || true
 sudo mkdir -p /opt/bilbycast-relay /etc/bilbycast
 sudo install -m 0755 -o bilbycast -g bilbycast bilbycast-relay /opt/bilbycast-relay/
-sudo install -m 0640 -o root -g bilbycast relay.json /etc/bilbycast/relay.json
+# relay.json: bilbycast OWNS it (not root) — the relay rewrites this file on
+# first connect to swap the registration_token for the permanent node_id +
+# node_secret. Root-owned 0640 would block that write and you'd be stuck on
+# next restart with a spent registration token.
+sudo install -m 0640 -o bilbycast -g bilbycast relay.json /etc/bilbycast/relay.json
 sudo systemctl daemon-reload
 sudo systemctl enable --now bilbycast-relay
 sudo systemctl status bilbycast-relay --no-pager

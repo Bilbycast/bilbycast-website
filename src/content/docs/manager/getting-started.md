@@ -121,21 +121,31 @@ volumes:
   bilbycast_pg_data:
 EOF
 
-# If you tried this install before, tear down any leftover Postgres container
-# AND its volume so the new POSTGRES_PASSWORD above actually takes effect.
-# (Safe for evaluation — you haven't created any data yet.)
+# Tear down anything leftover from a previous attempt so the
+# POSTGRES_PASSWORD above actually takes effect. Both lines are
+# idempotent (no-op when nothing exists), and safe at this point in
+# the install because no real data has been created yet.
+sudo docker rm -f bilbycast-manager-pg 2>/dev/null || true
 sudo docker compose -p bilbycast -f docker-compose.dev.yml down -v 2>/dev/null || true
 
 sudo docker compose -p bilbycast -f docker-compose.dev.yml up -d
+
+# Wait (up to 60s) for the healthcheck to go green before continuing.
+for i in $(seq 1 30); do
+    state="$(sudo docker inspect --format='{{.State.Health.Status}}' bilbycast-manager-pg 2>/dev/null || echo missing)"
+    [ "$state" = "healthy" ] && echo "Postgres healthy" && break
+    sleep 2
+done
+[ "$state" = "healthy" ] || echo "WARNING: Postgres did not become healthy within 60s. Run 'sudo docker logs bilbycast-manager-pg' before continuing."
 ```
 
-Wait a few seconds for the healthcheck to go green, then confirm the container is up and healthy:
+Confirm the container is up and healthy:
 
 ```bash
 sudo docker ps --filter "name=bilbycast-manager-pg" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
-Expected: one row showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`. If status reads `(health: starting)`, wait another 2–3 seconds and re-run. If the row is missing entirely, re-run the `docker compose ... up -d` command above — it's safe to run repeatedly (no-op when the container is already up under project `bilbycast`).
+Expected: one row showing `bilbycast-manager-pg`, status `Up ... (healthy)`, ports include `0.0.0.0:5433->5432/tcp`.
 
 Your DSN is now `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — this matches the `database_url` baked into `config/default.toml`, so you don't have to override it.
 
@@ -207,22 +217,33 @@ set -a; . ./manager.env; set +a
 
 ## 4. Create the database schema + first admin
 
-The `setup` subcommand applies every migration in `migrations-pg/` and then prompts you for the first super-admin's username, display name, email, and password.
+The `setup` subcommand applies every migration in `migrations-pg/` and then prompts you for the first super-admin user.
 
 ```bash
 ./bilbycast-manager setup --config config/default.toml
 ```
 
-You'll be prompted for:
+You'll see this prompt sequence:
 
-- **Username** — what you'll log in with (e.g. `admin`)
-- **Display name** — shown in the UI (e.g. `Operations`)
-- **Email** — used for SSO / password reset later
-- **Password** — 8–128 chars, must mix upper, lower, and digit
+```
+=== bilbycast-manager Setup ===
 
-Once setup finishes you'll see `Database already has 1 user(s)` if you re-run it — that's the idempotent guard.
+Super admin username:        # what you'll log in with (e.g. admin)
+Display name:                # shown in the UI (e.g. Operations)
+Email (optional):            # press Enter to skip
+Password:                    # 8–128 chars, must mix upper, lower, and digit
+Confirm password:            # re-type the same password
+```
 
-> **Forgot the admin password?** Re-run setup is **not** the recovery path (it bails when users exist). Use `./bilbycast-manager reset-password --username <name>` instead.
+On success, the binary prints:
+
+```
+Super admin user 'admin' created successfully (ID: ...).
+Enrolled 'admin' in the default group as Admin.
+You can now start the server with: bilbycast-manager serve
+```
+
+> **Re-running `setup`** is a no-op — it prints `Database already has 1 user(s).` and exits. To recover from a forgotten admin password, use `./bilbycast-manager reset-password --username <name>` instead.
 
 ## 5. Start the manager
 
@@ -322,7 +343,7 @@ Sign in with the admin credentials you set in step 4. From here:
 
 The self-signed cert generated in step 3 works for evaluation. For production, switch to one of three modes by editing `manager.env` (foreground) or `/etc/bilbycast-manager/manager.env` (systemd), then restart the service:
 
-- **ACME / Let's Encrypt** — set `BILBYCAST_ACME_ENABLED=true` plus `BILBYCAST_ACME_DOMAIN` and `BILBYCAST_ACME_EMAIL`. The manager auto-provisions and renews. Needs port 80 reachable from the public internet for HTTP-01 validation. Drop `BILBYCAST_TLS_CERT` / `_KEY` from the env file when using ACME.
+- **ACME / Let's Encrypt** — set `BILBYCAST_ACME_ENABLED=true` plus `BILBYCAST_ACME_DOMAIN` and `BILBYCAST_ACME_EMAIL`. The manager auto-provisions and renews. Needs port 80 reachable from the public internet for HTTP-01 validation. Drop `BILBYCAST_TLS_CERT` / `_KEY` from the env file when using ACME. **If you took the systemd path**, also set `BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme` — the default (`data/acme` under the working dir) is read-only under the hardened unit.
 - **File-based cert** — set `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` to PEM paths from a real CA.
 - **Behind a load balancer** — set `BILBYCAST_TLS_MODE=behind_proxy` and trust your LB's forwarded headers via `BILBYCAST_TRUST_PROXY_HEADER=1` + `BILBYCAST_TRUSTED_PROXIES=<CIDR list>`.
 

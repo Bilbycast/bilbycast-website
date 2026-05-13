@@ -396,10 +396,13 @@ Replaces the self-signed cert from step 3 with a real Let's Encrypt cert that br
 3. **Inbound TCP port 80** is reachable from the public internet (Let's Encrypt's HTTP-01 challenge connects on 80). Check the cloud provider's security group / firewall *and* `sudo ufw status` on the VM. From your laptop: `curl -v http://manager.example.com/ --max-time 5` — a "connection refused" is fine (means the packet reached the host); a *timeout* means the firewall is blocking.
 4. An **email address** for the Let's Encrypt account — receives renewal failure alerts.
 
-**Apply the change** — stop whatever's running the manager (Ctrl-C for foreground, `sudo systemctl stop bilbycast-manager` for systemd), then:
+**Apply the change.** The env file you edit and the restart command both depend on which install mode you used in step 5. Pick the matching block.
+
+#### Foreground install
 
 ```bash
-# Drop file-based TLS lines, add ACME lines
+# 1. Stop the foreground serve in its terminal (Ctrl-C).
+# 2. Edit the manager.env in your tarball directory (the one you wrote in step 3).
 sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' manager.env
 cat >> manager.env <<'EOF'
 BILBYCAST_ACME_ENABLED=true
@@ -408,19 +411,39 @@ BILBYCAST_ACME_EMAIL=ops@example.com
 BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
 EOF
 
-# Make sure the ACME state directory exists and the manager can write to it
+# 3. ACME state directory — your user owns it
 sudo mkdir -p /var/lib/bilbycast-manager/acme
-sudo chown -R "$USER":"$USER" /var/lib/bilbycast-manager/acme   # foreground install
-# (systemd install: chown to bilbycast:bilbycast instead)
+sudo chown -R "$USER":"$USER" /var/lib/bilbycast-manager/acme
 
-# Re-source manager.env so the next launch sees the new vars
+# 4. Reload env into shell, then restart. Port 80 < 1024 needs root or
+#    CAP_NET_BIND_SERVICE — sudo -E is the easy path.
 set -a; . ./manager.env; set +a
+sudo -E ./bilbycast-manager serve --config config/default.toml
 ```
 
-**Restart the manager.** Port 80 is below 1024, so binding requires `CAP_NET_BIND_SERVICE` or root:
+#### Systemd install
 
-- **Foreground**: `sudo -E ./bilbycast-manager serve --config config/default.toml` — `-E` preserves the env vars you just sourced.
-- **Systemd**: the unit from step 5 already grants `AmbientCapabilities=CAP_NET_BIND_SERVICE`. `sudo systemctl start bilbycast-manager` and watch the journal: `sudo journalctl -u bilbycast-manager -f`.
+```bash
+# 1. Stop the running service so ports 8443 / 80 free up cleanly
+sudo systemctl stop bilbycast-manager
+
+# 2. Edit the env file the unit actually reads (NOT the one in your home dir)
+sudo sed -i '/^BILBYCAST_TLS_CERT=/d; /^BILBYCAST_TLS_KEY=/d' /etc/bilbycast-manager/manager.env
+sudo tee -a /etc/bilbycast-manager/manager.env > /dev/null <<'EOF'
+BILBYCAST_ACME_ENABLED=true
+BILBYCAST_ACME_DOMAIN=manager.example.com
+BILBYCAST_ACME_EMAIL=ops@example.com
+BILBYCAST_ACME_DIR=/var/lib/bilbycast-manager/acme
+EOF
+
+# 3. ACME state directory — bilbycast service user owns it
+sudo mkdir -p /var/lib/bilbycast-manager/acme
+sudo chown -R bilbycast:bilbycast /var/lib/bilbycast-manager/acme
+
+# 4. Start. The unit already has CAP_NET_BIND_SERVICE so it can bind 80.
+sudo systemctl start bilbycast-manager
+sudo journalctl -u bilbycast-manager -f
+```
 
 **Watch for these log lines** to confirm issuance:
 

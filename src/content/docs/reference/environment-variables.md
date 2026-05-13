@@ -20,6 +20,8 @@ sidebar:
 | `BILBYCAST_ACME_EMAIL` | No | Contact email for Let's Encrypt |
 | `BILBYCAST_ACME_HTTP_PORT` | No | Port for HTTP-01 challenge (default: 80) |
 | `BILBYCAST_PORT` | No | Override listen port (default: 8443) |
+| `BILBYCAST_LISTEN_ADDRS` | No | Comma-separated bind addresses for the main HTTPS/WSS listener (default `0.0.0.0,[::]` = dual-stack). Examples: `0.0.0.0` (v4 only), `[::]` (v6 only), `192.0.2.5,[2001:db8::5]` (specific interfaces). Port still comes from `BILBYCAST_PORT`. |
+| `BILBYCAST_ACME_LISTEN_ADDRS` | No | Comma-separated bind addresses for the ACME HTTP-01 challenge listener (default `0.0.0.0,[::]`). Same shape as `BILBYCAST_LISTEN_ADDRS`; port from `BILBYCAST_ACME_HTTP_PORT`. |
 | `BILBYCAST_DATABASE_URL` | No | Postgres DSN (default: `postgres://bilbycast:bilbycast_dev@localhost:5433/bilbycast` — points at the dev docker-compose cluster) |
 
 ## Edge and Relay Variables

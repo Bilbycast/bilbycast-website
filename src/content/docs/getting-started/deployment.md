@@ -44,14 +44,16 @@ If you'd rather build from source instead of using the pre-built tarballs, see [
 
 | Service | Port | Protocol | Notes |
 |---------|------|----------|-------|
-| Manager web UI / REST / WS | 8443 | HTTPS / WSS | Override via `BILBYCAST_PORT` |
-| Manager ACME HTTP-01 challenge | 80 | HTTP | Only when `BILBYCAST_ACME_ENABLED=true` |
-| Edge REST API + setup wizard + NMOS IS-04/05/08 | 8080 | HTTP / HTTPS | Override via `--port` / `--bind` |
-| Edge embedded monitor dashboard | 9090 | HTTP | Override via `--monitor-port` |
+| Manager web UI / REST / WS | 8443 | HTTPS / WSS | Port override `BILBYCAST_PORT`; bind addresses `BILBYCAST_LISTEN_ADDRS` (default `0.0.0.0,[::]` — dual-stack). |
+| Manager ACME HTTP-01 challenge | 80 | HTTP | Only when `BILBYCAST_ACME_ENABLED=true`. Bind addresses `BILBYCAST_ACME_LISTEN_ADDRS` (default `0.0.0.0,[::]`). |
+| Edge REST API + setup wizard + NMOS IS-04/05/08 | 8080 | HTTP / HTTPS | Override via `--port` / `--bind` (legacy single-addr) or `--bind-addrs` (comma-separated dual-stack). Config field `server.listen_addrs`. |
+| Edge embedded monitor dashboard | 9090 | HTTP | Override via `--monitor-port`. Config field `monitor.listen_addrs` for dual-stack. |
 | Edge Prometheus `/metrics` | 8080 | HTTP / HTTPS | Same listener as REST API |
-| Edge media-protocol bind ports | _per-flow_ | varies | Set per input / output (SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, ST 2110) |
-| Relay QUIC | 4433 | QUIC / UDP (TLS 1.3) | Override via `--quic-addr` |
-| Relay REST API | 4480 | HTTP | Override via `--api-addr` |
+| Edge media-protocol bind ports | _per-flow_ | varies | Set per input / output (SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, ST 2110). Each accepts v4 or v6 via the per-input `bind_addr`. |
+| Relay QUIC | 4433 | QUIC / UDP (TLS 1.3) | Override via `--quic-addr` (legacy) or `--quic-addrs` (comma-separated). Config field `quic_addrs` defaults dual-stack. |
+| Relay REST API | 4480 | HTTP | Override via `--api-addr` / `--api-addrs`. Config field `api_addrs` defaults dual-stack. |
+
+**Dual-stack (IPv4 + IPv6) is on by default** across the manager, edge, and relay binaries. Each listener binds `0.0.0.0` and `[::]` simultaneously, with `IPV6_V6ONLY=1` on the v6 socket so the two families coexist on the same port. Operators with v6 connectivity get it automatically — point an AAAA record at the box alongside the A record. To restrict, set the relevant env var / config field to just `0.0.0.0` (v4 only), `[::]` (v6 only), or a specific interface address.
 
 ## Firewall
 

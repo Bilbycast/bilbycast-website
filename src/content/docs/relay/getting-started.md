@@ -98,11 +98,15 @@ Next to the relay binary, write `relay.json` (replace `REPLACE_WITH_YOUR_MANAGER
   "require_bind_auth": true,
   "manager": {
     "enabled": true,
-    "url": "wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node",
+    "urls": [
+      "wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node"
+    ],
     "registration_token": "<token-from-manager>"
   }
 }
 ```
+
+`urls` is an array (1-16 entries, each must be `wss://`). For a single manager that's one entry; for an HA-paired manager cluster you'd list both hostnames — the relay tries them in order and rotates on WebSocket close with a 5-second backoff.
 
 Launch:
 

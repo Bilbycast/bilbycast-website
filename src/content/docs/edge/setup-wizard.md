@@ -82,7 +82,7 @@ Everything the wizard does can be done with a `config.json` + `secrets.json` pai
 // config.json (operator-visible)
 {
   "manager": {
-    "url": "wss://manager.example.com",
+    "urls": ["wss://manager.example.com"],
     "device_name": "edge-syd-1"
   },
   "setup_enabled": false

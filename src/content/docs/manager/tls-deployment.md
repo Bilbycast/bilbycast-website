@@ -164,7 +164,7 @@ Edge nodes connecting to a self-signed manager need to explicitly opt in:
 // edge config.json
 {
   "manager": {
-    "url": "wss://manager.example.com",
+    "urls": ["wss://manager.example.com"],
     "accept_self_signed_cert": true
   }
 }

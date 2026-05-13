@@ -38,7 +38,7 @@ Edge and relay nodes support optional **SHA-256 certificate fingerprint pinning*
 
 ```json
 "manager": {
-  "url": "wss://manager:8443/ws/node",
+  "urls": ["wss://manager:8443/ws/node"],
   "cert_fingerprint": "ab:cd:ef:01:23:45:67:89:..."
 }
 ```

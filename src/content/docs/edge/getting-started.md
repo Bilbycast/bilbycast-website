@@ -221,7 +221,7 @@ If you'd rather skip the wizard and write the config files by hand, create two f
   "server": { "listen_addr": "0.0.0.0", "listen_port": 8080 },
   "manager": {
     "enabled": true,
-    "url": "wss://manager.example.com:8443/ws/node"
+    "urls": ["wss://manager.example.com:8443/ws/node"]
   },
   "inputs": [],
   "outputs": [],

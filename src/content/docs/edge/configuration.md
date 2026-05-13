@@ -294,7 +294,7 @@ Optional connection to a bilbycast-manager instance for centralized monitoring a
 {
   "manager": {
     "enabled": true,
-    "url": "wss://manager-host:8443/ws/node",
+    "urls": ["wss://manager-host:8443/ws/node"],
     "accept_self_signed_cert": false,
     "cert_fingerprint": "ab:cd:ef:01:23:45:67:89:..."
   }
@@ -304,7 +304,7 @@ Optional connection to a bilbycast-manager instance for centralized monitoring a
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `enabled` | boolean | No | `false` | Enable the manager connection. |
-| `url` | string | Yes (if enabled) | - | Manager WebSocket URL. Must use `wss://` (TLS required). Example: `"wss://manager-host:8443/ws/node"`. Max 2048 characters. |
+| `urls` | array of string | Yes (if enabled) | - | Ordered list of manager WebSocket URLs (1-16 entries), each `wss://` (TLS required). Example: `["wss://manager-host:8443/ws/node"]`. For an HA-paired manager cluster, list both hostnames — the edge tries them in order and rotates on WebSocket close with a 5-second backoff. Each entry max 2048 chars. |
 | `accept_self_signed_cert` | boolean | No | `false` | Accept self-signed TLS certificates from the manager. **Dev/testing only** — disables all TLS validation. Requires `BILBYCAST_ALLOW_INSECURE=1` environment variable as a safety guard. |
 | `cert_fingerprint` | string | No | `null` | SHA-256 fingerprint of the manager's TLS certificate for certificate pinning. Format: hex with colons, e.g. `"ab:cd:ef:01:23:..."`. When set, connections to servers presenting a different certificate are rejected, even if the certificate is CA-signed. Protects against compromised CAs. The server's fingerprint is logged on first connection. |
 | `registration_token` | string | No | `null` | One-time registration token from the manager. Used on first connection only. After successful registration, the token is cleared and replaced by `node_id` + `node_secret`. **Stored in `secrets.json`.** |

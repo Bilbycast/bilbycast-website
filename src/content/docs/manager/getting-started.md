@@ -241,6 +241,16 @@ The `setup` subcommand applies every migration in `migrations-pg/` and then prom
 # Reload manager.env defensively in case you opened a new shell between steps —
 # setup reads BILBYCAST_DATABASE_URL/_JWT_SECRET/_MASTER_KEY from the environment.
 set -a; . ./manager.env; set +a
+
+# Bail out loudly if any required env var is empty rather than failing
+# inside setup with a generic database/JWT error.
+for v in BILBYCAST_DATABASE_URL BILBYCAST_JWT_SECRET BILBYCAST_MASTER_KEY; do
+    if [ -z "${!v}" ]; then
+        echo "ERROR: $v is empty after sourcing manager.env."
+        echo "       Re-run step 3 (Configure secrets and TLS) so manager.env gets regenerated."
+        return 1 2>/dev/null || exit 1
+    fi
+done
 echo "Connecting as: $BILBYCAST_DATABASE_URL"
 
 ./bilbycast-manager setup --config config/default.toml

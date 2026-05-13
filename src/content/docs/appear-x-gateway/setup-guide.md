@@ -31,14 +31,16 @@ Two paths, same outcome.
 
 The installer downloads the Sigstore-signed manifest, verifies it against the gateway's compiled-in allowlist, downloads the matching tarball, lays out `/opt/bilbycast/appear-x-gateway/{current,versions/<v>/,…}` with a `current` symlink the upgrade machinery atomically swaps, creates a `bilbycast-gateway` system user, writes `config.toml`, and installs + enables the systemd unit.
 
+**Replace the four `REPLACE_*` values below with your own before running** — the placeholders are intentional all-caps so bash doesn't interpret them as shell redirection (e.g. `<token>` would treat the angle bracket as input redirection):
+
 ```bash
 curl -fsSL https://github.com/Bilbycast/bilbycast-appear-x-api-gateway/releases/latest/download/install-appear-x-gateway.sh \
   | sudo bash -s -- \
-      --manager wss://your-manager-host:8443/ws/node \
-      --registration-token <token-from-step-1> \
-      --appear-x-address 192.168.1.100 \
-      --appear-x-username admin \
-      --appear-x-password '<chassis-password>'
+      --manager 'wss://REPLACE_WITH_YOUR_MANAGER_HOSTNAME:8443/ws/node' \
+      --registration-token 'REPLACE_WITH_REGISTRATION_TOKEN_FROM_STEP_1' \
+      --appear-x-address 'REPLACE_WITH_CHASSIS_IP' \
+      --appear-x-username 'REPLACE_WITH_CHASSIS_USERNAME' \
+      --appear-x-password 'REPLACE_WITH_CHASSIS_PASSWORD'
 ```
 
 The installer is idempotent — re-running with `--upgrade-installer` refreshes the systemd unit + install script without touching config or staged versions.

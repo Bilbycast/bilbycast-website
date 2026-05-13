@@ -32,6 +32,14 @@ sudo mkdir -p /etc/bilbycast
 sudo mkdir -p /var/lib/bilbycast/replay
 sudo mkdir -p /var/lib/bilbycast/media
 
+# /etc/bilbycast must be writable by the bilbycast user — the edge persists
+# manager-pushed config changes via an atomic write-temp-then-rename, which
+# requires write access on the *directory* (to create the .tmp file and the
+# rename target), not just on the files inside. Root-owned 0755 would silently
+# fail config-persistence the first time the manager pushes UpdateConfig.
+sudo chown bilbycast:bilbycast /etc/bilbycast
+sudo chmod 0750 /etc/bilbycast
+
 sudo chown -R bilbycast:bilbycast /var/lib/bilbycast
 sudo chmod 750 /var/lib/bilbycast
 sudo chmod 750 /var/lib/bilbycast/replay

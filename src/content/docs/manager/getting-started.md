@@ -156,12 +156,18 @@ Plus a TLS cert/key pair for `https://` on 8443. For evaluation we generate a se
 Generate everything into a `manager.env` file in the current directory:
 
 ```bash
-# Self-signed TLS cert for evaluation
+# Self-signed TLS cert for evaluation.
+# Optional: set MANAGER_HOSTNAME to the domain you'll use in your browser
+# (e.g. "manager.example.com") so the cert covers it and Chrome doesn't
+# complain about NET::ERR_CERT_COMMON_NAME_INVALID on top of the
+# self-signed warning. Leave empty to omit.
 mkdir -p certs
 HOST_IP="$(hostname -I | awk '{print $1}')"
+MANAGER_HOSTNAME=""   # set to "manager.example.com" etc. if you have one
+SAN="DNS:localhost,IP:127.0.0.1,IP:${HOST_IP}${MANAGER_HOSTNAME:+,DNS:${MANAGER_HOSTNAME}}"
 openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt \
-  -days 365 -nodes -subj "/CN=${HOST_IP}" \
-  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${HOST_IP}"
+  -days 365 -nodes -subj "/CN=${MANAGER_HOSTNAME:-${HOST_IP}}" \
+  -addext "subjectAltName=${SAN}"
 chmod 600 certs/server.key
 
 # manager.env — secrets + cert paths, source this before setup / serve

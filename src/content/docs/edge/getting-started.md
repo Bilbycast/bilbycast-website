@@ -46,7 +46,7 @@ sha256sum -c "bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
 tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 ```
 
-Each tarball expands to a directory containing `bilbycast-edge`, the licence files, a `README.md`, and `config_examples/` with a starter config.
+Each tarball expands to a directory containing the `bilbycast-edge` binary, the licence files (`LICENSE`, `LICENSE.commercial`, `NOTICE`, and `COPYING.GPL` on the `-full` variant), `README.md`, and a `packaging/` directory with optional systemd unit, sysusers config, ETF qdisc and PTP provisioning scripts, and the `install-edge.sh` one-shot installer.
 
 ### Verify the Sigstore signature (optional)
 
@@ -171,8 +171,10 @@ Before launching the edge, create its node entry in the manager:
 Inside the extracted tarball directory:
 
 ```bash
-./bilbycast-edge --config config_examples/minimal.json
+./bilbycast-edge --config config.json
 ```
+
+The file doesn't have to exist yet — pointing `--config` at a path whose **parent directory exists** (the tarball directory, in this case) is enough. The edge starts with an empty in-memory config, generates a `node_id`, writes `config.json` itself, then waits for the wizard. (Pointing `--config` at a path with a missing parent directory fails immediately because the edge can't write its `.tmp` file there.)
 
 Two things happen on first boot:
 

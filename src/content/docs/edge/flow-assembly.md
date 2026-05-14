@@ -124,14 +124,33 @@ The `hitless` slot source is **not** SMPTE 2022-7 sequence-aware dedup — the P
       { "type": "essence", "input_id": "cam-b", "kind": "video" },
       { "type": "essence", "input_id": "cam-c", "kind": "video" }
     ],
-    "initial_input_id": "cam-a"
+    "initial_input_id": "cam-a",
+    "splice_mode": "pes_aligned",
+    "splice_budget_ms": 2000
   }
 }
 ```
 
 To drive it from the [Live Switcher](/manager/switcher/), build a preset for each camera with a single `activate_input` action (target this flow + the camera's input id) and Take. Receivers stay locked through every cut — the output PID is always `0x100` regardless of which camera is live. Hitless and Switch slots can coexist in the same assembly (e.g. one Hitless slot for an auto-failover audio pair plus one Switch slot for the multi-cam video bus).
 
-**`pid_bus_switch_slot` capability:** the manager UI's Switch source-type option in the Advanced assembly editor is gated on the edge advertising this capability. Older edges hide the option; the operator gets the same Pid / Essence / Hitless choices they always had.
+**`pid_bus_switch_slot` capability:** the manager UI's Switch source-type option in the Node Bus Matrix is gated on the edge advertising this capability. Older edges hide the option; the operator gets the same Pid / Essence / Hitless choices they always had.
+
+### Splice strategy — `splice_mode`
+
+Each Switch slot picks how `ActivateInput` lands on the wire:
+
+| `splice_mode` | What happens on Take | When to pick it |
+|---|---|---|
+| `pmt_bump` *(default)* | PMT version bumps mod 32 and DI=1 is armed on the next PCR for the slot's `out_pid`. Receivers re-acquire if the two sources are independent encoders of the same content. Backwards-compatible default — every pre-PES-Switch flow gets this. | When the two legs are unrelated programs (different content) or when receivers are known-tolerant. |
+| `pes_aligned` | Hold the outbound stream at the from-leg's last fully-emitted PES boundary, wait up to `splice_budget_ms` for the to-leg to produce a clean access-unit boundary, then concatenate. Audio splices wait for the next PUSI=1 PES with a monotonically-past PTS; video splices additionally require an H.264 / HEVC IDR. On budget exhaustion the path falls back to `pmt_bump` and emits `pes_splice_timeout`. | When both legs are coherent content (multi-cam program feeds, redundant encodes of the same source) and the receivers must stay glitch-free. |
+
+`splice_budget_ms` defaults to 200 ms for audio and 2000 ms for video (≈ one typical broadcast GoP). Range `20..=5000`.
+
+**Codec-parameter sentinels** (PES-aligned only): the edge snapshots the from-leg's codec parameters (AAC AudioSpecificConfig — profile / sample rate / channel config — for `stream_type` `0x0F` ADTS and `0x11` LATM; H.264 SPS — profile / level / chroma / bit-depth / resolution — for `0x1B`; HEVC SPS — same fields — for `0x24`) on each access-unit boundary, and parses the to-leg's first commit-eligible PES. On mismatch the splice **refuses** and the assembler falls back to `pmt_bump` with a structured Warning `pes_splice_codec_param_mismatch` event carrying both A and B's full parameter sets — instead of producing inaudible / undecodable output. Either side `None` (no parseable header) is fail-safe — the splice commits on PTS / IDR alone.
+
+### Per-switch override — `splice_mode_override`
+
+`POST /api/v1/flows/{flow_id}/activate-input` (and the manager-proxied `POST /api/v1/nodes/{id}/flows/{flow_id}/activate-input`) accepts an optional `splice_mode_override: "pmt_bump" | "pes_aligned"`. The override beats every Switch slot's config-time `splice_mode` for **this one switch only** — the persisted assembly is untouched. Useful for an emergency "force PMT-bump on a Take we don't care about hand-holding" or "force PES-aligned for the one shot that matters". The manager Switcher preset editor surfaces this as a `splice: default | force PMT-bump | force PES-aligned` dropdown per preset action.
 
 ## PCR rules
 
@@ -215,7 +234,8 @@ All enforced at config-save time (plus belt-and-braces checks at flow bring-up).
 
 ## Related
 
-- **[Live Switcher](/manager/switcher/)** — the manager-side PGM/PVW director console that drives `ActivateInput` across flows. Drives Switch-slot active legs in assembled flows in addition to its legacy passthrough behaviour.
+- **[Node Bus Matrix](/manager/node-bus/)** — the manager-side three-pane authoring surface for the node-wide ES bus. Replaces the per-flow assembly form. Click-to-wire + drag-and-drop, pending-state diffing, salvo export to a Switcher preset.
+- **[Live Switcher](/manager/switcher/)** — the PGM/PVW director console that drives `ActivateInput` across flows. Drives Switch-slot active legs in assembled flows in addition to its legacy passthrough behaviour.
 - **[MPTS → SPTS filtering](/edge/configuration/#mpts--spts-filtering)** — the simpler story: forward an upstream MPTS verbatim and optionally down-select a single program per output. Complementary to Flow Assembly — assembly builds *fresh* TS from elementary streams; filtering re-packs an existing TS.
-- **[Events & Alarms](/edge/events-and-alarms/)** — the `pid_bus_*` error code reference (including the Switch-slot codes).
+- **[Events & Alarms](/edge/events-and-alarms/)** — the `pid_bus_*` error code reference (including the Switch-slot codes and `pes_splice_*` events).
 - **[Hot Input Switching](/edge/overview/)** — format-agnostic zero-gap cutover between a flow's inputs, via `TsContinuityFixer`, for passthrough flows.

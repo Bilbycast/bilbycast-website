@@ -13,6 +13,7 @@ bilbycast-manager is the centralized control plane for bilbycast. It provides a 
 - **Network topology** — Live visual map with graph and signal flow views.
 - **Node management** — Register, configure, and monitor edge nodes and relay servers remotely.
 - **[Live Switcher](/manager/switcher/)** — In-browser PGM/PVW director console with Take semantics, presets, and per-tenant pages.
+- **[Node Bus Matrix](/manager/node-bus/)** — Three-pane crosspoint authoring (Sources / Matrix / Inspector) for the node-wide ES bus. Click-to-wire and drag-and-drop equally first-class. Pending-state diffing with Apply / Discard. Salvo export captures a routing snapshot as a Switcher preset.
 - **[Routines](/manager/routines/)** — Cron-scheduled named target state across flows, DST-correct via IANA timezones, with manual activation, skip-next-fire, and partial/failed/missed events.
 - **[Multi-tenant Groups](/manager/multi-tenant-groups/)** — Per-tenant users, nodes, tunnels, switcher pages, routines, audit trail, quotas, and per-tenant logo + brand-colour theming. Access-control boundary only.
 - **[On-edge Media Library](/manager/media-library/)** — Browser upload + delete of slates, loops, and emergency-fallback content for the edge `media_player` input, with quota enforcement.

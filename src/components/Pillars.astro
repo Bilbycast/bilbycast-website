@@ -25,7 +25,7 @@ const pillars = [
     body: 'Twelve protocols ingressed and egressed in a single Rust binary. In-process video transcoding (H.264 / HEVC / NVENC) and audio transcoding (AAC / Opus / MP2 / AC-3) — no ffmpeg subprocess, no separate transcode box. NMOS-friendly out of the box.',
     bullets: [
       'SRT, RIST, RTP, RTMP, HLS, CMAF-LL, WebRTC, ST 2110-20/-23/-30/-31/-40',
-      'Hot input switching with zero-gap PMT bump — no black on failover',
+      'Node Bus Matrix — one edge as a node-wide ES distribution matrix; PES-aligned splice keeps receivers locked',
       'In-process transcode for both video and audio, end-to-end encrypted on the wire',
     ],
     href: '/features/one-gateway/',
@@ -39,7 +39,7 @@ const pillars = [
     bullets: [
       'Per-flow Replay with lock-to-live and ± 100 ms bracket-trim',
       'Sport-preset catalog: Soccer, Rugby, NFL, AFL, Cricket, Tennis, Hockey, Basketball, Volleyball, Baseball, and more',
-      'Live Switcher (PGM/PVW), Routines (cron + AI), Multi-tenant Groups',
+      'Live Switcher (PGM/PVW), PES-aligned multi-cam splice on a single output PID, Routines (cron + AI)',
     ],
     href: '/features/live-sports/',
     image: edgeStatusImg,

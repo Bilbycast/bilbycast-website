@@ -61,6 +61,16 @@ const features = [
     description: 'Build a fresh MPEG-TS (SPTS or MPTS) from elementary streams pulled off any of a flow’s inputs: mix video from input A with audio from input B, compose a multi-program feed from N sources, or stand up a pre-bus hitless merger between two ingress legs. PCM and AES3 inputs (ST 2110-30/-31, rtp_audio) become TS carriers via input-level audio_encode (AAC-LC, HE-AAC v1/v2, SMPTE 302M). The assembly plan is hot-swappable at runtime — PMT versions bump in place, unchanged slots keep running, no packet gap.',
   },
   {
+    icon: 'BUS',
+    title: 'Node Bus Matrix',
+    description: 'One edge becomes a full distribution matrix. The PID bus is node-wide — any flow’s assembly pulls elementary streams from inputs owned by any sibling flow, with a master-clock-identity preflight that refuses cross-PTP-domain / cross-PCR-PLL mixes before they hit the wire. A three-pane crosspoint authoring surface (Sources / Matrix / Inspector) replaces nested form-pickers entirely. Click-to-wire and drag-and-drop equally first-class. Lawo-style orange marks pending; blue marks committed. Apply (N) commits per-flow atomic. Save salvo captures the routing as a Switcher preset.',
+  },
+  {
+    icon: 'PES',
+    title: 'PES Switch — Access-Unit-Aligned Splice',
+    description: 'Switch sources without going to black AND without re-acquire glitches. Per-slot splice_mode = "pes_aligned" holds the outbound stream at the from-leg’s last fully-emitted PES boundary, then commits on the to-leg’s next clean access unit — audio splices wait for a PUSI=1 PES with monotonically-past PTS; video splices additionally require an H.264 / HEVC IDR. AAC ADTS / LATM + H.264 / HEVC SPS sentinels refuse the splice on codec-parameter mismatch (sample rate, profile, resolution, bit-depth) and fall back to PMT-bump with a structured Warning. Per-Take splice_mode_override on any preset action.',
+  },
+  {
     icon: 'AI',
     title: 'AI-Assisted Configuration',
     description: 'Built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows via a driver-aware action system. Supports OpenAI, Anthropic, and Gemini providers — credentials stripped before any LLM context.',

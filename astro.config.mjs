@@ -61,6 +61,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'manager/overview' },
 						{ label: 'Install the Manager', slug: 'manager/getting-started' },
 						{ label: 'Live Switcher', slug: 'manager/switcher' },
+						{ label: 'Node Bus Matrix', slug: 'manager/node-bus' },
 						{ label: 'Replay (Operator UI)', slug: 'manager/replay' },
 						{ label: 'Routines', slug: 'manager/routines' },
 						{ label: 'Multi-tenant Groups', slug: 'manager/multi-tenant-groups' },

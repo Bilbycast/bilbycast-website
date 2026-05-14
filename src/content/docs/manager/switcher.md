@@ -47,7 +47,15 @@ A preset action is `(node_id, flow_id, input_id)` — *"make input Y the active 
 - **Assembled flow without Switch slots** — Take is a no-op for the data path. Every input contributes ES simultaneously; the assembly's slot list owns what's emitted regardless of which is "active".
 - **Assembled flow with Switch slots** — Take flips the active leg of every Switch slot whose leg list contains the named input. **Output PIDs stay unified across switches** (each slot's `out_pid` is fixed); only the source leg flips. PMT version bumps mod 32 + DI=1 fires on the next PCR for the affected `out_pid` so receivers re-anchor STC without re-tuning. Slots without that input as a leg are silent.
 
-Operators build presets exactly as before in all three cases — there's no separate Switch-aware preset type. The flow modal's [Flow Assembly](/edge/flow-assembly/) section is where the operator picks the mode (and, for the third case, builds the Switch slot's leg list); the Switcher then drives whichever mode the flow runs in.
+Operators build presets exactly as before in all three cases — there's no separate Switch-aware preset type. The flow modal's summary card deep-links into the [Node Bus Matrix](/manager/node-bus/) where the operator picks the mode (and, for the third case, builds the Switch slot's leg list); the Switcher then drives whichever mode the flow runs in.
+
+## Per-action splice override
+
+For the third case above (assembled flow with Switch slots), the preset editor exposes a per-action `splice: default | force PMT-bump | force PES-aligned` dropdown. `default` sends no override and lets the slot's config-time `splice_mode` apply. Explicit choices ride on the action's `splice_mode_override` payload and beat the slot's config for **that one Take** only — useful for an emergency override without editing the assembly. See [Flow Assembly — Splice strategy](/edge/flow-assembly/#splice-strategy--splice_mode) for what each mode does on the wire.
+
+## Bus-route actions (Node Bus salvos)
+
+In addition to `activate_input`, presets can carry **`bus_route` actions** captured from the Node Bus Matrix's **Save salvo…** button. A `bus_route` action is `(node_id, dst_flow_id, dst_program_number, source_input_id, source_program_number)` — *"re-point program X on flow A to pull from program Y on input B"*. The Switcher executor reuses the same per-flow patch-build + cross-clock preflight + atomic `update_flow_assembly` pipeline as the matrix's `Apply (N)` button, so a salvo recalls the full routing snapshot in one click. See [Node Bus Matrix](/manager/node-bus/#save-salvo--capture-routing-as-a-switcher-preset).
 
 ## Permissions
 

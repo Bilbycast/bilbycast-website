@@ -116,9 +116,23 @@ LimitNOFILE=65536
 # Required by engine::wire_emit, which spawns one SCHED_FIFO std::thread
 # per UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The kernel
 # allows unprivileged SCHED_FIFO whenever LimitRTPRIO is non-zero and
-# RestrictRealtime is off, so no capability grant is required.
+# RestrictRealtime is off, so no capability grant is required for the
+# scheduling-class change itself.
 RestrictRealtime=false
 LimitRTPRIO=50
+
+# CAP_NET_ADMIN — required by mainline kernel ≥ 6.x (and every recent
+# Ubuntu / RHEL backport) for setsockopt(SO_TXTIME) with any non-
+# CLOCK_MONOTONIC clockid. Wire pacing uses CLOCK_TAI, the only
+# clockid the etf qdisc on Intel ice / igc / igb and Mellanox mlx5
+# accepts. Without this cap the SO_TXTIME probe returns EPERM, wire-
+# emit silently falls back to the clock_nanosleep tier, and on any
+# host whose etf qdisc has `skip_sock_check off` (the kernel default)
+# those fallback packets are then also dropped at the qdisc. The cap
+# does NOT let the edge install qdiscs — that path stays operator-
+# side via `setup-etf-qdisc.sh`.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
 
 # Logging + storage roots
 Environment=RUST_LOG=info

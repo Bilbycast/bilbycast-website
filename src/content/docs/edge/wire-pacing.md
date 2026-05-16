@@ -28,6 +28,10 @@ The path is picked at spawn time by a one-shot probe — if `SO_TXTIME` setsocko
 
 **All targets are computed in CLOCK_TAI** (Linux kernel `CLOCK_TAI` clockid). When `ptp4l` + `phc2sys` are running, CLOCK_TAI is PTP-disciplined system-wide and SO_TXTIME on `etf` aligns to the NIC's PTP PHY clock. Without those, CLOCK_TAI is just `system clock + leap seconds` — same precision floor as `CLOCK_MONOTONIC`, but the value the kernel `etf` qdisc accepts.
 
+:::caution[Kernel ≥ 6.x: `SO_TXTIME(CLOCK_TAI)` needs `CAP_NET_ADMIN`]
+Mainline Linux 6.x (and every recent Ubuntu / Debian / RHEL backport) restricts `setsockopt(SO_TXTIME)` with any non-`CLOCK_MONOTONIC` clockid to processes holding `CAP_NET_ADMIN`. Without the capability, the setsockopt returns `EPERM`, the SO_TXTIME probe fails silently, and the wire-emit thread drops to the `clock_nanosleep` tier. The shipped systemd unit grants the capability via `AmbientCapabilities=CAP_NET_ADMIN`; standalone (`cargo run`, direct `./bilbycast-edge`) invocations need a one-time `sudo setcap cap_net_admin,cap_sys_nice+ep ./bilbycast-edge`. See [CAP_NET_ADMIN grant](#cap_net_admin-grant) below for the verification commands.
+:::
+
 ## The five capability tiers
 
 The release path the edge actually uses depends on what the host can deliver. The five tiers are ordered from best to worst; the edge picks the highest one available at output startup, logs it (`wire-emit '<id>': starting (anchor=…, tier=…)`), and surfaces it on `OutputStats.wire_pacing_tier`.
@@ -105,7 +109,7 @@ Field-by-field:
 
 - `clockid CLOCK_TAI` — required by the kernel etf implementation. The ice/igc drivers reject CLOCK_MONOTONIC. SO_TXTIME with the wrong clockid is silently degraded — the kernel accepts the setsockopt but ignores every cmsg, and tier still reports `so_txtime` while every datagram sends ASAP. Always use TAI.
 - `delta 100000` — max permissible early-tx-by-kernel in ns. 100 µs is the standard tradeoff; higher allows more burst-smoothing, lower tightens the schedule.
-- `skip_sock_check` — lets non-CAP_NET_ADMIN sockets use the qdisc. The wire-emit thread sets SO_TXTIME from a regular user thread, not as root, so this flag is required.
+- `skip_sock_check` — **non-negotiable** if you use the `mqprio` priomap from the shipped `setup-etf-qdisc.sh` (or any priomap that routes priority-0 traffic into the etf class). Default socket priority is 0 for every kernel-issued packet (ARP, ICMP, DHCP) and every UDP socket the edge opens without an explicit `SO_PRIORITY`. Without `skip_sock_check`, etf refuses any packet whose socket lacks SO_TXTIME and drops it at the qdisc — **including kernel-issued ARP solicitations**. Symptoms: `ip neigh show <peer>` reports `INCOMPLETE`, every `sendmsg` returns `ENETUNREACH` (errno 101), `tc -s qdisc show` reports 100 % drops on the etf class with zero packets sent. With `skip_sock_check`, non-SO_TXTIME packets fall through to FIFO release (they leave the box); SO_TXTIME packets still get hardware-scheduled. This is independent of `CAP_NET_ADMIN` — both are required for a working tier-1/2 setup.
 
 To persist across reboot, drop a systemd-networkd or `/etc/network/interfaces.d/<iface>` snippet — same pattern as any other qdisc.
 
@@ -129,6 +133,55 @@ sudo phc2sys -s <iface> -w -m
 The standard linuxptp configs ship with the package. Once `ptp4l` is steady-state synced, CLOCK_TAI on the box is PTP-disciplined and every wire-emit thread emits against PTP time — across multiple edges on the same GM, all of them agree to within sub-µs.
 
 The edge polls `ptp4l`'s management socket independently for the per-flow `master_clock` integration (which controls **what time gets stamped INTO PCR**). See [PTP integration](/edge/ptp/) for that side.
+
+## CAP_NET_ADMIN grant
+
+Mainline Linux 6.x — and every recent Ubuntu / Debian / RHEL backport — restricts `setsockopt(SO_TXTIME)` with any non-`CLOCK_MONOTONIC` clockid to processes holding `CAP_NET_ADMIN`. Wire pacing uses `CLOCK_TAI` (the only clockid the etf qdisc on Intel ice / igc / igb and Mellanox mlx5 will accept), so on these kernels the cap is mandatory for **every** SO_TXTIME-based tier (1, 2, and 3).
+
+Without the cap:
+
+- The probe fails with `EPERM`, wire-emit logs `wire-emit: SO_TXTIME(clockid=11) setsockopt failed: Operation not permitted (kernel requires CAP_NET_ADMIN…) — falling back to clock_nanosleep tier` and degrades to tier 4.
+- On any host where the etf qdisc has `skip_sock_check off` (the kernel default), tier-4 packets are then **also** dropped at the qdisc because they don't carry SO_TXTIME. The fallback path silently fails completely. Always set `skip_sock_check` on the etf qdisc — see step 2 above.
+
+The capability does **not** let the edge install qdiscs (that path stays operator-side, in `setup-etf-qdisc.sh`). It only unlocks the per-socket setsockopt.
+
+### Production (systemd)
+
+The shipped systemd unit (`packaging/bilbycast-edge.service`, installed by `install-edge.sh`) already grants the cap:
+
+```ini
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+```
+
+No manual step required — `install-edge.sh` lays down the unit with these lines already set. Operators writing their own unit must add the same two lines.
+
+### Dev / testbed (direct binary)
+
+When running the binary without systemd (`cargo run`, `./target/release/bilbycast-edge`, ad-hoc test setups), apply file capabilities once after every build:
+
+```bash
+sudo setcap cap_net_admin,cap_sys_nice+ep ./target/release/bilbycast-edge
+# (cap_sys_nice is optional — only needed if LimitRTPRIO=50 isn't set on the
+#  shell. systemd's LimitRTPRIO covers it in production.)
+```
+
+File capabilities persist across reboots via filesystem xattrs but **are reset on every rebuild** (each `cargo build` writes a fresh binary with no caps). Add the `setcap` to your build script if you iterate often.
+
+Verify:
+
+```bash
+getcap ./target/release/bilbycast-edge
+# expected: cap_net_admin,cap_sys_nice=ep
+```
+
+Then on edge start:
+
+```
+wire-emit '<id>': starting (anchor=Pcr, tier=so_txtime)
+```
+
+`tier=so_txtime` confirms the path is live. `tier=clock_nanosleep` plus the `SO_TXTIME … Operation not permitted` warning means the cap is still missing.
 
 ## Verifying the result
 
@@ -187,7 +240,10 @@ Without PTP, both pieces drift independently per box — multi-edge hitless will
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Tier reports `so_txtime` but PCR_AC is bad | Kernel accepts SO_TXTIME setsockopt but the qdisc isn't honouring it | Install `etf` qdisc with `clockid CLOCK_TAI` |
-| Tier reports `clock_nanosleep` despite PTP setup | SO_TXTIME probe failed at spawn | Check `etf` qdisc, kernel version (≥ 4.19), `ethtool -T` for hardware support |
+| Tier reports `clock_nanosleep` + `SO_TXTIME … Operation not permitted` in log | Process lacks `CAP_NET_ADMIN` (kernel ≥ 6.x policy on non-MONOTONIC clockids) | systemd: `AmbientCapabilities=CAP_NET_ADMIN`. Standalone: `sudo setcap cap_net_admin,cap_sys_nice+ep <binary>`. See [CAP_NET_ADMIN grant](#cap_net_admin-grant). |
+| Tier reports `clock_nanosleep` despite PTP setup, no cap warning | SO_TXTIME probe failed at spawn for a different reason | Check `etf` qdisc, kernel version (≥ 4.19), `ethtool -T` for hardware support |
+| `tc -s qdisc show` shows etf with 100 % drops, zero sent; `ip neigh` is `INCOMPLETE`; sends return `ENETUNREACH` | Etf qdisc installed with `skip_sock_check off` and the priomap routes priority-0 (ARP, default UDP) into the etf class | Re-install etf with `skip_sock_check` flag — see step 2 above. The shipped `setup-etf-qdisc.sh` does this. |
+| Tier reports `so_txtime`, etf shows 100 % drops, but `getcap` shows `cap_net_admin` is set | NIC PHC drifts ≥ 1–4 s from CLOCK_TAI — hardware launch register overflow | Verify `phc2sys` uses `-w` (not `-O 0`). `phc2sys -O 0` while kernel `tai_offset=37s` puts CLOCK_TAI 37 s ahead of the PHC and the NIC rejects every launch time. |
 | `wire_pacing_late` is non-zero | Scheduler missed wire-emit deadlines | CPU isolation, IRQ pinning, `PREEMPT_RT` kernel |
 | Multi-edge feeds drift apart | PTP not running or different GMs | One GM, all edges synced via `ptp4l`; flow `master_clock = Ptp` |
 | Hardware NIC has `PTP Hardware Clock: none` | Consumer / Realtek NIC | Replace with Intel I226 / E810 / Mellanox ConnectX |

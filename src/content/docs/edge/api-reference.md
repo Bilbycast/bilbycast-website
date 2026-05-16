@@ -890,8 +890,8 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `bitrate_bps` | integer | Current bitrate in bits/sec |
 | `packets_dropped` | integer | Packets dropped (channel full) |
 | `fec_packets_sent` | integer | FEC packets sent |
-| `wire_pacing_tier` | string | Active wire-pacing release tier — `"so_txtime"`, `"clock_nanosleep_fifo"`, `"clock_nanosleep"`, or `"unpaced"`. Set once at output startup. Absent on outputs that don't own a UDP socket directly (SRT, RIST, RTMP, HLS, CMAF, WebRTC). |
-| `wire_pacing_late` | integer | Datagrams the kernel rejected as late on the SO_TXTIME path (target tx time landed in the past — `EOVERFLOW`). 0 on userspace-sleep release paths. |
+| `wire_pacing_tier` | string | Active wire-pacing release tier — `"so_txtime"`, `"clock_nanosleep_fifo"`, or `"clock_nanosleep"`. Set once at output startup. Default is `"clock_nanosleep_fifo"`; the SO_TXTIME tier activates only when `BILBYCAST_ENABLE_TXTIME=1` is set on the edge process AND the kernel accepts the setsockopt (requires `CAP_NET_ADMIN`). See [Wire-Time Precision](/edge/wire-pacing/). Absent on outputs that don't own a UDP socket directly (SRT, RIST, RTMP, HLS, CMAF, WebRTC). |
+| `wire_pacing_late` | integer | Datagrams the kernel rejected as late on the SO_TXTIME path (target tx time landed in the past — `EOVERFLOW`). Always 0 on userspace-sleep release paths (no errqueue). |
 | `srt_stats` | object/null | SRT leg 1 stats (if SRT output) |
 | `srt_leg2_stats` | object/null | SRT leg 2 stats (if redundancy) |
 

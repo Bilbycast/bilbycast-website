@@ -226,7 +226,7 @@ If the node doesn't show up, check the manager log for an `auth_failed` event un
 
 The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes — see [Install edge as an Ubuntu service](/edge/install-ubuntu-service/).
 
-Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). For tier-1 broadcast PCR accuracy (T-STD ≤ 500 ns) and ST 2110-21 narrow-profile compliance, install the ETF qdisc on the egress NIC — see [Install edge as an Ubuntu service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile). Without ETF qdisc, the edge falls back to a userspace `clock_nanosleep` pacer (~50–500 µs jitter at SCHED_FIFO, ~1–5 ms at SCHED_OTHER) — fine for soft decoders (VLC, ffplay, OBS), insufficient for some professional gear.
+Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The default release tier is `clock_nanosleep` on a SCHED_FIFO thread — sub-3 ms PCR_AC max through 2 Gbps on commodity Linux, no qdisc / no PTP / no special NIC required. That covers VLC, ffplay, OBS, cloud receivers, and most professional decoders in standard tolerance mode. The kernel-paced `SO_TXTIME` upgrade (tier 1 — sub-µs PCR_AC) is opt-in via `BILBYCAST_ENABLE_TXTIME=1` and only worth enabling for ST 2110-21 narrow profile or T-STD-strict contribution receivers. Setup: [Install edge as an Ubuntu service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile); full reference [Wire-Time Precision](/edge/wire-pacing/).
 
 ## Where to read next
 

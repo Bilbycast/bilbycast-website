@@ -89,9 +89,11 @@ In the manager UI:
 Two separate cases need this:
 
 1. **SMPTE ST 2110 essence flows** that interoperate with other ST 2110 equipment require a shared PTP grandmaster.
-2. **Broadcast-spec PCR_AC on TS outputs** (UDP / RTP / SRT / RIST / RTMP / 302M). Without PTP + the `etf` qdisc, the wire pacer's PCR accuracy lands at ~70 µs p50 with multi-millisecond p99 outliers — fine for VLC and casual receivers, **not** fine for broadcast-grade hardware decoders or multi-edge 2022-7 hitless. With PTP + `etf` + a hardware-PTP NIC, PCR_AC drops below 500 ns (T-STD spec).
+2. **Tier-1 broadcast-spec PCR_AC on TS outputs** (UDP / RTP / 302M) for contribution-grade decoders running with T-STD `PCR_AC` alarms enabled (Appear X10, Cobalt 9202, Cisco D9824). With PTP + `etf` qdisc + a HW-PTP NIC + `BILBYCAST_ENABLE_TXTIME=1` set on the edge, PCR_AC drops below 500 ns (T-STD spec).
 
-The full setup — three steps (NIC selection, `etf` qdisc install, `ptp4l` config), the verification ladder, and the operator escape hatch — is in [Wire-Time Precision](/edge/wire-pacing/). For the deeper PTP integration story (lock states, NMOS clock advertising, what `ptp4l` management messages bilbycast polls), see [PTP integration](/edge/ptp/).
+For compressed TS feeding VLC, ffplay, OBS, web players, cloud receivers, or most professional decoders in standard tolerance mode, **you don't need any of this** — the edge's default `clock_nanosleep` wire-pacing tier handles compressed TS through 2 Gbps with sub-3 ms PCR_AC max on a commodity Linux NIC.
+
+The full setup — install the ETF qdisc, persist it via the `bilbycast-etf-qdisc@.service` systemd unit, run `ptp4l` + `phc2sys`, opt the edge in via `BILBYCAST_ENABLE_TXTIME=1`, and the verification ladder — is in [Wire-Time Precision](/edge/wire-pacing/). For the deeper PTP integration story (lock states, NMOS clock advertising, what `ptp4l` management messages bilbycast polls), see [PTP integration](/edge/ptp/).
 
 Quick install of `linuxptp` if you're going down that path:
 
@@ -100,4 +102,4 @@ sudo apt update && sudo apt install linuxptp   # Debian / Ubuntu
 sudo dnf install linuxptp                      # RHEL / Fedora
 ```
 
-If you're running a single edge for monitoring or operator preview only — not production-grade contribution / distribution — you can skip both pages. The default install ships ~70 µs p50 PCR_AC out of the box, which is enough for VLC, ffplay, OBS, and most prosumer receivers.
+If you're running compressed TS to VLC, ffplay, OBS, cloud receivers, or most professional decoders in standard tolerance mode — including 2022-7 dual-leg hitless on a single edge — **you can skip both pages**. The default install ships the userspace `clock_nanosleep` wire-pacing tier, which handles compressed TS through 2 Gbps with sub-3 ms PCR_AC max on commodity Linux — no qdisc, no PTP, no HW-PTP NIC required.

@@ -114,33 +114,45 @@ RestartSec=2s
 LimitNOFILE=65536
 
 # Required by engine::wire_emit, which spawns one SCHED_FIFO std::thread
-# per UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The kernel
-# allows unprivileged SCHED_FIFO whenever LimitRTPRIO is non-zero and
-# RestrictRealtime is off, so no capability grant is required for the
-# scheduling-class change itself.
+# per UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M) on the
+# default clock_nanosleep tier. The kernel allows unprivileged
+# SCHED_FIFO whenever LimitRTPRIO is non-zero and RestrictRealtime is
+# off, so no capability grant is required for the scheduling-class
+# change itself.
 RestrictRealtime=false
-LimitRTPRIO=50
+LimitRTPRIO=99
+
+# Permits BILBYCAST_MLOCKALL=1 in /etc/bilbycast/edge.env — see below.
+LimitMEMLOCK=infinity
 
 # CAP_NET_ADMIN — required by mainline kernel ≥ 6.x (and every recent
 # Ubuntu / RHEL backport) for setsockopt(SO_TXTIME) with any non-
 # CLOCK_MONOTONIC clockid. Wire pacing uses CLOCK_TAI, the only
 # clockid the etf qdisc on Intel ice / igc / igb and Mellanox mlx5
-# accepts. Without this cap the SO_TXTIME probe returns EPERM, wire-
-# emit silently falls back to the clock_nanosleep tier, and on any
-# host whose etf qdisc has `skip_sock_check off` (the kernel default)
-# those fallback packets are then also dropped at the qdisc. The cap
-# does NOT let the edge install qdiscs — that path stays operator-
-# side via `setup-etf-qdisc.sh`.
+# accepts. Required when BILBYCAST_ENABLE_TXTIME=1 opts in to the
+# SO_TXTIME release tier (tiers 1–2). Without this cap the probe
+# returns EPERM, wire-emit silently falls back to the clock_nanosleep
+# tier (tier 4 — the default), and on any host whose etf qdisc has
+# `skip_sock_check off` (the kernel default) those fallback packets
+# are then also dropped at the qdisc. The cap is NOT required for
+# the default tier-4 path and does NOT let the edge install qdiscs —
+# qdisc install stays operator-side via `setup-etf-qdisc.sh`.
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
 
-# Logging + storage roots
+# Logging + storage roots. The defaults below put the edge on the
+# clock_nanosleep tier with no qdisc / no PTP required — the right
+# choice for every deployment that doesn't need sub-µs PCR_AC. To opt
+# in to the SO_TXTIME release tier, see "Optional: enable SO_TXTIME"
+# below (this requires the ETF qdisc + PTP).
 Environment=RUST_LOG=info
 Environment=BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/edge/replay
 Environment=BILBYCAST_MEDIA_DIR=/var/lib/bilbycast/edge/media
 
 # Uncomment if your manager uses a self-signed certificate:
 # Environment=BILBYCAST_ALLOW_INSECURE=1
+# Uncomment after installing the ETF qdisc + PTP to enable SO_TXTIME:
+# Environment=BILBYCAST_ENABLE_TXTIME=1
 
 # Hardening — sensible defaults that don't break anything the edge does.
 # ReadWritePaths covers both the install root (for upgrades + config
@@ -162,6 +174,14 @@ The hardening block (`NoNewPrivileges`, `ProtectSystem=strict`, etc.) is optiona
 SRT, RIST, RTMP, HLS, CMAF, and WebRTC are paced internally by their
 own protocol layers and need no extra setup.
 
+**The default release tier is `clock_nanosleep` on a SCHED_FIFO thread
+(tier 4 in the table below) — no qdisc, no PTP, no HW-PTP NIC, no env
+var required.** That path comfortably handles compressed TS through
+2 Gbps with sub-3 ms PCR_AC max on commodity Linux. The kernel-paced
+`SO_TXTIME` upgrade (tiers 1–2) is opt-in via `BILBYCAST_ENABLE_TXTIME=1`
+and only worth enabling when the per-flow rate or receiver strictness
+genuinely demands sub-µs precision — see [Wire-Time Precision](/edge/wire-pacing/).
+
 The edge picks the highest pacing tier the host can deliver at output
 startup and logs the choice (`wire-emit '<id>': starting (anchor=…, tier=…)`).
 The active tier is also surfaced in `OutputStats.wire_pacing_tier` for
@@ -169,19 +189,21 @@ the manager UI.
 
 | Tier | Mechanism | Inter-packet jitter envelope | Requires |
 |---|---|---|---|
-| 1 | `SO_TXTIME` + ETF qdisc with `offload` on a PTP-disciplined NIC | Sub-µs | ETF qdisc (operator-side) + PTP-capable NIC + `ptp4l + phc2sys` |
-| 2 | `SO_TXTIME` + software ETF qdisc | ~1–10 µs | ETF qdisc (operator-side) |
-| 3 | `SO_TXTIME` accepted, no ETF qdisc | Same as no pacing — kernel ignores `SCM_TXTIME` | Linux ≥ 4.19 |
-| 4 | `clock_nanosleep` on SCHED_FIFO | ~50–500 µs | systemd unit's `LimitRTPRIO=50` (already set above) |
-| 5 | `clock_nanosleep` on SCHED_OTHER | ~1–5 ms | None |
+| 1 | `SO_TXTIME` + ETF qdisc with `offload` on a PTP-disciplined NIC | Sub-µs | ETF qdisc + HW-PTP NIC + `ptp4l + phc2sys` + `CAP_NET_ADMIN` + `BILBYCAST_ENABLE_TXTIME=1` |
+| 2 | `SO_TXTIME` + software ETF qdisc | ~1–10 µs | ETF qdisc + `CAP_NET_ADMIN` + `BILBYCAST_ENABLE_TXTIME=1` |
+| 4 ⭐ | `clock_nanosleep` on SCHED_FIFO | ~50–500 µs typical, ms-tail under load | systemd unit's `LimitRTPRIO=99` (already set above). **Default — no setup required.** |
+| 5 | `clock_nanosleep` on SCHED_OTHER | ~1–5 ms | None — non-Linux, or Linux without RT grant |
 
 For tier-1 broadcast PCR_AC compliance (T-STD ≤ 500 ns), install the
-ETF qdisc on the egress NIC. **The edge does not install the qdisc
-itself** — `tc qdisc` requires `CAP_NET_ADMIN`, deliberately operator-side.
-See [ETF qdisc setup](#etf-qdisc-setup-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) below
-— the same `setup-etf-qdisc.sh` step gives every output (TS as well as
-ST 2110) tier-1 PCR_AC. Without ETF qdisc, the edge runs at tier 3 / 4
-which is fine for most production traffic but won't meet T-STD spec.
+ETF qdisc on the egress NIC, install the boot-time `bilbycast-etf-qdisc@.service`
+to persist it, set up PTP, and opt in via `BILBYCAST_ENABLE_TXTIME=1`.
+**The edge does not install the qdisc itself** — `tc qdisc` requires
+`CAP_NET_ADMIN`, deliberately operator-side. See [ETF qdisc setup](#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile)
+below — the same chain gives every output (TS as well as ST 2110) tier-1
+PCR_AC. **The default `clock_nanosleep` tier is the right choice unless
+you have a measured reason to upgrade**; enabling SO_TXTIME without the
+full prerequisite stack produces *silent degradation* worse than the
+default.
 
 ## 5b. Hardware-encoder runtime (only if you'll use NVENC or QSV)
 
@@ -321,21 +343,44 @@ The config + secrets at `/opt/bilbycast/edge/{config.json,secrets.json}` carry a
 
 The manager install guide's [Production — systemd block](/manager/getting-started/#production--systemd) walks through the same pattern for the manager (service user, `/opt/bilbycast-manager/`, `/etc/bilbycast-manager/manager.env`, hardened unit with `ProtectSystem=strict`). There's no separate "manager Ubuntu service" guide because the install guide already covers it inline.
 
-## ETF qdisc setup for tier-1 PCR accuracy and ST 2110-21 narrow profile
+## ETF qdisc setup (opt-in) for tier-1 PCR accuracy and ST 2110-21 narrow profile
 
-Install ETF qdisc on the egress NIC if you need any of:
+**You only need this section if you have a concrete reason to leave the
+default `clock_nanosleep` tier.** Three cases earn the upgrade:
 
-- ST 2110-20 / -23 narrow profile (Imagine, Lawo, EVS Xeebra, Grass Valley LDX, Bridge Tech VB330 in test mode).
-- T-STD-compliant PCR_AC (≤ 500 ns) on compressed TS over UDP / RTP — required by some professional decoders (Appear, Tektronix, Cisco professional gear).
-- Any output rate above ~10 Mbps where userspace `clock_nanosleep` precision (~50–500 µs at SCHED_FIFO) starts to dominate inter-packet timing.
+- **ST 2110-20 / -23 narrow profile** (Imagine, Lawo, EVS Xeebra, Grass
+  Valley LDX, Bridge Tech VB330 in test mode) — at 1080p50 (~ 250 k pps)
+  and 4K60 (~ 1 M pps), per-packet timing must be within microseconds of
+  the frame raster. Userspace pacing can't hit that budget.
+- **T-STD-compliant PCR_AC (≤ 500 ns)** on compressed TS over UDP / RTP —
+  required by contribution-grade decoders with `PCR_AC` alarms enabled
+  (Appear X10, Cobalt 9202, Cisco D9824).
+- **Sustained CPU contention** pushing tier-4 p99 above ~30 ms (many
+  transcoded outputs on a tight box) — kernel ETF moves pacing off the
+  SCHED_FIFO thread so CPU contention no longer perturbs it. Tier 2
+  (software ETF, no HW-PTP NIC) is enough here.
 
-If you're driving consumer / soft decoders (VLC, ffplay, OBS, web players, the Appear / Cisco TV / EVS receivers in standard tolerance mode), the userspace `clock_nanosleep` fallback (tier 4) is usually sufficient and you can skip this section. The edge will fall back automatically and log the active tier.
+If none of those apply, **skip this section**. The default tier-4 path
+handles compressed TS through 2 Gbps on a standard NIC with sub-3 ms
+PCR_AC max — fine for VLC, ffplay, OBS, web players, cloud receivers,
+and most professional decoders in standard tolerance mode.
 
-ST 2110 specifically: at 1080p50 (≈ 250 k pps) and 4K60 (≈ 1 M pps), per-packet timing must be within microseconds of the frame raster. Userspace pacing can't hit that budget. The Linux solution is `SO_TXTIME` + the ETF qdisc, with HW offload on PTP-disciplined NICs.
+:::caution[Enabling SO_TXTIME without the full prerequisite stack is *worse* than the default]
+The pre-2026-05-16 edge defaulted to SO_TXTIME and silently degraded on
+hosts without an ETF qdisc — every packet emitted ASAP while telemetry
+still reported tier `so_txtime`. The current edge defaults to
+`clock_nanosleep` and only attempts SO_TXTIME when you set
+`BILBYCAST_ENABLE_TXTIME=1`. **Don't set the env var until every step
+below is in place.**
+:::
 
 ### One-shot: `provision-edge-node.sh`
 
-The shipped wrapper does all three steps below in one idempotent, reboot-persistent run — installs `linuxptp`, writes systemd units for `ptp4l@${MEDIA_IFACE}.service` + `phc2sys@${MEDIA_IFACE}.service`, lays down ETF qdisc via a `bilbycast-etf@${MEDIA_IFACE}.service` boot unit, and (optionally) static ARP for known peers:
+The shipped wrapper does all four steps below in one idempotent,
+reboot-persistent run — installs `linuxptp`, writes systemd units for
+`ptp4l@${MEDIA_IFACE}.service` + `phc2sys@${MEDIA_IFACE}.service`, lays
+down the ETF qdisc via the `bilbycast-etf-qdisc@${MEDIA_IFACE}.service`
+boot unit, and (optionally) static ARP for known peers:
 
 ```bash
 sudo MEDIA_IFACE=enp1s0 \
@@ -346,11 +391,11 @@ Optional flags:
 - `PTP_ONLY=1` — install only `ptp4l` + `phc2sys`, no ETF, no ARP. Safe to run on a NIC that also carries SSH / management.
 - `PEERS="10.0.0.5=00:0e:c6:4a:53:06 10.0.0.10=00:11:22:33:44:55"` — pin known peers to static ARP entries, eliminating ARP refresh stalls on low-latency unicast.
 
-The script is idempotent — re-running it updates the systemd units in place. It runs once per host; everything it writes is a systemd unit with `enable --now`, so the config survives reboots without further action. If the NIC name changes (for instance, because of a kernel/driver upgrade renaming `eno4` → `enp1s0`), re-run with the new `MEDIA_IFACE`.
+The script is idempotent — re-running it updates the systemd units in place. Everything it writes is a systemd unit with `enable --now`, so the config survives reboots without further action. If the NIC name changes (for instance, because of a kernel/driver upgrade renaming `eno4` → `enp1s0`), re-run with the new `MEDIA_IFACE`.
 
-This script is **only** needed for tier-1 / tier-2 PCR_AC or ST 2110 essence flows. A default `install-edge.sh` install runs at tier 4 with no provisioning required.
+After the wrapper finishes, you still need to opt the edge in by uncommenting `BILBYCAST_ENABLE_TXTIME=1` in `/etc/bilbycast/edge.env` and restarting the service — see step 4 below.
 
-If you'd rather lay each piece down by hand, the manual three-step walkthrough below is the equivalent.
+If you'd rather lay each piece down by hand, the manual four-step walkthrough below is the equivalent.
 
 ### Step 1: install the ETF qdisc on the egress NIC
 
@@ -358,7 +403,7 @@ If you'd rather lay each piece down by hand, the manual three-step walkthrough b
 sudo bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
 ```
 
-Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 offload` on the prioritized class. `offload` enables hardware tx pacing on supported NICs (Mellanox CX-6 / CX-7, Intel E810, Intel i210); silently degrades to software ETF on unsupported NICs (still 1–10 µs jitter).
+Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 offload skip_sock_check on` on the prioritized class. `offload` enables hardware tx pacing on supported NICs (Mellanox CX-6 / CX-7, Intel E810, Intel i210); silently degrades to software ETF on unsupported NICs (still 1–10 µs jitter). `skip_sock_check on` is non-negotiable — without it ARP, DHCP, ssh, and every default UDP socket on the host get dropped at the qdisc.
 
 Verify:
 
@@ -368,11 +413,30 @@ tc -s qdisc show dev enp1s0
 
 should list `mqprio` at root and `etf` on the prioritized class — not the default `pfifo_fast`.
 
-The `tc qdisc` install does not persist across reboots. Wrap the same `tc` calls in your own systemd unit, NetworkManager dispatch hook, or `ifupdown` post-up snippet — operator policy.
+### Step 2: install the boot-time systemd unit so the qdisc survives reboots
 
-Removal: `sudo tc qdisc del dev enp1s0 root`.
+The one-shot `tc` call from step 1 doesn't survive a reboot. Install the templated `bilbycast-etf-qdisc@.service` unit that ships with the edge:
 
-### Step 2: confirm PTP discipline on the system clock
+```bash
+sudo install -m 0644 \
+  /opt/bilbycast/edge/current/packaging/bilbycast-etf-qdisc@.service \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bilbycast-etf-qdisc@enp1s0
+```
+
+The unit ordering is `After=network-online.target sys-subsystem-net-devices-<iface>.device` + `Before=bilbycast-edge.service`, so the qdisc is in place by the time the edge starts. Verify:
+
+```bash
+systemctl status bilbycast-etf-qdisc@enp1s0
+tc -s qdisc show dev enp1s0
+```
+
+Removal: `sudo systemctl disable --now bilbycast-etf-qdisc@enp1s0`. (Optional manual teardown: `sudo tc qdisc del dev enp1s0 root`.)
+
+### Step 3: confirm PTP discipline on the system clock (tier 1 only)
+
+Tier 1 needs `ptp4l` + `phc2sys` running against a PTP grandmaster. Tier 2 (software ETF, no HW-PTP NIC, no PTP) works without this step but caps out around 1–10 µs jitter.
 
 `SO_TXTIME` schedules transmission against `CLOCK_TAI`. Without `ptp4l` + `phc2sys` running, the kernel's TAI clock is just wall time + leap-second offset — sender and receiver drift relative to each other and the receiver's VRX bound fails. See [PTP integration](/edge/ptp/) for the full setup.
 
@@ -382,13 +446,26 @@ systemctl status ptp4l phc2sys
 
 Both should be **active (running)**. The edge keeps emitting valid bytes without PTP, just not narrow-profile-aligned.
 
-### Step 3: confirm the active tier on the edge
+### Step 4: opt the edge in to SO_TXTIME and restart
+
+The edge defaults to the `clock_nanosleep` release tier regardless of whether ETF is installed. To use the SO_TXTIME tier, set `BILBYCAST_ENABLE_TXTIME=1` in the env file:
+
+```bash
+sudo tee -a /etc/bilbycast/edge.env > /dev/null <<'EOF'
+BILBYCAST_ENABLE_TXTIME=1
+EOF
+sudo systemctl restart bilbycast-edge
+```
+
+(Use whichever env-file mechanism your unit uses — `EnvironmentFile=/etc/bilbycast/edge.env` if you adopted `install-edge.sh`, otherwise inline `Environment=BILBYCAST_ENABLE_TXTIME=1` in the unit's `[Service]` block.)
+
+### Step 5: confirm the active tier on the edge
 
 ```bash
 sudo journalctl -u bilbycast-edge --since "5 minutes ago" | grep wire-emit
 ```
 
-You should see a line like `wire-emit '<output-id>': starting (anchor=Pcr, tier=so_txtime)` for every output that owns a UDP socket. With ETF qdisc + PTP from steps 1-2, the host is running tier 1 or 2 (sub-µs to ~10 µs jitter). Without ETF, the same line shows `tier=so_txtime` but actual pacing is no-op (tier 3) — the kernel silently ignores `SCM_TXTIME` without ETF.
+You should see a line like `wire-emit '<output-id>': starting (anchor=Pcr, tier=so_txtime)` for every output that owns a UDP socket. With ETF qdisc + PTP from steps 1–3 and the env var from step 4, the host is running tier 1 or 2 (sub-µs to ~10 µs jitter). If the line shows `tier=clock_nanosleep` despite the env var, the SO_TXTIME setsockopt failed — typically because `CAP_NET_ADMIN` isn't granted on the unit, see step 5 of the unit block above.
 
 You can also check via the manager UI's per-output card or directly:
 
@@ -400,15 +477,14 @@ curl -k https://<edge>:8080/api/v1/stats | jq '.data.flows[].outputs[] | {id: .o
 
 ### What if any step is skipped?
 
-ST 2110-20 / -23 outputs always run the paced sender — no per-output opt-in needed. The wire pacing is applied automatically across UDP, RTP, FEC, 2022-7 dual-leg, ST 2110 — every UDP-socket-owning output.
-
 | Skipped | Behaviour |
 |---|---|
-| Step 1 (no ETF qdisc) | `setsockopt(SO_TXTIME)` succeeds but the kernel's default qdisc ignores `SCM_TXTIME` — no actual pacing. The edge falls into tier 3 (compressed TS — same as no pacing, no regression) or tier 4 / 5 if SO_TXTIME isn't available at all. ST 2110 narrow-profile compliance fails at this tier. |
-| Step 2 (no PTP) | Pacer's TAI anchor is not GM-aligned. Compressed TS pacing still works (anchors on `CLOCK_MONOTONIC`); ST 2110-21 narrow profile fails the receiver-side VRX bound. |
-| Both steps skipped | Edge runs at tier 4 (`clock_nanosleep` on SCHED_FIFO) for compressed TS — adequate for ≤ 6 Mbps TS, degraded above that. ST 2110 saturates a CPU and won't meet narrow profile. |
+| Step 4 (`BILBYCAST_ENABLE_TXTIME=1` not set) | Edge runs at tier 4 — the default. Compressed TS through 2 Gbps with sub-3 ms PCR_AC max. ST 2110-21 narrow profile fails the receiver-side VRX bound. |
+| Step 1 + 2 (no ETF qdisc) but env var set | The SO_TXTIME setsockopt succeeds but the kernel's default qdisc ignores `SCM_TXTIME` — silent degradation, worse than the default. Always install the qdisc before setting the env var. |
+| Step 3 (no PTP) but ETF installed | Tier 2 jitter (~ 1–10 µs) is achievable, but the pacer's TAI anchor isn't GM-aligned — multi-edge 2022-7 across hosts and ST 2110-21 narrow profile both fail. |
+| Step 1–4 all skipped | Edge runs at tier 4 (`clock_nanosleep` on SCHED_FIFO) — the default. Fine for VLC / ffplay / OBS / cloud receivers / standard professional gear up through 2 Gbps. |
 
-For the architecture, full failure-mode matrix, and per-NIC notes, see [ST 2110](/edge/st2110/#st-2110-21-narrow-profile-pacing-uncompressed-video).
+For the architecture, full failure-mode matrix, and per-NIC notes, see [Wire-Time Precision](/edge/wire-pacing/) and [ST 2110](/edge/st2110/#st-2110-21-narrow-profile-pacing-uncompressed-video).
 
 ## Where to read next
 

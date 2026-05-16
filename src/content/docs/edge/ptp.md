@@ -19,15 +19,15 @@ PTP is required (or strongly recommended) in **two distinct cases**:
 - NMOS IS-04 advertises a `clock` resource per device when any flow declares `clock_domain` — receivers use this to confirm clock alignment before activating a connection.
 - BCP-004 receiver caps include media-clock constraints that imply PTP synchronisation.
 
-**2. Broadcast-spec PCR_AC on TS outputs (UDP / RTP / SRT / RIST / RTMP / 302M).** The wire emitter runs against `CLOCK_TAI`. When `ptp4l` + `phc2sys` are running, CLOCK_TAI is PTP-disciplined and SO_TXTIME paces TX against the NIC's PTP hardware clock — sub-µs PCR_AC, the only path that meets T-STD spec. Without `ptp4l`, CLOCK_TAI is just system clock + leap seconds and the wire pacer falls back to ~70 µs p50 / few-ms p99 — fine for VLC and casual receivers, **not** fine for broadcast-grade hardware decoders or multi-edge 2022-7 hitless across legs. See [Wire-Time Precision](/edge/wire-pacing/) for the full ladder, the `etf` qdisc step, NIC requirements, and the verification numbers.
+**2. Tier-1 broadcast-spec PCR_AC on TS outputs (UDP / RTP / 302M).** The edge's default wire-pacing tier (`clock_nanosleep` on a SCHED_FIFO thread, no PTP required) handles compressed TS through 2 Gbps with sub-3 ms PCR_AC max — fine for VLC, ffplay, OBS, web players, cloud receivers, and most professional decoders in standard tolerance mode. **PTP is only required for tier 1** — sub-µs PCR_AC for contribution-grade decoders running with T-STD `PCR_AC` alarms enabled (Appear X10, Cobalt 9202, Cisco D9824) or for multi-edge 2022-7 hitless across legs. Tier 1 requires `ptp4l` + `phc2sys` + the ETF qdisc + a HW-PTP NIC + `BILBYCAST_ENABLE_TXTIME=1` on the edge. See [Wire-Time Precision](/edge/wire-pacing/) for the full decision matrix, install recipe, and the verification numbers.
 
 PTP is **not required** for:
 
 - `rtp_audio` inputs and outputs (no `clock_domain`, no NMOS PTP advertising — see [Audio Gateway](/edge/audio-gateway/)).
-- Single-edge non-broadcast-grade outputs (e.g. operator monitoring on a Mac VLC) — the default ~70 µs p50 software path is enough for prosumer receivers.
-- WAN audio contribution via `audio_302m` over SRT *if* you don't need spec-compliant PCR_AC at the receiver.
+- Compressed TS over UDP / RTP / SRT / RIST / RTMP, including 2022-7 dual-leg hitless on a single edge — the default tier-4 path is broadcast-envelope-compliant.
+- WAN audio contribution via `audio_302m` over SRT *if* you're not chasing T-STD PCR_AC alarms.
 
-If you're not running ST 2110 essence flows **and** you don't need broadcast-spec PCR_AC on TS outputs, you can skip this page.
+If you're not running ST 2110 essence flows **and** you don't have a measured reason to go to tier-1 PCR_AC, you can skip this page.
 
 ## What bilbycast actually polls
 
@@ -54,7 +54,7 @@ The state is sampled on a low-frequency timer (default ~1 s) and cached. Reading
 
 ### One-shot: `provision-edge-node.sh`
 
-For broadcast deployments (ST 2110, tier-1 PCR_AC), the shipped wrapper installs `linuxptp` and writes reboot-persistent systemd units for `ptp4l` + `phc2sys` on a chosen NIC, plus the ETF qdisc the wire pacer needs:
+For broadcast deployments (ST 2110, tier-1 PCR_AC), the shipped wrapper installs `linuxptp` and writes reboot-persistent systemd units for `ptp4l` + `phc2sys` on a chosen NIC, plus the ETF qdisc the SO_TXTIME wire-pacing tier needs:
 
 ```bash
 sudo MEDIA_IFACE=enp1s0 \
@@ -63,7 +63,7 @@ sudo MEDIA_IFACE=enp1s0 \
 
 Pass `PTP_ONLY=1` to skip the ETF qdisc and static-ARP pieces — useful when the same NIC also carries SSH / management traffic.
 
-This is **optional**. The edge runs fine without PTP for compressed-TS workloads (tier 4, ~50–500 µs jitter, fine for VLC / ffplay / most cloud receivers). The script is for ST 2110 essence flows, broadcast-grade hardware decoders, and multi-edge 2022-7 hitless across legs.
+This is **optional**. The edge runs fine without PTP for compressed TS workloads on the default `clock_nanosleep` tier (sub-3 ms PCR_AC max through 2 Gbps, fine for VLC / ffplay / cloud receivers / most professional decoders). The script is for ST 2110 essence flows, contribution-grade decoders running with T-STD `PCR_AC` alarms, and multi-edge 2022-7 hitless across legs. After running the script you still need to opt the edge in to SO_TXTIME by setting `BILBYCAST_ENABLE_TXTIME=1` in `/etc/bilbycast/edge.env` and restarting `bilbycast-edge.service` — see [Wire-Time Precision → Enabling the SO_TXTIME tier on the edge](/edge/wire-pacing/#enabling-the-so_txtime-tier-on-the-edge).
 
 The manual walkthrough below is the equivalent if you'd rather lay each piece down by hand.
 

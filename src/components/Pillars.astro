@@ -2,8 +2,8 @@
 import { Image } from 'astro:assets';
 import topologyImg from '../assets/screenshots/network-topology.png';
 import flowsImg from '../assets/screenshots/flows.png';
-import edgeStatusImg from '../assets/screenshots/edge-status.png';
-import aiConfigImg from '../assets/screenshots/ai-config.png';
+import switcherImg from '../assets/screenshots/switcher.png';
+import replayImg from '../assets/screenshots/replay.png';
 
 const pillars = [
   {
@@ -29,8 +29,8 @@ const pillars = [
       'In-process transcode for both video and audio, end-to-end encrypted on the wire',
     ],
     href: '/features/one-gateway/',
-    image: flowsImg,
-    alt: 'Bilbycast Manager flows view with live thumbnails and protocol badges',
+    image: switcherImg,
+    alt: 'Bilbycast Live Switcher — Switching Profiles page driving every connected edge through one director console',
   },
   {
     eyebrow: 'For live sports, event production',
@@ -42,8 +42,8 @@ const pillars = [
       'Live Switcher (PGM/PVW), PES-aligned multi-cam splice on a single output PID, Routines (cron + AI)',
     ],
     href: '/features/live-sports/',
-    image: edgeStatusImg,
-    alt: 'Bilbycast edge node detail view with live transport analysis',
+    image: replayImg,
+    alt: 'Bilbycast Replay — JKL-scrub timeline with mark in/out and the per-flow clip library',
   },
   {
     eyebrow: 'For broadcast facility integrators',
@@ -55,8 +55,8 @@ const pillars = [
       'SMPTE 2022-1 FEC, TR-101290 transport-stream analysis, RIST TR-06-1 / TR-07',
     ],
     href: '/features/one-gateway/#standards',
-    image: aiConfigImg,
-    alt: 'Bilbycast Manager AI-assistant configuration page',
+    image: flowsImg,
+    alt: 'Bilbycast flows view — live thumbnails, protocol badges, and bitrate across every managed flow',
   },
 ];
 ---

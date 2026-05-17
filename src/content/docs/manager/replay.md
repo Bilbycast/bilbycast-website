@@ -43,7 +43,7 @@ The timeline shows the rolling buffer for the currently-recording flow. The vert
 
 **Lock to live** keeps the play-head on the latest frame as new content arrives — useful when you want to stay in step with the broadcast and only break off to clip something on demand.
 
-<!-- TODO screenshot: /replay page with timeline, play-head, mark in/out -->
+![Replay page — live preview, JKL-scrub timeline with play-head, mark in/out, and the per-flow clip library](../../../assets/screenshots/replay.png)
 
 ## Quick-clip the last N seconds
 

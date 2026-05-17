@@ -3,7 +3,9 @@ import { Image } from 'astro:assets';
 import Landing from '../../layouts/Landing.astro';
 import ProtocolTable from '../../components/ProtocolTable.astro';
 import CtaBanner from '../../components/CtaBanner.astro';
-import flowsImg from '../../assets/screenshots/flows.png';
+import inputsConfigImg from '../../assets/screenshots/inputs-config-example.png';
+import transcodingImg from '../../assets/screenshots/transcoding-example.png';
+import flowStatusImg from '../../assets/screenshots/edge-flow-status.png';
 
 const transcoding = [
   {
@@ -69,6 +71,41 @@ const standards = [
     </div>
   </section>
 
+  <!-- Inputs picker — proof of breadth -->
+  <section class="pb-12">
+    <div class="mx-auto max-w-6xl px-6">
+      <div class="grid gap-10 lg:grid-cols-2 lg:items-center">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">One picker, every protocol</div>
+          <h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            Add an input. Pick from the list.
+          </h2>
+          <p class="mt-4 text-base leading-relaxed text-slate-400">
+            SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF-LL, WebRTC, the entire SMPTE ST 2110 family, the local
+            Media Player, NDI — every protocol is a first-class entry in the same Add Input modal. The dropdown is
+            the entire transport stack, not a curated subset.
+          </p>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
+          <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2">
+            <div class="flex gap-1.5">
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+            </div>
+          </div>
+          <Image
+            src={inputsConfigImg}
+            alt="Bilbycast Manager — New Input modal with the full protocol picker expanded"
+            class="w-full h-auto"
+            widths={[480, 720, 960]}
+            sizes="(max-width: 1024px) 720px, 960px"
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Protocol table (the full matrix) -->
   <ProtocolTable />
 
@@ -93,6 +130,38 @@ const standards = [
             <p class="mt-2 text-sm leading-relaxed text-slate-400">{t.note}</p>
           </div>
         ))}
+      </div>
+
+      <!-- Transcoding output modal -->
+      <div class="mt-16 grid gap-10 lg:grid-cols-2 lg:items-center">
+        <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
+          <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2">
+            <div class="flex gap-1.5">
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+              <div class="h-2 w-2 rounded-full bg-slate-600"></div>
+            </div>
+          </div>
+          <Image
+            src={transcodingImg}
+            alt="Bilbycast Manager — Output modal with the video transcode picker expanded across libx264, libx265, NVENC, QSV, and VAAPI"
+            class="w-full h-auto"
+            widths={[480, 720, 960]}
+            sizes="(max-width: 1024px) 720px, 960px"
+          />
+        </div>
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-sky-400">Pick a target codec</div>
+          <h3 class="mt-3 text-2xl font-bold tracking-tight text-white sm:text-3xl">
+            Software, NVENC, QSV, VAAPI — same dropdown.
+          </h3>
+          <p class="mt-4 text-base leading-relaxed text-slate-400">
+            The Output modal's <code class="text-slate-300">video_encode</code> picker shows every encoder the host
+            actually supports. The hardware-probe runs at startup and silently hides backends that aren't installed
+            or don't open, so you only see options that will work. Same picker for AAC, Opus, MP2, AC-3 — and for
+            chassis-style transports like ST 2110 the audio sub-form drops in alongside.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -138,8 +207,8 @@ const standards = [
               </div>
             </div>
             <Image
-              src={flowsImg}
-              alt="Bilbycast flows view with live thumbnails and protocol badges"
+              src={flowStatusImg}
+              alt="Bilbycast edge flow view — every input and output rendered as a signal-flow graph with live bitrate per leg and an on-air thumbnail"
               class="w-full h-auto"
               widths={[480, 720, 960]}
               sizes="(max-width: 1024px) 720px, 960px"

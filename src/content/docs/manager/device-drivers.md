@@ -7,6 +7,8 @@ sidebar:
 
 bilbycast-manager has a **driver-aware** architecture: every device type (edge, relay, Appear X, ...) registers a `Driver` implementation that contributes to the WebSocket protocol, REST surface, topology rendering, and AI assistant workflow. Adding support for a new third-party device is a matter of writing a driver and (usually) a sidecar API gateway — no manager core changes required.
 
+![Services & Templates — the wizard catalogue of per-driver service templates that turn multi-node setups into a single guided click](../../../assets/screenshots/services-templates.png)
+
 This page is for developers integrating new device types. Operators using existing drivers don't need to read it.
 
 ## What a driver provides

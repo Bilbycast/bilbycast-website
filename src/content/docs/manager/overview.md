@@ -7,6 +7,8 @@ sidebar:
 
 bilbycast-manager is the centralized control plane for bilbycast. It provides a web dashboard, REST API, and WebSocket connectivity for real-time status, configuration, and control of distributed media transport nodes.
 
+![Dashboard view — total / online / offline / active-alarms cards with per-device bitrate and uptime](../../../assets/screenshots/dashboard.png)
+
 ## Key Features
 
 - **Web dashboard** — Real-time overview of all managed devices with status, flows, and bitrate.

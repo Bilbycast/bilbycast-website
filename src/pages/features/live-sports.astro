@@ -1,6 +1,9 @@
 ---
+import { Image } from 'astro:assets';
 import Landing from '../../layouts/Landing.astro';
 import CtaBanner from '../../components/CtaBanner.astro';
+import switcherImg from '../../assets/screenshots/switcher.png';
+import replayImg from '../../assets/screenshots/replay.png';
 
 const replayCapabilities = [
   {
@@ -115,6 +118,33 @@ const routinesExamples = [
           replay UI. No separate replay server, no separate licence key.
         </p>
       </div>
+
+      <!-- Replay screenshot -->
+      <div class="mx-auto mt-12 max-w-5xl">
+        <div class="relative">
+          <div class="absolute -inset-4 rounded-2xl bg-gradient-to-r from-sky-600/10 via-cyan-500/10 to-sky-600/10 blur-2xl"></div>
+          <div class="relative overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-2xl shadow-black/50">
+            <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2.5">
+              <div class="flex gap-1.5">
+                <div class="h-2.5 w-2.5 rounded-full bg-slate-600"></div>
+                <div class="h-2.5 w-2.5 rounded-full bg-slate-600"></div>
+                <div class="h-2.5 w-2.5 rounded-full bg-slate-600"></div>
+              </div>
+              <div class="ml-3 flex-1 rounded-md bg-slate-700/50 px-3 py-1 text-xs text-slate-500">
+                manager.bilbycast.com / replay
+              </div>
+            </div>
+            <Image
+              src={replayImg}
+              alt="Bilbycast Replay — live recording with scrub timeline, mark in/out, sport-tag clip library, and Push-to-air"
+              class="w-full h-auto"
+              widths={[640, 960, 1280]}
+              sizes="(max-width: 768px) 640px, (max-width: 1024px) 960px, 1280px"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="mt-16 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {replayCapabilities.map((c) => (
           <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
@@ -178,7 +208,7 @@ const routinesExamples = [
           </ul>
         </div>
 
-        <!-- Mock switcher panel -->
+        <!-- Switcher screenshot -->
         <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
           <div class="flex items-center gap-2 border-b border-slate-700/50 bg-slate-800/80 px-4 py-2">
             <div class="flex gap-1.5">
@@ -188,27 +218,13 @@ const routinesExamples = [
             </div>
             <div class="ml-3 text-xs font-mono text-slate-500">manager.bilbycast.com / switcher</div>
           </div>
-          <div class="grid grid-cols-2 gap-3 p-5">
-            <div class="rounded-lg border-2 border-rose-500/60 bg-slate-950 p-3">
-              <div class="text-[10px] font-bold uppercase tracking-widest text-rose-400">Program</div>
-              <div class="mt-1 h-24 w-full rounded bg-gradient-to-br from-emerald-900/40 to-emerald-700/20"></div>
-              <div class="mt-2 text-xs text-slate-300">CAM 2 — main field</div>
-            </div>
-            <div class="rounded-lg border-2 border-emerald-500/60 bg-slate-950 p-3">
-              <div class="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Preview</div>
-              <div class="mt-1 h-24 w-full rounded bg-gradient-to-br from-sky-900/40 to-sky-700/20"></div>
-              <div class="mt-2 text-xs text-slate-300">CAM 4 — slow-mo</div>
-            </div>
-          </div>
-          <div class="flex items-center justify-between gap-2 border-t border-slate-800 bg-slate-800/40 px-5 py-3">
-            <div class="flex gap-2">
-              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 1</button>
-              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 2</button>
-              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 3</button>
-              <button class="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300">CAM 4</button>
-            </div>
-            <button class="rounded bg-rose-600 px-5 py-1.5 text-xs font-bold text-white shadow-lg shadow-rose-600/30">TAKE</button>
-          </div>
+          <Image
+            src={switcherImg}
+            alt="Bilbycast Live Switcher — Switching Profiles page with active London Production page and per-profile Activate buttons"
+            class="w-full h-auto"
+            widths={[480, 720, 960]}
+            sizes="(max-width: 1024px) 720px, 960px"
+          />
         </div>
       </div>
     </div>

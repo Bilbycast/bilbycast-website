@@ -7,6 +7,8 @@ sidebar:
 
 The **Live Switcher** is bilbycast-manager's in-browser director console. It models a classic broadcast production switcher — two on-air buses (**PGM**, **PVW**), named **presets** that capture a target state across one or more flows, and **pages** that group presets for fast operator navigation. It runs in the same browser tab as the rest of the manager, so an operator can monitor signal health, take a preset on-air, and acknowledge an alarm without context-switching.
 
+![Live Switcher — Switching Profiles page with active London Production set and per-profile thumbnails + Activate buttons](../../../assets/screenshots/switcher.png)
+
 ## Why it matters
 
 Broadcast directors recognise PGM/PVW immediately — it's the surface a vMix, Tricaster, Studer, or hardware production switcher gives them. The Live Switcher brings that workflow into bilbycast without a second appliance, and drives bilbycast flows directly so the same presets that switch a clean feed in the studio also flip every downstream output.
@@ -52,6 +54,8 @@ Operators build presets exactly as before in all three cases — there's no sepa
 ## Per-action splice override
 
 For the third case above (assembled flow with Switch slots), the preset editor exposes a per-action `splice: default | force PMT-bump | force PES-aligned` dropdown. `default` sends no override and lets the slot's config-time `splice_mode` apply. Explicit choices ride on the action's `splice_mode_override` payload and beat the slot's config for **that one Take** only — useful for an emergency override without editing the assembly. See [Flow Assembly — Splice strategy](/edge/flow-assembly/#splice-strategy--splice_mode) for what each mode does on the wire.
+
+![Preset editor — per-action splice override dropdown set to "force PES-aligned" alongside the action's input list and output map](../../../assets/screenshots/switcher-force-pes.png)
 
 ## Bus-route actions (Node Bus salvos)
 

@@ -7,6 +7,8 @@ sidebar:
 
 The bilbycast-manager **AI Assistant** is a chat panel that lets an operator describe a flow in natural language and have it reviewed, validated, and (with confirmation) applied. It is built on top of the same **driver-aware action system** that powers the manager's REST and WebSocket APIs — the AI does not have a privileged backdoor; it can only call actions that a human operator could already call.
 
+![AI Assistant — preview pane showing a proposed JSON flow definition next to plain-English requirements and a recommendation summary](../../../assets/screenshots/ai-config.png)
+
 ## Supported providers
 
 The assistant is provider-agnostic. Each user picks their preferred provider and model in **Settings → AI**:
@@ -18,6 +20,8 @@ The assistant is provider-agnostic. Each user picks their preferred provider and
 | Google | Gemini |
 
 API keys are stored **encrypted at rest** in the manager database using envelope encryption (AES-256-GCM with a per-secret DEK wrapped by an `ai-key` domain KEK derived from `BILBYCAST_MASTER_KEY` via HKDF-SHA256). Keys are never logged, never returned over the API, and never visible in audit entries.
+
+![AI API Keys page — OpenAI, Anthropic, and Gemini provider cards with masked key input and model dropdown](../../../assets/screenshots/ai-api-keys.png)
 
 ## How a request becomes an action
 

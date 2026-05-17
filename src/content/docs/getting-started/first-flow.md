@@ -34,7 +34,7 @@ In the manager, go to **Admin → Nodes** and click the edge you just registered
    - **Latency (ms)**: `120`
 4. **Save**. The new input appears in the list with a status pill — yellow until the first sender connects.
 
-<!-- TODO screenshot: Add Input modal with SRT fields filled in -->
+![Add Input modal — protocol picker expanded over the SRT entry, with name, mode, port, and latency fields](../../../assets/screenshots/inputs-config-example.png)
 
 ## Step 3 — Add an RTP output
 
@@ -44,6 +44,8 @@ In the manager, go to **Admin → Nodes** and click the edge you just registered
    - **Name**: `Local preview`
    - **Destination**: `127.0.0.1:5004`
 4. **Save**.
+
+![Add Output modal — same protocol picker on the output side, with destination + latency + key fields](../../../assets/screenshots/output-config-example.png)
 
 ## Step 4 — Wire them into a flow
 
@@ -55,7 +57,7 @@ In the manager, go to **Admin → Nodes** and click the edge you just registered
    - **Enabled**: ✓
 3. **Save**. The flow appears with a green dot once both ends settle.
 
-<!-- TODO screenshot: flow card showing green status, input and output chips -->
+![Flow list — green status pill with input + output chips and a live thumbnail of the on-air content](../../../assets/screenshots/flows.png)
 
 ## Step 5 — Send some media
 

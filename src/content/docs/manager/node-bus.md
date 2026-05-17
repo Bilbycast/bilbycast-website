@@ -7,6 +7,8 @@ sidebar:
 
 The **Node Bus Matrix** is bilbycast-manager's authoring surface for the node-wide elementary-stream bus. It turns one edge into a full distribution matrix — every input's programs can feed any output's [assembled flow](/edge/flow-assembly/), receivers stay locked through a Take, and the operator works on a crosspoint matrix that mirrors the way a routing-engineer thinks.
 
+![Node Bus Matrix — three-pane Sources / Crosspoint / Inspector layout with programs on the left and per-output crosspoint cells in the middle](../../../assets/screenshots/node-bus.png)
+
 It replaces the legacy per-flow assembly form. On the flow modal you now see a small `Assembly: N programs / M slots — [Open in Node Bus →]` summary card; everything below the surface lives on `/nodes/<id>/bus`.
 
 ## Why it matters

@@ -6,6 +6,13 @@ import edgeStatus from '../assets/screenshots/edge-status.png';
 import aiConfig from '../assets/screenshots/ai-config.png';
 import managedNodes from '../assets/screenshots/managed-nodes.png';
 import eventsAlarms from '../assets/screenshots/events-alarms.png';
+import nodeBus from '../assets/screenshots/node-bus.png';
+import switcher from '../assets/screenshots/switcher.png';
+import replay from '../assets/screenshots/replay.png';
+import auditLogs from '../assets/screenshots/audit-logs.png';
+import servicesTemplates from '../assets/screenshots/services-templates.png';
+import flowStatus from '../assets/screenshots/edge-flow-status.png';
+import flowMediaStatus from '../assets/screenshots/edge-flow-media-status-counters.png';
 
 const allSlides = {
   topology: {
@@ -37,6 +44,41 @@ const allSlides = {
     image: eventsAlarms,
     title: 'Events & Alarms',
     description: 'Severity-graded operational events from every connected device with structured details and filters.',
+  },
+  'node-bus': {
+    image: nodeBus,
+    title: 'Node Bus Matrix',
+    description: 'Three-pane crosspoint authoring — Sources, Crosspoint, Inspector. Click-to-wire or drag-and-drop programs across every output. Lawo-style pending state with atomic Apply.',
+  },
+  switcher: {
+    image: switcher,
+    title: 'Live Switcher',
+    description: 'PGM/PVW director console with named profiles, per-page grouping, drift detection, and a one-click Take. Drives Bilbycast edges and third-party devices through the same driver-aware action system.',
+  },
+  replay: {
+    image: replay,
+    title: 'Replay',
+    description: 'Per-flow JKL-scrub timeline with mark in/out, quick-clip last-N-seconds, sport-preset tag profiles, and a one-click Push-to-air per clip. No separate replay server, no separate licence.',
+  },
+  'audit-log': {
+    image: auditLogs,
+    title: 'Audit Log',
+    description: 'Every operator action recorded with timestamp, user, target, and structured details. Filter by date, group, or action; complete tenant-scoped accountability for shared plants.',
+  },
+  services: {
+    image: servicesTemplates,
+    title: 'Services & Templates',
+    description: 'Wizard-driven catalogue of transport templates — SRT, RIST, RTP, UDP, ST 2110, Appear X chassis — that turn complex multi-node setups into a single guided click.',
+  },
+  'flow-status': {
+    image: flowStatus,
+    title: 'Flow Signal Map',
+    description: 'Per-flow fan-out view — every input, every output, live bitrate, and a thumbnail preview of the on-air content. Click any leg to dive into TR-101290, codec, and PCR analysis.',
+  },
+  'flow-media': {
+    image: flowMediaStatus,
+    title: 'In-depth Media Analysis',
+    description: 'Per-flow loudness (R128 / Live momentary / true peak), audio + video PID counters, frame-rate, resolution, PCR_AC, and bitstream conformance — broadcast-grade diagnostics in the browser.',
   },
 };
 

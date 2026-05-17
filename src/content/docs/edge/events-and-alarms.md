@@ -7,6 +7,8 @@ sidebar:
 
 bilbycast-edge generates operational events and forwards them to bilbycast-manager via WebSocket. Events provide real-time visibility into connection state changes, failures, and significant operational conditions that go beyond periodic stats and health messages.
 
+![Events & Alarms — severity-graded table with badges, timestamps, node, category, and structured details filterable by severity / category / date](../../../assets/screenshots/events-alarms.png)
+
 ## Event Protocol
 
 Events are sent as WebSocket messages with type `"event"`:

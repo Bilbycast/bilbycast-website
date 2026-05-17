@@ -246,6 +246,25 @@ AI provider API keys are encrypted at rest with authenticated envelope encryptio
 
 ---
 
+## Audit Log
+
+Every state-changing operator action is recorded in a group-scoped audit table — timestamp, user, action name, target entity, and a structured `details` payload with the parameters. Visible at `/admin/audit-log` to admins of the owning group, and to SuperAdmins across all groups.
+
+![Audit Log — searchable table with date range, group, action, target, and structured details columns](../../../assets/screenshots/audit-logs.png)
+
+Coverage:
+
+- **Switcher** — `switcher.preset.activate`, `switcher.take`, `switcher.preset.{create,update,delete}`, `switcher.page.{create,update,delete}`.
+- **Node CRUD** — node create, edit, delete, secret rotation, registration token regeneration.
+- **Flows / inputs / outputs** — create, update, delete, hot input add/remove, recording arm/disarm.
+- **Routines** — fire (manual + scheduled), partial / failed / missed transitions.
+- **AI-driven actions** — every confirmed AI proposal is tagged with the provider + model that generated it.
+- **Auth events** — login success / failure, MFA enrollment, OIDC binding, password change, lockouts.
+
+The log is append-only at the data layer — no API path deletes rows. Retention is configurable per deployment.
+
+---
+
 ## What Is NOT Yet Implemented
 
 - **WebAuthn / passkey support** — only TOTP is available today.

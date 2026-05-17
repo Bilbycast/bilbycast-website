@@ -7,6 +7,8 @@ sidebar:
 
 The bilbycast-manager **Topology** page is a live visualization of every node, flow, tunnel, and signal path the manager knows about. It exists to answer two operational questions at a glance:
 
+![Topology view — edges, X5 gateways, and the relay rendered as a force-directed graph with bandwidth-weighted links](../../../assets/screenshots/network-topology.png)
+
 1. *Where is this signal coming from and going to?* — the flow view, a deterministic left-to-right signal-flow diagram.
 2. *Which nodes are talking to which?* — the graph view, a force-directed network of edges, relays, and third-party gateways.
 

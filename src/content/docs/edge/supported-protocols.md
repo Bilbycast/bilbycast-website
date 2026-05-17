@@ -319,6 +319,8 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 
 SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs accept an optional `video_encode` block. TS-carrying outputs (SRT / RIST / UDP / RTP) run the streaming `engine::ts_video_replace::TsVideoReplacer`: the source video ES is demuxed, decoded via `video-engine::VideoDecoder`, re-encoded via `video-engine::VideoEncoder`, and re-muxed into the output TS — non-video PIDs (audio, PCR, PSI, ST 2110-40 ANC) pass through untouched. RTMP drives the same decoder/encoder pair, emitting classic FLV for H.264 targets and Enhanced RTMP v2 (`hvc1` FourCC, hvcC extradata) for HEVC targets. WebRTC is H.264-only and auto-transcodes HEVC sources.
 
+![Manager — Output modal with the video transcode picker open across libx264, libx265, NVENC, QSV, and VAAPI; only backends the host actually supports stay enabled](../../../assets/screenshots/transcoding-example.png)
+
 Supported encoders (opt-in via Cargo features):
 
 | Feature | Codec | Runtime |

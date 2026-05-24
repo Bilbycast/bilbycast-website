@@ -438,10 +438,14 @@ Removal: `sudo systemctl disable --now bilbycast-etf-qdisc@enp1s0`. (Optional ma
 
 Tier 1 needs `ptp4l` + `phc2sys` running against a PTP grandmaster. Tier 2 (software ETF, no HW-PTP NIC, no PTP) works without this step but caps out around 1–10 µs jitter.
 
-`SO_TXTIME` schedules transmission against `CLOCK_TAI`. Without `ptp4l` + `phc2sys` running, the kernel's TAI clock is just wall time + leap-second offset — sender and receiver drift relative to each other and the receiver's VRX bound fails. See [PTP integration](/edge/ptp/) for the full setup.
+`SO_TXTIME` schedules transmission against `CLOCK_TAI`. Without `ptp4l` + `phc2sys` running, the kernel's TAI clock is just wall time + leap-second offset — sender and receiver drift relative to each other and the receiver's VRX bound fails.
+
+**Don't start ptp4l/phc2sys by hand.** Open the manager UI's per-node **Time (PTP)** page and pick **Slave only** (or **Auto** if you don't know yet). The `bilbycast-ptp-helper` daemon shipped with `install-edge.sh` will start the right `ptp4l@<iface>` + `phc2sys` services for you within ~1 s and re-apply on every config change — no `sudo` from the operator at runtime. Full operator runbook + role decision tree: [Time (PTP)](/edge/ptp/).
+
+Verify both daemons are alive afterwards:
 
 ```bash
-systemctl status ptp4l phc2sys
+systemctl status ptp4l@<iface>.service phc2sys@<iface>.service
 ```
 
 Both should be **active (running)**. The edge keeps emitting valid bytes without PTP, just not narrow-profile-aligned.

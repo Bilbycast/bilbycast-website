@@ -34,6 +34,36 @@ accuracy on commodity Linux. If you're not running ST 2110 or MXL
 flows, leave PTP **Off** (the install default) and skip the rest of
 this page.
 
+## Prerequisites
+
+Two things must be in place before PTP can work:
+
+1. **`linuxptp`** — the IEEE 1588 daemon suite (`ptp4l`, `phc2sys`,
+   `pmc`). Install it on the edge host:
+
+   ```bash
+   # Debian / Ubuntu
+   sudo apt update && sudo apt install linuxptp
+
+   # RHEL / Fedora
+   sudo dnf install linuxptp
+   ```
+
+2. **`bilbycast-ptp-helper`** — a small companion daemon that watches
+   `/var/lib/bilbycast/ptp.conf` and starts/stops `ptp4l` +
+   `phc2sys` automatically when you change the PTP mode. It is
+   installed and enabled by the standard `install-edge.sh` installer.
+   If you installed the edge manually, ensure the
+   `bilbycast-ptp.service` systemd unit is running:
+
+   ```bash
+   sudo systemctl enable --now bilbycast-ptp.service
+   ```
+
+Once both are in place, pick a PTP mode from the manager UI (see
+below) and the helper takes care of the rest — no manual `ptp4l`
+configuration needed.
+
 For the wallclock / PCR side of the same story see
 [Wire-Time Precision](/edge/wire-pacing/). For the deeper flow-level
 master-clock picture see the edge repo's

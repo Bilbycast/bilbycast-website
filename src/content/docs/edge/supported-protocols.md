@@ -331,9 +331,9 @@ Supported encoders (opt-in via Cargo features):
 | `video-encoder-qsv` | H.264 / HEVC via Intel QuickSync / oneVPL (LGPL-clean, x86_64 only) | iGPU |
 | `display-nvdec` | NVIDIA NVDEC display HW decode (`h264_cuvid` / `hevc_cuvid`) | GPU |
 | `display-qsv` | Intel QSV display HW decode (`h264_qsv` / `hevc_qsv`, x86_64 only) | iGPU |
-| `video-encoders-full` | Bundle of every video codec backend — encoders + display HW decoders. Used by `*-linux-full` release builds | — |
+| `video-encoders-full` | Bundle of every video codec backend — encoders + display HW decoders. Used by the release build | — |
 
-Default release builds (`*-linux`) ship AGPL-only without software encoders. The `*-linux-full` release channel bundles libx264 + libx265 + NVENC + QSV (encode) and NVDEC + QSV-decode (display HW playout) — `*-aarch64-linux-full` omits QSV in both directions because Intel iGPU is x86_64-only. Combined work is AGPL-3.0-or-later under the GPL portions; runtime probe auto-detects which backends actually open on the host.
+The release tarball (`bilbycast-edge-$(uname -m)-linux-full.tar.gz`) bundles libx264 + libx265 + NVENC + QSV (encode) and NVDEC + QSV-decode (display HW playout) — the `aarch64` build omits QSV in both directions because Intel iGPU is x86_64-only. Combined work is AGPL-3.0-or-later under the GPL portions; the runtime probe auto-detects which backends actually open on the host.
 
 ST 2110-22 (JPEG XS) transcoding is deferred pending a libjxs wrapper. HLS `video_encode` is the last deferred transport — tracked in the repo's `transcoding.md`.
 
@@ -402,9 +402,9 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `video-encoder-qsv` | Intel QuickSync H.264 / HEVC encoders via oneVPL. LGPL-clean; x86_64 only; needs Intel iGPU + media driver | No |
 | `display-nvdec` | NVIDIA NVDEC hardware decode for the local-display output. Shares `nv-codec-headers` with `video-encoder-nvenc` | No |
 | `display-qsv` | Intel QSV hardware decode for the local-display output. Shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only | No |
-| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV) **and** display HW decoders (NVDEC + QSV-decode). Used by the `*-linux-full` release channel | No |
+| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV) **and** display HW decoders (NVDEC + QSV-decode). Used by the release build | No |
 
-Default release binaries (`*-linux`) ship AGPL-only without software video encoders. The `*-linux-full` channel bundles GPL / NVENC encoders — see `bilbycast-edge/docs/transcoding.md` in the repo for the full licence breakdown and install steps.
+The release tarball bundles GPL / NVENC encoders — see `bilbycast-edge/docs/transcoding.md` in the repo for the full licence breakdown.
 
 ## Architecture Notes
 

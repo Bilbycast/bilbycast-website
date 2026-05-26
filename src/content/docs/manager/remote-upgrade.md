@@ -11,7 +11,7 @@ This page is the operator's runbook. The cryptographic trust model and the edge-
 
 ## What the manager can upgrade
 
-- **bilbycast-edge** nodes (every variant)
+- **bilbycast-edge** nodes
 - **Gateway sidecars** built on `bilbycast-gateway-sdk` — today that means [bilbycast-appear-x-api-gateway](/appear-x-gateway/setup-guide/), and any future first- or third-party sidecar that opts into the same machinery
 
 Manager and relay binaries are upgraded **manually** today. The same Sigstore-signed releases ship for them, but there's no manager-driven rollout — see [Install the manager](/manager/getting-started/) and [Install the relay](/relay/getting-started/) for the manual flow (and the optional Sigstore-verification step on each).

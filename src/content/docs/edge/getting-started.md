@@ -15,29 +15,7 @@ An edge node is the box that actually moves your media — receives a stream on 
 
 `x86_64` and `aarch64` builds are published.
 
-## 1. Pick a variant
-
-Each release ships in **two variants** per architecture:
-
-| Tarball | Includes | Binary licence |
-|---------|----------|----------------|
-| `bilbycast-edge-$(uname -m)-linux.tar.gz` | Default — pass-through plus AAC, Opus, MP2, AC-3, JPEG, video decode and thumbnails. **No software video encoders.** | AGPL-3.0-or-later |
-| `bilbycast-edge-$(uname -m)-linux-full.tar.gz` | Adds **libx264 + libx265 + NVENC** software/hardware video transcoding (plus QSV on x86_64) | AGPL-3.0-or-later combined work bundling GPL-2.0-or-later libx264 / libx265 (see `NOTICE` inside the tarball) |
-
-Pick **default** if you only need to bridge protocols (SRT in, RTP out, etc.) — smaller download, AGPL-only. Pick **full** if you need to transcode H.264 / H.265.
-
-## 2. Download
-
-**Default variant:**
-
-```bash
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux.tar.gz"
-curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux.tar.gz.sha256"
-sha256sum -c "bilbycast-edge-$(uname -m)-linux.tar.gz.sha256"
-tar xzf "bilbycast-edge-$(uname -m)-linux.tar.gz"
-```
-
-**Full variant:**
+## 1. Download
 
 ```bash
 curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux-full.tar.gz"
@@ -46,7 +24,9 @@ sha256sum -c "bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
 tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 ```
 
-Each tarball expands to a directory containing the `bilbycast-edge` binary, the licence files (`LICENSE`, `LICENSE.commercial`, `NOTICE`, and `COPYING.GPL` on the `-full` variant), `README.md`, and a `packaging/` directory with optional systemd unit, sysusers config, ETF qdisc and PTP provisioning scripts, and the `install-edge.sh` one-shot installer.
+The tarball expands to a directory containing the `bilbycast-edge` binary, the licence files (`LICENSE`, `LICENSE.commercial`, `NOTICE`, `COPYING.GPL`), `README.md`, and a `packaging/` directory with optional systemd unit, sysusers config, ETF qdisc and PTP provisioning scripts, and the `install-edge.sh` one-shot installer.
+
+The release binary is AGPL-3.0-or-later — a combined work bundling GPL-2.0-or-later libx264 / libx265 for software H.264 / H.265 transcoding. NVIDIA NVENC + NVDEC, Intel QSV (x86_64), and VAAPI are also compiled in; the runtime probe auto-detects which the host can actually open. See `NOTICE` inside the tarball for the full bundled-library inventory.
 
 ### Verify the Sigstore signature (optional)
 
@@ -85,29 +65,18 @@ cosign verify-blob \
 
 A successful verify prints `Verified OK`. The verified `manifest.json` then carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same pipeline gates manager-driven [Remote Upgrade](/manager/remote-upgrade/) automatically, so verifying at first install is purely belt-and-suspenders.
 
-## 3. Install runtime dependencies
+## 2. Install runtime dependencies
 
-The edge has no `ffmpeg` subprocess requirement — AAC, Opus, MP2, AC-3, video decode, JPEG thumbnail, and the local-display output are all in-process. The apt packages below back the local-display output (HDMI / DisplayPort + ALSA confidence monitor playout), the optional video encoders, and PTP for ST 2110.
-
-**Default variant — runtime:**
+The edge has no `ffmpeg` subprocess requirement — AAC, Opus, MP2, AC-3, video decode, JPEG thumbnail, and the local-display output are all in-process. The apt packages below back the local-display output (HDMI / DisplayPort + ALSA confidence monitor playout), the software video encoders, and PTP for ST 2110.
 
 ```bash
 sudo apt update
-sudo apt install libdrm2 libasound2t64 libudev1
+sudo apt install libdrm2 libasound2t64 libudev1 libx264-dev libx265-dev libnuma1
 ```
 
 On Ubuntu 22.04 / Debian 12 the ALSA package is plain `libasound2`; on Ubuntu 24.04+ it was renamed to `libasound2t64` (the `t64` time_t transition). Both ship the same `libasound.so.2` runtime — pick whichever your distro provides.
 
-These three packages are in every modern Linux base install. On a strictly headless box they cause no side effects — the edge simply doesn't advertise the `display` capability.
-
-**Full variant — runtime (in addition to the above):**
-
-```bash
-sudo apt update
-sudo apt install libx264-dev libx265-dev libnuma1
-```
-
-The `-dev` metapackages depend on the matching runtime `.so` packages and pin the version the binary was built against. Substitute the versioned names (`libx264-164`, `libx265-199` on Ubuntu 24.04) if you want runtime-only.
+`libdrm2` / `libasound2t64` / `libudev1` are in every modern Linux base install — on a strictly headless box they cause no side effects (the edge simply doesn't advertise the `display` capability). The `libx264-dev` / `libx265-dev` metapackages depend on the matching runtime `.so` packages and pin the version the binary was built against. Substitute the versioned names (`libx264-164`, `libx265-199` on Ubuntu 24.04) if you want runtime-only.
 
 **x86_64 only — Intel QuickSync (QSV):**
 
@@ -161,9 +130,9 @@ nvidia-smi                                          # lists the GPU
 ldconfig -p | grep -E 'libnvidia-encode|libcuda\.'  # both must appear
 ```
 
-**Why the runtime libraries are mandatory.** Both NVENC and QSV are *dispatcher architectures*: the actual encoder kernels that program the GPU live in vendor-shipped runtime libraries (`libnvidia-encode.so.1` for NVENC, `libmfx-gen.so.1.2` for QSV). bilbycast cannot statically link them in — they are GPU-architecture-specific binaries Intel and NVIDIA distribute as part of their driver stacks, the same way every other QSV/NVENC consumer (OBS, FFmpeg CLI, GStreamer, HandBrake) requires them. If you skip the runtime install, hardware encoding fails at session creation; CPU encoding (`x264` / `x265`) keeps working because those libraries are statically linked into the `*-full` binary.
+**Why the runtime libraries are mandatory.** Both NVENC and QSV are *dispatcher architectures*: the actual encoder kernels that program the GPU live in vendor-shipped runtime libraries (`libnvidia-encode.so.1` for NVENC, `libmfx-gen.so.1.2` for QSV). bilbycast cannot statically link them in — they are GPU-architecture-specific binaries Intel and NVIDIA distribute as part of their driver stacks, the same way every other QSV/NVENC consumer (OBS, FFmpeg CLI, GStreamer, HandBrake) requires them. If you skip the runtime install, hardware encoding fails at session creation; CPU encoding (`x264` / `x265`) keeps working because those libraries are statically linked into the binary.
 
-## 4. Register the node in the manager
+## 3. Register the node in the manager
 
 Before launching the edge, create its node entry in the manager:
 
@@ -172,7 +141,7 @@ Before launching the edge, create its node entry in the manager:
 3. Pick device type **Edge**, give it a name, click **Save**.
 4. Copy the one-shot **registration token** the modal shows. You'll paste it into the setup wizard in the next step.
 
-## 5. Run the edge — and finish setup in the browser
+## 4. Run the edge — and finish setup in the browser
 
 Inside the extracted tarball directory:
 
@@ -211,7 +180,7 @@ Click **Save**. The wizard writes `config.json` and `secrets.json` for you, regi
 
 If you ticked the self-signed-cert option, also export `BILBYCAST_ALLOW_INSECURE=1` before re-launching the edge — the env var is a deliberate safety guard so the cert check can't be skipped by accident in production.
 
-## 6. Verify
+## 5. Verify
 
 What success looks like:
 
@@ -222,7 +191,7 @@ What success looks like:
 
 If the node doesn't show up, check the manager log for an `auth_failed` event under category `connection`.
 
-## 7. Run as a service
+## 6. Run as a service
 
 The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes — see [Install edge as an Ubuntu service](/edge/install-ubuntu-service/).
 

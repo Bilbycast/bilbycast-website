@@ -116,9 +116,9 @@ const standards = [
         <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">In-process transcoding</h2>
         <p class="mt-4 text-lg text-slate-400">
           Video and audio transcoders run inside the same Rust process as the protocol stack. No subprocess hop,
-          no shell-out, no extra failure mode. The default <code class="text-slate-300">*-linux</code> binary ships
-          AGPL-only without software encoders; the <code class="text-slate-300">*-linux-full</code> binary adds
-          GPL libx264 / libx265, NVENC, and QSV.
+          no shell-out, no extra failure mode. The release binary bundles GPL libx264 / libx265, NVENC, and QSV
+          as an AGPL-3.0-or-later combined work under the GPL portions; the runtime probe auto-detects which
+          hardware backends the host can actually open.
         </p>
       </div>
 

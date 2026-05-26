@@ -73,7 +73,9 @@ Outputs are JSON top-level entities in `config.json`. The minimum:
 | `audio_channel_pair` | `[u8; 2]` | `[0, 1]` | Stereo pair to render from decoded multichannel audio. Both indices must be < 8 and not equal. |
 | `resolution` | string | `null` | `"auto"` (use the connector's preferred mode) or `"WIDTHxHEIGHT"` (e.g. `"1920x1080"`). |
 | `refresh_hz` | u32 | `null` | Refresh rate in Hz. Range 1–240. `null` uses the connector's preferred mode. |
-| `sync_mode` | string | `"vsync_to_display"` | v1 only accepts `"vsync_to_display"`. PTP-genlocked and PCR-master modes land in v2. |
+| `sync_mode` | string | `"vsync_to_display"` | Current builds only accept `"vsync_to_display"`. PTP-genlocked and PCR-master sync modes are planned. |
+| `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, or `"vaapi"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ cpu` against the host's probed capabilities. See [Codec matrix](/edge/codec-matrix/). |
+| `show_audio_bars` | bool | `false` | Render translucent audio level bars as an ARGB8888 overlay plane composed at vblank. Stays on the zero-copy path — no CPU-blit demotion. |
 
 ## How A/V sync works
 
@@ -87,10 +89,35 @@ The video-vs-audio offset is published as a signed EMA on the per-output `displa
 
 ## Supported codecs
 
-- **Video**: H.264 + H.265. Software decode via libavcodec is the always-available baseline; **NVDEC** (`display-nvdec` Cargo feature) and **Intel QSV** (`display-qsv`, x86_64 only) are user-selectable per output via `hw_decode: "auto" | "cpu" | "nvdec" | "qsv"`. Both HW backends ride in the `*-linux-full` release artefact and the runtime probe auto-detects which the host can open. VA-API stays as a v2 placeholder behind `display-vaapi`.
+- **Video**: H.264 + H.265. Decode resolves through the [codec matrix](/edge/codec-matrix/) — `hw_decode: "auto"` (default) picks `VAAPI ≻ NVDEC ≻ QSV ≻ CPU` against the host's probed capabilities. VAAPI and NVDEC support **zero-copy scanout** (see below); QSV decodes to a GPU surface and downloads to sysmem before scanout. CPU decode via libavcodec is the always-available baseline.
 - **Audio**: AAC family via fdk-aac, plus MP2 / AC-3 / E-AC-3 / Opus via libavcodec. **No re-encode** — every codec decodes to LPCM for ALSA.
 
-Multichannel audio (5.1 / 7.1) is downmixed to the configured stereo pair (`audio_channel_pair`) — passthrough of compressed audio over HDMI is not supported in v1.
+Multichannel audio (5.1 / 7.1) is downmixed to the configured stereo pair (`audio_channel_pair`) — passthrough of compressed audio over HDMI is not supported.
+
+## Zero-copy scanout, atomic commit, and HDR
+
+The display task drives the connector through Linux DRM/KMS **atomic-commit page flips** — `drmModeAtomicCommit(PAGE_FLIP_EVENT | NONBLOCK)`. The first commit on a fresh connector carries `ALLOW_MODESET` plus the CRTC.ACTIVE / CRTC.MODE_ID / CONNECTOR.CRTC_ID writes; subsequent flips skip those and just rotate the framebuffer.
+
+- **VAAPI decode → DMA-BUF → KMS scanout** is the fastest path. The decoded frame stays in GPU memory; the display task maps it to a DRM PRIME descriptor via `av_hwframe_map`, attaches it to a framebuffer with `drmModeAddFB2`, and the atomic commit composes it at vblank with no CPU blit. Cross-modifier flips (linear XRGB8888 dumb buffer ↔ tiled NV12 / P010) work without a full-plane reconfigure.
+- **NVDEC decode → CUDA surface → KMS scanout** is also zero-copy on hosts with the NVIDIA proprietary driver.
+- **CPU decode** allocates an XRGB8888 dumb buffer, blits the decoded frame in, and atomic-commits the dumb buffer — one CPU copy per frame.
+
+Hosts that reject atomic ioctls (`EOPNOTSUPP` from the kernel, or `EINVAL` on the first commit) **fall back to legacy `set_crtc` per-frame** and emit a single `display_atomic_unavailable` Warning event so the operator can spot the degradation.
+
+### HDR output
+
+`KmsDisplay::open` queries the connector's `HDR_OUTPUT_METADATA` atomic blob property. When present, `panel_hdr_capable()` returns `true` and:
+
+- **HDR-on-HDR** (PQ / HLG source, HDR-capable panel): the decoded frame stays on the VAAPI zero-copy path. Before each `present_prime`, the display task allocates a 30-byte `hdr_output_metadata` blob with BT.2020 primaries + D65 white point + sensible HDR10 luminance defaults (1000 / 0.005 / 1000 / 400 nits) and folds the connector property write into the same atomic commit as the framebuffer flip. EOTF transitions take `ALLOW_MODESET` because the HDMI / DP sink re-trains.
+- **HDR-on-SDR** (HDR source, non-HDR panel): the decode task downloads the VAAPI surface to sysmem via `av_hwframe_transfer_data`, applies a CPU LUT tonemap to BT.709, and falls through to the dumb-buffer scanout. One PCIe transfer per HDR frame on Intel iHD; pointer-alias on AMD radeonsi. A `display_hdr_tonemap_active` Warning event fires once per flow start so the operator sees the degraded path explicitly.
+
+`clear_hdr_output_metadata` reverts the connector to SDR signalling on flow stop.
+
+### Audio level bars overlay
+
+Setting `show_audio_bars: true` discovers a second KMS plane (Overlay-type, with Cursor as a fallback) that the CRTC can drive in `DRM_FORMAT_ARGB8888`. The display task allocates a panel-width × strip-height ARGB8888 dumb buffer and paints translucent-black backgrounds (alpha=0x80) plus opaque bars (alpha=0xFF) into it; the overlay composes at vblank in a single atomic commit alongside the prime framebuffer.
+
+The overlay stays on the zero-copy video path — there's no CPU-blit demotion of the underlying video frame when bars are enabled.
 
 ## Capacity
 
@@ -113,6 +140,8 @@ The edge also enforces **per-connector uniqueness** — only one active display 
 | `display_decoder_overload` | Warning | `frames_dropped_late` > 5 % over a 5-s rolling window. |
 | `display_av_drift` | Warning | `|av_sync_offset_ms|` > 100 ms sustained ≥ 3 s. |
 | `display_subscriber_lagged` | Warning | broadcast `Lagged(n)`; rate-limited to one event / second. The decoders flush and resync on the next IDR. |
+| `display_hdr_tonemap_active` | Warning | HDR source landed on an SDR panel. The decode falls back to sysmem download + CPU LUT tonemap. Fires once per flow start. |
+| `display_atomic_unavailable` | Warning | Kernel rejected the atomic-commit ioctl. The output falls back to legacy `set_crtc` per-frame. Fires once per output start. |
 
 Save-time errors that surface as `command_ack.error_code` on `add_output` / `update_config`:
 
@@ -139,21 +168,22 @@ Save-time errors that surface as `command_ack.error_code` on `add_output` / `upd
 | `av_sync_offset_ms` | Signed EMA of the video-vs-audio offset (positive = video late). |
 | `current_resolution` | Negotiated KMS resolution (e.g. `"1920x1080"`). |
 | `current_refresh_hz` | Negotiated refresh rate. |
-| `pixel_format` | Pixel format on the wire (v1: always `"XRGB8888"`). |
-| `decoder_kind` | `"sw"` in v1; `"vaapi"` / `"nvdec"` arrive in v2. |
+| `pixel_format` | Pixel format on the wire — `"XRGB8888"` on the CPU / dumb-buffer path, `"NV12"` / `"P010"` on the VAAPI / NVDEC zero-copy path. |
+| `decoder_kind` | `"vaapi"`, `"nvdec"`, `"qsv"`, or `"sw"` — what the runtime decoder resolver actually opened on this host. |
 | `video_codec` | `"h264"` / `"hevc"`. |
 | `audio_codec` | `"aac"` / `"mp2"` / `"ac3"` / `"eac3"` / `"opus"` / `"none"`. |
 
 The manager renders the resolution annotation as `display (1920x1080@60Hz)` in the per-output table on the flow detail page, plus a green `DISPLAY` badge in the name column.
 
-## Limitations (v1)
+## Limitations
 
 - Linux only.
-- NVDEC and Intel QSV hardware decode are available behind the `display-nvdec` / `display-qsv` Cargo features (both bundled in the `*-linux-full` release). VA-API decode is still scheduled for v2 behind the `display-vaapi` placeholder.
 - HDMI hotplug is discovered at startup only — adding a cable later requires restarting the edge before it shows up in `display_devices`.
 - Multichannel passthrough over HDMI is not supported — multichannel sources are downmixed to stereo on the configured `audio_channel_pair`.
-- One active display output per connector — cross-output uniqueness is enforced.
-- HDR / wide-gamut metadata, closed captions, and SCTE-104 cue display are not rendered. The decoded raw video is what reaches the screen.
+- One active display output per connector — cross-output uniqueness is enforced via `display_device_busy`.
+- Closed captions and SCTE-104 cue display are not rendered. The decoded raw video is what reaches the screen.
+- HDR signalling is supported (BT.2020 + PQ / HLG) when the panel reports `HDR_OUTPUT_METADATA`; non-HDR panels fall back to CPU LUT tonemap with one `display_hdr_tonemap_active` warning per flow start.
+- The auto decoder priority follows the [codec matrix](/edge/codec-matrix/) — operators can pin a specific backend via `hw_decode`. Backends not compiled into this build, or unsupported on the host, are rejected at output validation.
 
 ## Where to read next
 

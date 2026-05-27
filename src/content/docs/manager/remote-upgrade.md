@@ -20,7 +20,7 @@ Manager and relay binaries are upgraded **manually** today. The same Sigstore-si
 
 Manager-driven upgrade only works once the node is **already installed and registered**. The first install always uses the curl-pipe-bash one-liner:
 
-- Edge: see [Install an edge node](/edge/getting-started/) → [Install as Ubuntu service](/edge/install-ubuntu-service/)
+- Edge: see [Install an edge node](/edge/getting-started/) → [Install edge as a Linux service](/edge/install-ubuntu-service/)
 - Sidecar: see [Appear X gateway setup](/appear-x-gateway/setup-guide/)
 
 Both installers lay out `/opt/bilbycast/<service>/{current,versions/<v>/,state.json,config…}` with `current` as a symlink the upgrade machinery atomically swaps. After the first install, every subsequent upgrade is the manager-driven flow on this page.

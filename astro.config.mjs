@@ -38,7 +38,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'edge/overview' },
 						{ label: 'Install an Edge Node', slug: 'edge/getting-started' },
-						{ label: 'Install as Ubuntu Service', slug: 'edge/install-ubuntu-service' },
+						{ label: 'Install as a Linux Service', slug: 'edge/install-ubuntu-service' },
 						{ label: 'Setup Wizard', slug: 'edge/setup-wizard' },
 						{ label: 'Supported Protocols', slug: 'edge/supported-protocols' },
 						{ label: 'Configuration', slug: 'edge/configuration' },

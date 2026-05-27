@@ -193,9 +193,29 @@ If the node doesn't show up, check the manager log for an `auth_failed` event un
 
 ## 6. Run as a service
 
-The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes — see [Install edge as an Ubuntu service](/edge/install-ubuntu-service/).
+The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes.
 
-Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The default release tier is `clock_nanosleep` on a SCHED_FIFO thread — sub-3 ms PCR_AC max through 2 Gbps on commodity Linux, no qdisc / no PTP / no special NIC required. That covers VLC, ffplay, OBS, cloud receivers, and most professional decoders in standard tolerance mode. The kernel-paced `SO_TXTIME` upgrade (tier 1 — sub-µs PCR_AC) is opt-in via `BILBYCAST_ENABLE_TXTIME=1` and only worth enabling for ST 2110-21 narrow profile or T-STD-strict contribution receivers. Setup: [Install edge as an Ubuntu service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile); full reference [Wire-Time Precision](/edge/wire-pacing/).
+### Recommended: one-command install
+
+From inside the extracted tarball directory:
+
+```bash
+sudo bash packaging/install-edge.sh \
+  --manager wss://YOUR_MANAGER:8443/ws/node \
+  --registration-token <token>
+```
+
+This single command handles everything: creates the `bilbycast` service user, lays out `/opt/bilbycast/edge/` with the `current` symlink, installs and enables the `bilbycast-edge.service` and `bilbycast-ptp.service` systemd units, installs `linuxptp` for PTP support, seeds the default PTP config, and starts the edge. Works on x86_64 and aarch64 Linux (Debian, Ubuntu, RHEL, Fedora — any systemd-based distro with `apt` or `dnf`).
+
+After it finishes, the node should appear online in the manager UI within seconds.
+
+### Alternative: manual step-by-step
+
+If you prefer to lay each piece down by hand (or are on a non-standard distro where the script doesn't fit), the full manual walkthrough is at [Install edge as a Linux service](/edge/install-ubuntu-service/).
+
+### Wire pacing
+
+Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The default release tier is `clock_nanosleep` on a SCHED_FIFO thread — sub-3 ms PCR_AC max through 2 Gbps on commodity Linux, no qdisc / no PTP / no special NIC required. That covers VLC, ffplay, OBS, cloud receivers, and most professional decoders in standard tolerance mode. The kernel-paced `SO_TXTIME` upgrade (tier 1 — sub-µs PCR_AC) is opt-in via `BILBYCAST_ENABLE_TXTIME=1` and only worth enabling for ST 2110-21 narrow profile or T-STD-strict contribution receivers. Setup: [Install edge as a Linux service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile); full reference [Wire-Time Precision](/edge/wire-pacing/).
 
 ## Where to read next
 

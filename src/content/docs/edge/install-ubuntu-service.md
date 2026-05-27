@@ -5,48 +5,13 @@ sidebar:
   order: 3
 ---
 
-This guide turns a freshly-extracted edge tarball into a production systemd service on any systemd-based Linux distro (Ubuntu, Debian, RHEL, Fedora, etc.) on x86_64 or aarch64.
+This page is the **manual step-by-step** alternative to [the one-command `install-edge.sh` path on the Install an Edge Node page](/edge/getting-started/#3-install-and-register). Use it when you want full control over each piece, or when the script doesn't fit your distro.
 
-After this you'll have:
+:::note[Most operators don't need this page]
+If you haven't installed yet, start at [Install an Edge Node](/edge/getting-started/) — the recommended `install-edge.sh` path there does everything below in one command, including PTP, systemd units, and manager registration.
+:::
 
-- Binary at `/opt/bilbycast/edge/versions/<version>/bilbycast-edge`, with `/opt/bilbycast/edge/current` symlinked to the active version.
-- Config + secrets at `/opt/bilbycast/edge/{config.json,secrets.json}`, owned by the service user.
-- Persistent data dirs under `/var/lib/bilbycast/edge/`.
-- The `bilbycast-edge.service` unit — auto-starts on boot, auto-restarts on crash, follows the `current` symlink so manager-driven upgrades land automatically.
-- The `bilbycast-ptp.service` unit — manages PTP (`ptp4l` + `phc2sys`) for ST 2110 / MXL. Defaults to `mode=off`; operator enables via the manager UI's Time page.
-- `linuxptp` installed (provides `ptp4l`, `phc2sys`, `pmc`).
-
-If you haven't completed the [edge install + setup-wizard registration](/edge/getting-started/) yet, do that first — this guide picks up from there with a working `config.json` + `secrets.json` pair next to the binary in your tarball directory.
-
-## Recommended: one-command install with `install-edge.sh`
-
-From inside the extracted tarball directory:
-
-```bash
-sudo bash packaging/install-edge.sh \
-  --manager wss://YOUR_MANAGER:8443/ws/node \
-  --registration-token <token>
-```
-
-The script handles every step described in the manual walkthrough below:
-
-1. Detects host architecture (x86_64 or aarch64).
-2. Creates the `bilbycast` service user.
-3. Lays out `/opt/bilbycast/edge/versions/<v>/` and the `current` symlink.
-4. Installs `config.json` and `secrets.json` with correct ownership and permissions.
-5. Installs `linuxptp` (`ptp4l`, `phc2sys`, `pmc`) for PTP support.
-6. Installs the `bilbycast-ptp-gm.sh` script, PTP config template, and the `bilbycast-ptp.service` systemd unit.
-7. Seeds `/var/lib/bilbycast/ptp.conf` with `mode = off` (operator enables PTP from the manager UI).
-8. Creates runtime directories for replay, media, and PTP state.
-9. Installs an AppArmor local override for `ptp4l` (on distros with AppArmor).
-10. Installs and enables `bilbycast-edge.service` and `bilbycast-ptp.service`.
-
-After it finishes:
-
-```bash
-sudo systemctl status bilbycast-edge
-sudo systemctl status bilbycast-ptp
-```
+The walkthrough below produces the same layout `install-edge.sh` creates:
 
 Both should be **active (running)**. The node should appear online in the manager within seconds.
 

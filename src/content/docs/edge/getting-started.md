@@ -5,34 +5,216 @@ sidebar:
   order: 2
 ---
 
-An edge node is the box that actually moves your media — receives a stream on one protocol and re-emits it on another. Each edge registers itself with the manager via a **browser-based setup wizard**, so you don't hand-edit JSON config files unless you want to.
+An edge node is the box that actually moves your media — receives a stream on one protocol and re-emits it on another. This page covers everything from download to a running, registered node.
+
+There are two install paths:
+
+- **Production install** (recommended) — one command (`install-edge.sh`) that sets up the binary, systemd services, PTP support, and registers with the manager. No browser needed. Jump to [step 1](#1-download).
+- **Dev / testing** — run the binary directly and register via a browser-based setup wizard. Jump to [dev / testing install](#dev--testing-install).
 
 ## What you'll need
 
-- A Linux host (Ubuntu 24.04 or Debian 12+ recommended). The binary is dynamically linked against glibc 2.39+ so it can use the optional video encoders and the local-display output.
+- A Linux host (Ubuntu 24.04, Debian 12+, RHEL 9+, or any systemd-based distro). x86_64 and aarch64 builds are published.
 - The manager already running and reachable on `wss://`. If you haven't done that yet, see [Install the manager](/manager/getting-started/).
-- About 10 minutes.
+- About 5 minutes.
 
-`x86_64` and `aarch64` builds are published.
+---
 
-## 1. Download
+## Production install
+
+### 1. Download
 
 ```bash
 curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
 sha256sum -c "bilbycast-edge-$(uname -m)-linux-full.tar.gz.sha256"
 tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
+cd bilbycast-edge-*
 ```
 
-The tarball expands to a directory containing the `bilbycast-edge` binary, the licence files (`LICENSE`, `LICENSE.commercial`, `NOTICE`, `COPYING.GPL`), `README.md`, and a `packaging/` directory with optional systemd unit, sysusers config, ETF qdisc and PTP provisioning scripts, and the `install-edge.sh` one-shot installer.
+### 2. Create the node in the manager
 
-The release binary is AGPL-3.0-or-later — a combined work bundling GPL-2.0-or-later libx264 / libx265 for software H.264 / H.265 transcoding. NVIDIA NVENC + NVDEC, Intel QSV (x86_64), and VAAPI are also compiled in; the runtime probe auto-detects which the host can actually open. See `NOTICE` inside the tarball for the full bundled-library inventory.
+1. Sign in to the manager UI.
+2. **Admin → Nodes**, click **+ Add Node**.
+3. Pick device type **Edge**, give it a name, click **Save**.
+4. Copy the one-shot **registration token** the modal shows.
 
-### Verify the Sigstore signature (optional)
+### 3. Install and register
 
-Every release ships a Sigstore-signed `manifest.json` alongside the tarballs. The `sha256sum -c` step above catches mid-transfer corruption; verifying the signature additionally proves the manifest was published by the Bilbycast release workflow on a tagged commit, defending against a compromised GitHub release upload swapping the binary post-publish.
+From inside the extracted tarball directory:
 
-Install [cosign](https://github.com/sigstore/cosign) — on Ubuntu / Debian the simplest path is the upstream static binary with SHA-256 verification:
+```bash
+sudo bash packaging/install-edge.sh \
+  --manager wss://YOUR_MANAGER:8443/ws/node \
+  --registration-token <token>
+```
+
+This single command does everything:
+
+- Creates the `bilbycast` service user.
+- Installs the binary under `/opt/bilbycast/edge/` with a `current` symlink (the layout the manager's remote-upgrade feature expects).
+- Writes `config.json` and `secrets.json` with the manager URL and registration token.
+- Installs `linuxptp` (`ptp4l`, `phc2sys`, `pmc`) for PTP / ST 2110 support.
+- Installs and enables `bilbycast-ptp.service` (the PTP helper daemon, defaults to `mode=off`).
+- Installs and enables `bilbycast-edge.service` (auto-starts on boot, auto-restarts on crash).
+- Registers the node with the manager automatically — no setup wizard or browser needed.
+
+Works on x86_64 and aarch64 Linux. Uses `apt` on Debian/Ubuntu or `dnf` on RHEL/Fedora.
+
+If your manager uses a self-signed certificate, add `--allow-insecure`:
+
+```bash
+sudo bash packaging/install-edge.sh \
+  --manager wss://YOUR_MANAGER:8443/ws/node \
+  --registration-token <token> \
+  --allow-insecure
+```
+
+### 4. Verify
+
+```bash
+sudo systemctl status bilbycast-edge
+sudo systemctl status bilbycast-ptp
+```
+
+Both should be **active (running)**. Then check the manager:
+
+- The node appears at **Admin → Nodes** with status **online**.
+- The node detail page shows the **capabilities** the edge advertised (`replay`, `display`, `st2110-30`, ...) and a **Resources** card with the hardware probe results.
+
+If the node doesn't show up, check the manager log for an `auth_failed` event under category `connection`, or tail the edge journal:
+
+```bash
+sudo journalctl -u bilbycast-edge -f
+```
+
+### 5. Next steps
+
+**PTP (for ST 2110 / MXL):** The installer already set up the PTP service — it's running but idle (`mode=off`). To enable it, open the manager UI's per-node **Time (PTP)** page, pick a mode (Auto / Grandmaster / Slave only), and click Apply. The change takes effect within ~1 second. No SSH needed. See [Time (PTP)](/edge/ptp/) for the full reference.
+
+**Hardware video encoders (NVENC / QSV):** If you plan to use hardware video transcoding, install the vendor runtime libraries — see [Hardware encoder runtime](#hardware-encoder-runtime-nvenc--qsv) below.
+
+**Wire pacing** runs automatically on every UDP output. The default tier handles compressed TS through 2 Gbps with sub-3 ms PCR accuracy — no extra setup needed. The kernel-paced SO_TXTIME upgrade (sub-us) is opt-in for ST 2110-21 narrow profile. See [Install edge as a Linux service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) and [Wire-Time Precision](/edge/wire-pacing/).
+
+**Subsequent upgrades** can be driven from the manager UI (no SSH): **Admin → Nodes → Upgrade**. See [Remote Upgrade](/manager/remote-upgrade/).
+
+---
+
+## Dev / testing install
+
+Use this path when you want to test locally, don't need systemd, or want to use the browser-based setup wizard. This does **not** install PTP or systemd services — for production, use the [production install](#production-install) above.
+
+### 1. Download
+
+Same as the [production download step](#1-download) above.
+
+### 2. Install runtime dependencies
+
+```bash
+# Debian / Ubuntu
+sudo apt update
+sudo apt install libdrm2 libasound2t64 libudev1 libx264-dev libx265-dev libnuma1
+
+# RHEL / Fedora
+sudo dnf install libdrm alsa-lib systemd-libs x264-libs x265-libs numactl-libs
+```
+
+On Ubuntu 22.04 / Debian 12 the ALSA package is `libasound2` (not `libasound2t64`).
+
+### 3. Create the node in the manager
+
+Same as the [production step](#2-create-the-node-in-the-manager) above — create the node in the manager UI and copy the registration token.
+
+### 4. Run the edge and complete the setup wizard
+
+```bash
+./bilbycast-edge --config config.json
+```
+
+The config file doesn't have to exist yet — the edge creates it. Two things happen on first boot:
+
+- The edge prints a **setup token** to stdout (needed only when reaching the wizard from a different machine — loopback callers bypass it).
+- The REST API and setup wizard come up on **port 8080**.
+
+Open the wizard in a browser:
+
+```
+http://EDGE-IP:8080/setup
+```
+
+The wizard guides you through:
+
+- **Device name** — appears in the manager UI.
+- **Manager URL** — the `wss://` endpoint of your manager (e.g. `wss://manager.example.com:8443/ws/node`).
+- **Registration token** — paste the value you copied from the manager.
+- **Accept self-signed certificate** — tick this only if your manager uses a self-signed cert.
+
+Click **Save**. The wizard writes `config.json` and `secrets.json`, registers the node with the manager, and auto-disables itself.
+
+If you ticked the self-signed-cert option, also set `BILBYCAST_ALLOW_INSECURE=1` before re-launching:
+
+```bash
+BILBYCAST_ALLOW_INSECURE=1 ./bilbycast-edge --config config.json
+```
+
+### 5. Verify
+
+- The edge log shows `manager: connected`.
+- The node appears online in the manager at **Admin → Nodes**.
+- `curl http://localhost:8080/health` returns `{"status":"healthy"}`.
+
+### Moving to production later
+
+When you're ready to move this node to production, run `install-edge.sh` from the [production install](#3-install-and-register) — it will pick up your existing `config.json` and `secrets.json` and install the systemd services around them.
+
+---
+
+## Hardware encoder runtime (NVENC / QSV)
+
+The `*-full` binary compiles in NVENC and QSV bridges, but the actual GPU encoder runs in vendor-shipped runtime libraries. If you only use software encoders (`x264` / `x265`), skip this section.
+
+**x86_64 only — Intel QuickSync (QSV):**
+
+```bash
+sudo apt update
+sudo apt install libvpl2 libmfx-gen1.2 intel-media-va-driver-non-free
+sudo usermod -aG render bilbycast    # service user needs /dev/dri/renderD* access
+```
+
+| Package | Role |
+| --- | --- |
+| `libvpl2` | oneVPL dispatcher (`libvpl.so.2`). |
+| **`libmfx-gen1.2`** | Intel VPL **GPU runtime** — the actual encoder. **Most-commonly-missed package.** |
+| `intel-media-va-driver-non-free` | VAAPI driver (`iHD_drv_video.so`). |
+
+QSV needs Broadwell (5th gen) for H.264; HEVC needs Kaby Lake (7th gen) or newer.
+
+**NVIDIA NVENC:**
+
+```bash
+# Ubuntu 22.04 / 24.04:
+sudo ubuntu-drivers autoinstall
+sudo reboot
+
+# Debian 12+:
+sudo apt install nvidia-driver
+sudo reboot
+```
+
+Verify:
+
+```bash
+sudo -u bilbycast nvidia-smi          # NVENC: must list the GPU
+ls -l /dev/dri/                       # QSV: renderD128 must be readable by bilbycast
+```
+
+---
+
+## Verify the Sigstore signature (optional)
+
+Every release ships a Sigstore-signed `manifest.json`. The `sha256sum -c` step catches corruption; verifying the signature proves the manifest was published by the Bilbycast release workflow.
+
+Install [cosign](https://github.com/sigstore/cosign):
 
 ```bash
 COSIGN_VERSION=v2.4.1
@@ -50,7 +232,7 @@ got="$(sha256sum /tmp/cosign | awk '{print $1}')"
 sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign && rm /tmp/cosign
 ```
 
-Then verify the manifest:
+Then verify:
 
 ```bash
 curl -fsSL -O "https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/manifest.json"
@@ -63,173 +245,23 @@ cosign verify-blob \
   manifest.json
 ```
 
-A successful verify prints `Verified OK`. The verified `manifest.json` then carries the SHA-256 of every per-arch tarball — cross-check against your downloaded `.sha256` if you're being thorough. The same pipeline gates manager-driven [Remote Upgrade](/manager/remote-upgrade/) automatically, so verifying at first install is purely belt-and-suspenders.
-
-## 2. Install runtime dependencies
-
-The edge has no `ffmpeg` subprocess requirement — AAC, Opus, MP2, AC-3, video decode, JPEG thumbnail, and the local-display output are all in-process. The apt packages below back the local-display output (HDMI / DisplayPort + ALSA confidence monitor playout), the software video encoders, and PTP for ST 2110.
-
-```bash
-sudo apt update
-sudo apt install libdrm2 libasound2t64 libudev1 libx264-dev libx265-dev libnuma1
-```
-
-On Ubuntu 22.04 / Debian 12 the ALSA package is plain `libasound2`; on Ubuntu 24.04+ it was renamed to `libasound2t64` (the `t64` time_t transition). Both ship the same `libasound.so.2` runtime — pick whichever your distro provides.
-
-`libdrm2` / `libasound2t64` / `libudev1` are in every modern Linux base install — on a strictly headless box they cause no side effects (the edge simply doesn't advertise the `display` capability). The `libx264-dev` / `libx265-dev` metapackages depend on the matching runtime `.so` packages and pin the version the binary was built against. Substitute the versioned names (`libx264-164`, `libx265-199` on Ubuntu 24.04) if you want runtime-only.
-
-**x86_64 only — Intel QuickSync (QSV):**
-
-QSV uses Intel's oneVPL stack, which is a thin **dispatcher** plus a **GPU runtime backend** plus a **VAAPI driver**. All three components must be installed; the dispatcher alone contains no encoding code.
-
-```bash
-sudo apt update
-sudo apt install libvpl2 libmfx-gen1.2 intel-media-va-driver-non-free
-sudo usermod -aG render "$USER"   # log out + back in after this
-```
-
-| Package | Role |
-| --- | --- |
-| `libvpl2` | oneVPL dispatcher (`libvpl.so.2`) — what the bilbycast binary links against. |
-| **`libmfx-gen1.2`** | Intel VPL **GPU runtime** (`libmfx-gen.so.1.2`) — the actual hardware encoder. **Most-commonly-missed package.** Without it the dispatcher returns `MFX_ERR_NOT_FOUND` and `h264_qsv` fails to open. |
-| `intel-media-va-driver-non-free` | VAAPI driver (`iHD_drv_video.so`) used by `libmfx-gen` for some pixel-format conversions and zero-copy frame paths. The `intel-media-va-driver` package is the upstream open-source variant and is also acceptable. |
-
-Verify after install:
-
-```bash
-ls /usr/lib/x86_64-linux-gnu/libmfx-gen.so.1.2     # must exist
-ls /usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so  # must exist
-ls /dev/dri/                                       # card* + renderD*
-```
-
-QSV needs a 5th-gen (Broadwell) Intel Core or newer for H.264; HEVC needs 7th-gen (Kaby Lake) or newer.
-
-**NVIDIA NVENC:**
-
-NVENC also uses a dispatcher-style architecture: bilbycast `dlopen`s `libnvidia-encode.so.1` and `libcuda.so.1`, both of which ship inside the NVIDIA proprietary driver. The Nouveau open-source driver does **not** expose NVENC.
-
-```bash
-# Ubuntu 22.04 / 24.04 — recommended branch (auto-detect):
-sudo ubuntu-drivers autoinstall
-# Or pin a specific branch (e.g. 580 LTS):
-sudo apt install nvidia-driver-580          # workstation
-sudo apt install nvidia-driver-580-server   # headless servers
-sudo reboot
-```
-
-```bash
-# Debian 12+ — non-free repo must be enabled:
-sudo apt install nvidia-driver
-sudo reboot
-```
-
-Verify after install:
-
-```bash
-nvidia-smi                                          # lists the GPU
-ldconfig -p | grep -E 'libnvidia-encode|libcuda\.'  # both must appear
-```
-
-**Why the runtime libraries are mandatory.** Both NVENC and QSV are *dispatcher architectures*: the actual encoder kernels that program the GPU live in vendor-shipped runtime libraries (`libnvidia-encode.so.1` for NVENC, `libmfx-gen.so.1.2` for QSV). bilbycast cannot statically link them in — they are GPU-architecture-specific binaries Intel and NVIDIA distribute as part of their driver stacks, the same way every other QSV/NVENC consumer (OBS, FFmpeg CLI, GStreamer, HandBrake) requires them. If you skip the runtime install, hardware encoding fails at session creation; CPU encoding (`x264` / `x265`) keeps working because those libraries are statically linked into the binary.
-
-## 3. Register the node in the manager
-
-Before launching the edge, create its node entry in the manager:
-
-1. Sign in to the manager UI.
-2. **Admin → Nodes**, click **+ Add Node**.
-3. Pick device type **Edge**, give it a name, click **Save**.
-4. Copy the one-shot **registration token** the modal shows. You'll paste it into the setup wizard in the next step.
-
-## 4. Run the edge — and finish setup in the browser
-
-Inside the extracted tarball directory:
-
-```bash
-./bilbycast-edge --config config.json
-```
-
-The file doesn't have to exist yet — pointing `--config` at a path whose **parent directory exists** (the tarball directory, in this case) is enough. The edge starts with an empty in-memory config, generates a `node_id`, writes `config.json` itself, then waits for the wizard. (Pointing `--config` at a path with a missing parent directory fails immediately because the edge can't write its `.tmp` file there.)
-
-Two things happen on first boot:
-
-- The edge prints a **setup token** to stdout. Copy it down if you'll be using the wizard from a different machine — the LAN-side `/setup` form has a **Setup Token** field that requires this value. **Loopback callers** (`http://localhost:8080/setup` or `http://127.0.0.1:8080/setup`) bypass the token check entirely, so you only need it when reaching the wizard from a separate machine. If you missed the banner, re-print it without restarting the wizard:
-
-  ```bash
-  ./bilbycast-edge --config config.json --print-setup-token
-  ```
-
-  This prints the same token and exits; the persistent value stays valid until you complete registration with the manager.
-
-- The REST API and setup wizard come up on **port 8080**.
-
-Open the wizard:
-
-```
-http://EDGE-IP:8080/setup
-```
-
-The wizard guides you through:
-
-- **Device name** — appears in the manager UI.
-- **Manager URL** — the `wss://` endpoint of your manager (e.g. `wss://manager.example.com:8443/ws/node`).
-- **Registration token** — paste the value you copied from the manager.
-- **Accept self-signed certificate** — tick this only if your manager uses a self-signed cert (lab / on-prem with no public DNS).
-
-Click **Save**. The wizard writes `config.json` and `secrets.json` for you, registers the node with the manager, and **auto-disables itself** — `/setup` returns a "wizard disabled" page on every subsequent boot.
-
-If you ticked the self-signed-cert option, also export `BILBYCAST_ALLOW_INSECURE=1` before re-launching the edge — the env var is a deliberate safety guard so the cert check can't be skipped by accident in production.
-
-## 5. Verify
-
-What success looks like:
-
-- The edge log shows `manager: connected`.
-- The node appears in the manager dashboard at `/admin/nodes` with status **online** and a recent `last_seen`.
-- The node detail page surfaces the **capabilities** the edge advertised (`replay`, `display`, `st2110-30`, …) and a **Resources** card with the per-host hardware probe.
-- `curl http://localhost:8080/health` returns `{"status":"healthy"}`.
-
-If the node doesn't show up, check the manager log for an `auth_failed` event under category `connection`.
-
-## 6. Run as a service
-
-The manual launch above is fine for testing. For production, install the edge as a systemd service so it survives reboots and crashes.
-
-### Recommended: one-command install
-
-From inside the extracted tarball directory:
-
-```bash
-sudo bash packaging/install-edge.sh \
-  --manager wss://YOUR_MANAGER:8443/ws/node \
-  --registration-token <token>
-```
-
-This single command handles everything: creates the `bilbycast` service user, lays out `/opt/bilbycast/edge/` with the `current` symlink, installs and enables the `bilbycast-edge.service` and `bilbycast-ptp.service` systemd units, installs `linuxptp` for PTP support, seeds the default PTP config, and starts the edge. Works on x86_64 and aarch64 Linux (Debian, Ubuntu, RHEL, Fedora — any systemd-based distro with `apt` or `dnf`).
-
-After it finishes, the node should appear online in the manager UI within seconds.
-
-### Alternative: manual step-by-step
-
-If you prefer to lay each piece down by hand (or are on a non-standard distro where the script doesn't fit), the full manual walkthrough is at [Install edge as a Linux service](/edge/install-ubuntu-service/).
-
-### Wire pacing
-
-Wire pacing runs automatically on every UDP-socket-owning output (UDP, RTP, ST 2110-*, 302M). The default release tier is `clock_nanosleep` on a SCHED_FIFO thread — sub-3 ms PCR_AC max through 2 Gbps on commodity Linux, no qdisc / no PTP / no special NIC required. That covers VLC, ffplay, OBS, cloud receivers, and most professional decoders in standard tolerance mode. The kernel-paced `SO_TXTIME` upgrade (tier 1 — sub-µs PCR_AC) is opt-in via `BILBYCAST_ENABLE_TXTIME=1` and only worth enabling for ST 2110-21 narrow profile or T-STD-strict contribution receivers. Setup: [Install edge as a Linux service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile); full reference [Wire-Time Precision](/edge/wire-pacing/).
+---
 
 ## Where to read next
 
 - [Your first flow](/getting-started/first-flow/) — point-and-click an SRT-to-RTP path through the manager UI.
+- [Install edge as a Linux service](/edge/install-ubuntu-service/) — manual step-by-step alternative to `install-edge.sh`.
+- [Time (PTP)](/edge/ptp/) — configure PTP mode from the manager UI.
 - [Configuration reference](/edge/configuration/) — every input, output, and flow field.
-- [ST 2110](/edge/st2110/) — uncompressed video / audio / ANC essence flows + narrow-profile pacing.
-- [Display output](/edge/display/) — drive a local HDMI / DisplayPort connector for confidence-monitor playout.
+- [ST 2110](/edge/st2110/) — uncompressed video / audio / ANC essence flows.
+- [Display output](/edge/display/) — local HDMI / DisplayPort confidence-monitor playout.
 - [Replay](/edge/replay/) — continuous flow recording and clip playback.
-- [Setup wizard](/edge/setup-wizard/) — full reference for the `/setup` page, including how to re-enable it for re-registration.
+- [Setup wizard](/edge/setup-wizard/) — full reference for the `/setup` page.
 
 <details>
 <summary>Advanced — manual config without the wizard</summary>
 
-If you'd rather skip the wizard and write the config files by hand, create two files next to the binary:
+If you'd rather skip both `install-edge.sh` and the wizard and write the config files by hand:
 
 `config.json`:
 
@@ -261,11 +293,9 @@ chmod 600 secrets.json
 ./bilbycast-edge --config config.json
 ```
 
-For a self-signed manager cert, add `"accept_self_signed_cert": true` inside the `manager` block **and** export `BILBYCAST_ALLOW_INSECURE=1` before launching.
+For a self-signed manager cert, add `"accept_self_signed_cert": true` inside the `manager` block **and** export `BILBYCAST_ALLOW_INSECURE=1`.
 
-If you only want to confirm the binary launches without attaching to a manager at all, drop the `manager` block entirely and run with empty `inputs` / `outputs` / `flows` arrays. The edge will start in standalone mode and expose its REST API on `:8080`.
-
-CLI flags worth knowing:
+CLI flags:
 
 | Flag | Purpose |
 |------|---------|
@@ -276,13 +306,13 @@ CLI flags worth knowing:
 | `-l, --log-level <LEVEL>` | `trace` / `debug` / `info` / `warn` / `error` |
 | `--print-setup-token` | Print the first-boot setup token without launching |
 
-Useful environment variables:
+Environment variables:
 
 | Variable | Purpose |
 |----------|---------|
-| `BILBYCAST_ALLOW_INSECURE=1` | Required to honour `accept_self_signed_cert: true` (safety guard) |
-| `BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/replay` | Storage root for the replay-server (recordings + clip metadata) |
-| `BILBYCAST_MEDIA_DIR=/var/lib/bilbycast/media` | Media-player library directory (4 GiB per file, 16 GiB total) |
+| `BILBYCAST_ALLOW_INSECURE=1` | Required to honour `accept_self_signed_cert: true` |
+| `BILBYCAST_REPLAY_DIR` | Storage root for replay recordings |
+| `BILBYCAST_MEDIA_DIR` | Media-player library directory (4 GiB per file, 16 GiB total) |
 | `RUST_LOG=info` | Log level (also configurable via `--log-level`) |
 
 </details>

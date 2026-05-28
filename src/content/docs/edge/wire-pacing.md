@@ -107,7 +107,7 @@ sudo bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
 tc -s qdisc show dev enp1s0       # look for `etf` in output, zero drops once traffic flows
 ```
 
-The script installs `mqprio` + `etf` with `clockid CLOCK_TAI`, `offload` (HW where available), and `skip_sock_check on` set.
+The script installs `mqprio` + `etf` with `clockid CLOCK_TAI` and `skip_sock_check on`. By default it uses **software ETF** (no HW offload, ~1–10 µs jitter, no PTP required). For sub-µs jitter (tier 1), set `BILBYCAST_ETF_OFFLOAD=1` — but only after PTP is running (`ptp4l` + `phc2sys` in TAI domain). Without PHC sync, HW offload silently drops every packet.
 
 :::caution[`skip_sock_check on` is non-negotiable]
 Without `skip_sock_check`, ETF refuses any packet whose socket lacks `SO_TXTIME` and drops it at the qdisc — **including kernel-issued ARP solicitations, DHCP, ssh, and every default UDP socket on the host**. Symptoms: `ip neigh show <peer>` reports `INCOMPLETE`, every `sendmsg` returns `ENETUNREACH` (errno 101), `tc -s qdisc show` reports 100 % drops on the etf class with zero packets sent. The shipped `setup-etf-qdisc.sh` always sets the flag — don't second-guess it.

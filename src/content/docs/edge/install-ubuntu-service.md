@@ -421,6 +421,18 @@ The manager install guide's [Production — systemd block](/manager/getting-star
 
 ## ETF qdisc setup (opt-in) for tier-1 PCR accuracy and ST 2110-21 narrow profile
 
+:::tip[Quick path: `--output-nics` at install time]
+If you used `install-edge.sh`, you can skip the manual steps below by passing `--output-nics` during install:
+
+```bash
+sudo bash packaging/install-edge.sh \
+  --manager wss://... --registration-token <token> \
+  --output-nics enp1s0
+```
+
+This validates the NIC (must have >= 3 hardware tx queues), enables the boot-persistent `bilbycast-etf-qdisc@enp1s0.service`, installs the ETF qdisc immediately, and sets `BILBYCAST_ENABLE_TXTIME=1` in the environment file. Multiple NICs: `--output-nics enp1s0,enp2s0`. To add ETF to an existing install, rerun with `--upgrade-installer --output-nics <nic>`.
+:::
+
 **You only need this section if you have a concrete reason to leave the
 default `clock_nanosleep` tier.** Three cases earn the upgrade:
 
@@ -479,7 +491,17 @@ If you'd rather lay each piece down by hand, the manual four-step walkthrough be
 sudo bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
 ```
 
-Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 offload skip_sock_check on` on the prioritized class. `offload` enables hardware tx pacing on supported NICs (Mellanox CX-6 / CX-7, Intel E810, Intel i210); silently degrades to software ETF on unsupported NICs (still 1–10 µs jitter). `skip_sock_check on` is non-negotiable — without it ARP, DHCP, ssh, and every default UDP socket on the host get dropped at the qdisc.
+Replace `enp1s0` with your actual broadcast egress NIC. The script installs `mqprio` at root (3 traffic classes, 3 hardware tx queues) and `etf clockid CLOCK_TAI delta 200000 skip_sock_check on` on the prioritized class. By default the script uses **software ETF** (~1–10 µs jitter, no PTP required). `skip_sock_check on` is non-negotiable — without it ARP, DHCP, ssh, and every default UDP socket on the host get dropped at the qdisc.
+
+For sub-µs jitter (tier 1), set `BILBYCAST_ETF_OFFLOAD=1` to enable NIC hardware tx pacing — but **only after PTP is running** (`ptp4l` + `phc2sys` in TAI domain). Without PHC sync, HW offload silently drops every packet:
+
+```bash
+# Software ETF (default) — safe everywhere, no PTP needed:
+sudo bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
+
+# HW offload — requires PTP + PHC sync, sub-µs jitter:
+sudo BILBYCAST_ETF_OFFLOAD=1 bash /opt/bilbycast/edge/current/packaging/setup-etf-qdisc.sh enp1s0
+```
 
 Verify:
 
@@ -561,7 +583,8 @@ curl -k https://<edge>:8080/api/v1/stats | jq '.data.flows[].outputs[] | {id: .o
 |---|---|
 | Step 4 (`BILBYCAST_ENABLE_TXTIME=1` not set) | Edge runs at tier 4 — the default. Compressed TS through 2 Gbps with sub-3 ms PCR_AC max. ST 2110-21 narrow profile fails the receiver-side VRX bound. |
 | Step 1 + 2 (no ETF qdisc) but env var set | The SO_TXTIME setsockopt succeeds but the kernel's default qdisc ignores `SCM_TXTIME` — silent degradation, worse than the default. Always install the qdisc before setting the env var. |
-| Step 3 (no PTP) but ETF installed | Tier 2 jitter (~ 1–10 µs) is achievable, but the pacer's TAI anchor isn't GM-aligned — multi-edge 2022-7 across hosts and ST 2110-21 narrow profile both fail. |
+| Step 3 (no PTP) but ETF installed (software ETF, the default) | Tier 2 jitter (~1–10 µs) — works correctly. The pacer's TAI anchor isn't GM-aligned so multi-edge 2022-7 across hosts and ST 2110-21 narrow profile fail, but single-edge output is clean. |
+| Step 3 (no PTP) but ETF installed with `BILBYCAST_ETF_OFFLOAD=1` | **Silent packet loss.** HW offload programs the NIC's PHC launch register; without `phc2sys` syncing PHC to TAI, every packet's launch time is outside the NIC's ~1 s horizon and the NIC drops it. Fix: either start PTP first, or reinstall the qdisc without `BILBYCAST_ETF_OFFLOAD=1` (the default). |
 | Step 1–4 all skipped | Edge runs at tier 4 (`clock_nanosleep` on SCHED_FIFO) — the default. Fine for VLC / ffplay / OBS / cloud receivers / standard professional gear up through 2 Gbps. |
 
 For the architecture, full failure-mode matrix, and per-NIC notes, see [Wire-Time Precision](/edge/wire-pacing/) and [ST 2110](/edge/st2110/#st-2110-21-narrow-profile-pacing-uncompressed-video).

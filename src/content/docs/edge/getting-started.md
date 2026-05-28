@@ -61,7 +61,24 @@ This single command does everything:
 
 Works on x86_64 and aarch64 Linux. Uses `apt` on Debian/Ubuntu or `dnf` on RHEL/Fedora.
 
-If your manager uses a self-signed certificate, add `--allow-insecure`:
+**Optional flags:**
+
+```bash
+sudo bash packaging/install-edge.sh \
+  --manager wss://YOUR_MANAGER:8443/ws/node \
+  --registration-token <token> \
+  --output-nics enp1s0           # enable SO_TXTIME wire pacing on this NIC
+```
+
+| Flag | Purpose |
+|------|---------|
+| `--output-nics <nic1,nic2>` | Enable kernel-paced wire emission (SO_TXTIME) on the listed NICs. Installs a boot-persistent ETF qdisc on each NIC and sets `BILBYCAST_ENABLE_TXTIME=1` in the environment file. Each NIC must have >= 3 hardware tx queues (validated). Omit to stay on the default `clock_nanosleep` tier — fine for most deployments. See [ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) for when you need this. |
+| `--channel <name>` | Release channel (`stable` / `nightly` / `beta`). Default `stable`. |
+| `--variant <name>` | Binary variant (`default` / `full`). Default `full` on Linux. |
+| `--allow-insecure` | Allow connecting to a manager with a self-signed certificate. |
+| `--upgrade-installer` | Refresh the service unit and install script without touching config or versions. |
+
+If your manager uses a self-signed certificate:
 
 ```bash
 sudo bash packaging/install-edge.sh \
@@ -94,7 +111,7 @@ sudo journalctl -u bilbycast-edge -f
 
 **Hardware video encoders (NVENC / QSV):** If you plan to use hardware video transcoding, install the vendor runtime libraries — see [Hardware encoder runtime](#hardware-encoder-runtime-nvenc--qsv) below.
 
-**Wire pacing** runs automatically on every UDP output. The default tier handles compressed TS through 2 Gbps with sub-3 ms PCR accuracy — no extra setup needed. The kernel-paced SO_TXTIME upgrade (sub-us) is opt-in for ST 2110-21 narrow profile. See [Install edge as a Linux service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) and [Wire-Time Precision](/edge/wire-pacing/).
+**Wire pacing** runs automatically on every UDP output. The default tier handles compressed TS through 2 Gbps with sub-3 ms PCR accuracy — no extra setup needed. For sub-us pacing (ST 2110-21 narrow profile, T-STD-strict contribution decoders), pass `--output-nics <nic>` during install or follow the manual steps at [ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile). Full reference: [Wire-Time Precision](/edge/wire-pacing/).
 
 **Subsequent upgrades** can be driven from the manager UI (no SSH): **Admin → Nodes → Upgrade**. See [Remote Upgrade](/manager/remote-upgrade/). If remote upgrade isn't available, see [Manual upgrade](#manual-upgrade) below.
 

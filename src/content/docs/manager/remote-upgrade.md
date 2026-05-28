@@ -92,8 +92,8 @@ Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_sta
 
 | Badge / error_code | Meaning | Fix |
 |---|---|---|
-| Upgrade button missing | Node's last health beat didn't advertise `"upgrade"` capability | Update the node manually once to a version that has the upgrade module. From then on the button appears. |
-| `upgrade_disabled` | Operator left `[upgrade] enabled = false` (or omitted the section) in the node's local config | SSH to the node, set `enabled = true` in `[upgrade]`, restart the service. |
+| Upgrade button missing | Node's last health beat didn't advertise `"upgrade"` capability | The node predates the remote upgrade module. [Manually upgrade it once](/edge/getting-started/#manual-upgrade) — after that the button appears and all future upgrades work from the UI. |
+| `upgrade_disabled` | Operator left `[upgrade] enabled = false` (or omitted the `upgrades` section) in the node's local config | SSH to the node, add or fix the `"upgrades": { "enabled": true, "allowed_channels": ["stable"], "install_root": "/opt/bilbycast/edge" }` block in `/opt/bilbycast/edge/config.json`, restart the service. |
 | `upgrade_channel_not_allowed` | Node's `[upgrade] allowed_channels` doesn't include the requested channel | Add the channel locally and restart. |
 | `upgrade_version_too_old` | Node's `[upgrade] min_version` is higher than the requested version | Pick a newer version. |
 | `upgrade_signature_invalid` / `upgrade_identity_not_allowed` | The manifest's Sigstore signature didn't pass — either tampering or a release workflow path that doesn't match the node's compiled-in allowlist | If you renamed the release workflow recently, you must publish a new release from the OLD workflow first that carries the new allowlist. |

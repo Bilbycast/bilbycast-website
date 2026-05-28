@@ -96,7 +96,68 @@ sudo journalctl -u bilbycast-edge -f
 
 **Wire pacing** runs automatically on every UDP output. The default tier handles compressed TS through 2 Gbps with sub-3 ms PCR accuracy — no extra setup needed. The kernel-paced SO_TXTIME upgrade (sub-us) is opt-in for ST 2110-21 narrow profile. See [Install edge as a Linux service → ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) and [Wire-Time Precision](/edge/wire-pacing/).
 
-**Subsequent upgrades** can be driven from the manager UI (no SSH): **Admin → Nodes → Upgrade**. See [Remote Upgrade](/manager/remote-upgrade/).
+**Subsequent upgrades** can be driven from the manager UI (no SSH): **Admin → Nodes → Upgrade**. See [Remote Upgrade](/manager/remote-upgrade/). If remote upgrade isn't available, see [Manual upgrade](#manual-upgrade) below.
+
+---
+
+## Manual upgrade
+
+Use this when the manager's remote upgrade isn't an option — the node is too old to have the upgrade module, the manager is unreachable, or something else is blocking the remote path.
+
+### Prerequisites
+
+The install script needs `jq` and `curl`:
+
+```bash
+# Debian / Ubuntu
+sudo apt install -y jq curl
+
+# RHEL / Fedora
+sudo dnf install -y jq curl
+```
+
+### Run the upgrade
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/install-edge.sh \
+  | sudo bash -s -- --upgrade-installer
+```
+
+This downloads the latest release, verifies the Sigstore signature, swaps the `current` symlink to the new version, and refreshes the systemd unit. Your existing `config.json` and `secrets.json` are not touched.
+
+Then restart the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart bilbycast-edge
+```
+
+Verify:
+
+```bash
+/opt/bilbycast/edge/current/bilbycast-edge --version
+sudo systemctl status bilbycast-edge
+```
+
+### Upgrading to a specific version
+
+By default the script installs the latest stable release. To pin a version:
+
+```bash
+curl -fsSL https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/install-edge.sh \
+  | sudo bash -s -- --upgrade-installer --target-version 0.92.1
+```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `jq is required but not installed` | Missing prerequisite | `sudo apt install -y jq` |
+| Exit code 226/NAMESPACE after upgrade | The systemd unit has sandbox directives (`ProtectSystem`, `ProtectHome`, `PrivateTmp`, `LockPersonality`, `RestrictNamespaces`) that some kernels don't support (Raspberry Pi, minimal ARM boards, older kernels) | Strip the sandbox block: `sudo sed -i '/^ProtectSystem=/d; /^ReadWritePaths=/d; /^ProtectHome=/d; /^PrivateTmp=/d; /^LockPersonality=/d; /^RestrictNamespaces=/d' /etc/systemd/system/bilbycast-edge.service && sudo systemctl daemon-reload && sudo systemctl reset-failed bilbycast-edge && sudo systemctl start bilbycast-edge`. This is safe — the edge runs as an unprivileged user, which is the real security boundary. Newer versions of the install script ship a unit without these directives. |
+| Service running but manager UI still shows old version | Service wasn't restarted after the symlink swap | `sudo systemctl restart bilbycast-edge` |
+| Upgrade button missing in manager UI | Node predates the remote upgrade module (typically v0.58 and earlier) | Run the manual upgrade above. Once on a current version, the button appears and all future upgrades work from the UI. |
+
+After a successful manual upgrade, all future upgrades can be done from the manager UI — see [Remote Upgrade](/manager/remote-upgrade/).
 
 ---
 

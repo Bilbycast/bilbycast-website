@@ -30,6 +30,16 @@ On Ubuntu 22.04 / Debian 12 use plain `libasound2`; on Ubuntu 24.04+ it was rena
 
 These cover KMS (Linux DRM mode-setting) and ALSA. On a strictly headless box they cause no side effects — the edge simply doesn't advertise the `display` capability and any flow with a display output stays passive.
 
+### Device permissions
+
+`/dev/dri/*` and `/dev/snd/*` are group-gated (`video` / `render` / `audio`) on every distribution. The [Ubuntu service install](/edge/install-ubuntu-service/) handles this automatically — the unit ships `SupplementaryGroups=video render audio` and the installer adds the `bilbycast` user to all three groups. If you run the edge under your own user or a custom unit, grant the same membership:
+
+```bash
+sudo usermod -aG video,render,audio <user>   # takes effect on next login
+```
+
+Missing `audio` membership fails deceptively: video keeps rendering while every ALSA open fails with the misleading `ALSA lib confmisc.c: (snd_config_get_card) Cannot get card index for N` — that's a permission error on `/dev/snd/controlCN`, not a missing sound card. Desktop sessions often mask the problem because systemd-logind grants a temporary ACL on `/dev/snd` to the active local seat, which disappears on reboot or when only SSH sessions exist. The edge raises Critical `display_audio_open_failed` events, and after 10 consecutive failures latches `display_audio_disabled_persistent_failure` (video continues; restart the flow after fixing the permission).
+
 If you build the edge from source, the matching dev packages are `libdrm-dev libasound2-dev libudev-dev` and the feature is enabled by default:
 
 ```bash

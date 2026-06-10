@@ -414,6 +414,7 @@ The config + secrets at `/opt/bilbycast/edge/{config.json,secrets.json}` carry a
 | `auth_failed` events in the manager log, edge keeps re-trying | Registration token already used or expired, or the node was deleted from the manager. | Re-register: in the manager UI generate a fresh token, paste it into `/opt/bilbycast/edge/secrets.json`, restart the service. |
 | Edge connects but `accept_self_signed_cert` is silently ignored | The `BILBYCAST_ALLOW_INSECURE=1` safety guard isn't set. | Uncomment the matching line in the unit, then `daemon-reload && restart`. |
 | AppArmor blocks `/dev/dri` or ALSA on a display-output flow | Distribution AppArmor profile is too strict. | Add `/dev/dri/** rw,` and `/dev/snd/** rw,` to the profile, or run with hardening relaxed (`ProtectSystem=full`). |
+| Display output renders video but is **silent**; edge log shows `ALSA lib confmisc.c: Cannot get card index for N`; Critical `display_audio_open_failed` / `display_audio_disabled_persistent_failure` events in the manager | The running user can't open `/dev/snd/controlCN` — not in the `audio` group (the alsa-lib message is a misleading EACCES, not a missing card). Common when running the binary outside the packaged service, where a desktop login's temporary logind ACL masked it until a reboot or SSH-only session. | `sudo usermod -aG audio <user>` (the packaged unit + installer already grant this to `bilbycast`), then restart the service or toggle the display output. |
 
 ## What about the manager?
 

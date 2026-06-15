@@ -1,6 +1,6 @@
 ---
 title: USB Cellular Modem as a Bonding Path
-description: Bring up a host-attached USB cellular modem (e.g. Teltonika TRM500 / Quectel RG520N) via ModemManager and present it as an independent, source-routed egress path for bilbycast-edge multi-path bonding — with an optional keep-alive daemon for boot persistence and auto-reconnect.
+description: Bring up a host-attached USB cellular modem (e.g. Teltonika TRM500 / Quectel RG520N) via ModemManager and present it as an independent, source-routed egress path for bilbycast-edge multi-path bonding — with an optional keep-alive daemon for boot persistence, auto-reconnect, live signal telemetry, and one-click Wake from the manager UI.
 sidebar:
   label: Cellular Modem Bonding Path
   order: 10
@@ -94,7 +94,10 @@ traffic isn't dropped.
 A USB modem's bearer can drop on its own (idle, re-registration, signal), and
 nothing it does survives a reboot. The optional daemon fixes both: it runs the
 bring-up at boot and re-checks every `WATCH_INTERVAL` seconds, reconnecting the
-bearer and re-applying the route if the carrier dropped it.
+bearer and re-applying the route if the carrier dropped it. While running it
+also keeps ModemManager's extended **signal sampling** armed (so the manager's
+live RSRP / RSRQ / SINR figures stay populated) and services **Wake** requests
+from the manager UI — see [Wake a dormant modem from the manager](#wake-a-dormant-modem-from-the-manager-no-shell) below.
 
 It is **opt-in** — install it only on hosts that actually use a USB cellular
 modem as a bond leg. It does not touch bilbycast-edge itself.
@@ -131,6 +134,37 @@ ordering means the bond leg is up before the edge tries to pin to it.
 systemctl status bilbycast-cellular-modem.service     # check it
 sudo systemctl disable --now bilbycast-cellular-modem.service   # turn it off
 ```
+
+## Wake a dormant modem from the manager (no shell)
+
+With the keep-alive daemon enabled, an operator can wake a parked modem **from
+the manager UI — no shell, no `sudo`**. This is the production answer to a real
+problem: if the modem has been idle and its bearer dropped, and an operator
+decides to start a flow over the cellular leg, there's no traffic to wake it and
+the edge has no rights to drive ModemManager itself (ModemManager's
+`Device.Control` is denied to a headless service).
+
+The edge stays **read-only** toward the modem. Rather than calling `mmcli`, it
+uses a **request/execute split** (mirroring the PTP helper's config file):
+
+- The edge shows a **Wake** button on the node's **Network Interfaces** card and
+  on each cellular **bond leg** — visible only when the daemon is running to
+  service it (advertised via the `cellular-control` capability). It writes a
+  request to `/var/lib/bilbycast/cellular-wake.req`.
+- The daemon picks the request up within ~1 s, runs the bring-up immediately
+  (short-circuiting its watch interval), and writes back the outcome. The button
+  reports **connected** / **failed** / **requested**.
+- An optional **APN** rides the request, so a wrong APN can be corrected from the
+  UI without editing the env file.
+
+If a modem is parked with **no daemon installed**, the manager raises a
+`cellular_keeper_missing` warning instead of showing a dead button — the signal
+to have the host's installer run `install-cellular-modem.sh --enable` once.
+
+> The edge gains **no** modem privilege from any of this: it only writes a file
+> the installer pre-creates under its own service account, and a root daemon
+> executes the request. All privileged work stays in the opt-in daemon, and
+> cellular *telemetry* remains strictly read-only.
 
 ## Wire it into bonding
 

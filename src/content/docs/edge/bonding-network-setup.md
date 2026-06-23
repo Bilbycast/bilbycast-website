@@ -333,6 +333,43 @@ systemd-networkd backend), and numeric table IDs need no `/etc/iproute2/rt_table
 entry. Verify support with `ip rule list` — it should print the default rules,
 not an error.
 
+## Wi-Fi / Starlink uplinks as a bond leg
+
+A Wi-Fi uplink — e.g. a **Starlink Mini** — works as a bond leg exactly like a
+wired modem: pin the path to its interface (`"interface": "wlo5"`, which uses
+`SO_BINDTODEVICE`). Two things differ from a static wired modem:
+
+- **It gets a DHCP address, so pin the route by *interface*, not source IP.** A
+  Wi-Fi leg's address changes on every re-associate or lease renewal, so a
+  `from <ip>` policy rule goes stale. Use an **output-interface** rule, which is
+  address-independent and survives lease changes:
+
+  ```bash
+  ip route replace default via 192.168.4.1 dev wlo5 table 80
+  ip rule add oif wlo5 lookup 80 priority 1080
+  sysctl -w net.ipv4.conf.wlo5.rp_filter=2
+  ```
+
+- **The Starlink dish telemetry sits on its own subnet — but the edge routes to
+  it for you.** The dish's gRPC status endpoint (`192.168.100.1:9200`, polled for
+  the [Starlink telemetry](/edge/bonding/) card) lives on its own `/24`, reachable
+  only over the Starlink Wi-Fi gateway. Once a Starlink uplink is configured, the
+  edge re-asserts `192.168.100.0/24` via the leg's gateway (main table, `replace`
+  semantics) on every poll cycle, so it survives a re-associate or new lease with
+  no operator action. This needs `CAP_NET_ADMIN`, which the packaged systemd unit
+  grants. Only on a non-systemd run without that capability do you add it by hand:
+
+  ```bash
+  ip route replace 192.168.100.0/24 via 192.168.4.1 dev wlo5
+  ```
+
+The **bond-leg egress route** (the `table 80` default + `oif` rule above) is yours
+to maintain — it's flushed whenever the Wi-Fi link cycles (re-associate / new
+lease), so if the leg "disappears" after working, check `ip route` and
+`ip rule list` first. The **dish telemetry route** is kept up by the edge itself,
+so it survives link cycles automatically. The dev testbed re-applies the bond-leg
+route from `start-infrastructure.sh` and `post-reboot.sh`.
+
 ## Verify each path independently
 
 After a modem's 5G is registered:

@@ -210,6 +210,9 @@ MANAGER_HOSTNAME=""   # set to "manager.example.com" etc. if you have one
 SAN="DNS:localhost,IP:127.0.0.1,IP:${HOST_IP}${MANAGER_HOSTNAME:+,DNS:${MANAGER_HOSTNAME}}"
 openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt \
   -days 365 -nodes -subj "/CN=${MANAGER_HOSTNAME:-${HOST_IP}}" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth" \
   -addext "subjectAltName=${SAN}"
 chmod 600 certs/server.key
 
@@ -317,10 +320,12 @@ sudo chown -R bilbycast:bilbycast /opt/bilbycast-manager /var/lib/bilbycast-mana
 # 2. Move the secrets file under /etc with root:bilbycast 0640,
 #    rewrite the TLS paths to point at the /opt copy (the originals
 #    are under your home dir, which the service user can't read),
-#    and pin the ACME state directory to a writable location (the
-#    default `data/acme` would land under the read-only /opt mount
-#    once ProtectSystem=strict kicks in below — so any future ACME
-#    enablement, UI or env-var, can write there).
+#    and pin the ACME state directory to a writable location so any
+#    future ACME enablement (UI or env-var) has somewhere to write.
+#    This is belt-and-suspenders with WorkingDirectory below, which
+#    points at the writable /var/lib state dir (NOT the read-only
+#    /opt code mount) so even the relative `data/acme` default lands
+#    somewhere writable once ProtectSystem=strict kicks in.
 sudo install -m 0640 -o root -g bilbycast manager.env /etc/bilbycast-manager/manager.env
 sudo sed -i \
   -e 's|^BILBYCAST_TLS_CERT=.*|BILBYCAST_TLS_CERT=/opt/bilbycast-manager/certs/server.crt|' \
@@ -343,7 +348,10 @@ Type=simple
 User=bilbycast
 Group=bilbycast
 EnvironmentFile=/etc/bilbycast-manager/manager.env
-WorkingDirectory=/opt/bilbycast-manager
+# WorkingDirectory is the *writable* state dir, not the /opt code dir. Under
+# ProtectSystem=strict only ReadWritePaths is writable, so any relative runtime
+# write (e.g. the ACME default `data/acme`) must resolve here, not under /opt.
+WorkingDirectory=/var/lib/bilbycast-manager
 ExecStart=/opt/bilbycast-manager/bilbycast-manager serve --config /opt/bilbycast-manager/config/default.toml
 Restart=on-failure
 RestartSec=5s

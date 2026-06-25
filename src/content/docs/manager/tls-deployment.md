@@ -102,6 +102,10 @@ Active WebSocket connections will reconnect after the restart.
 
 Use this when a load balancer, reverse proxy, or service mesh is already terminating TLS for you and the manager just needs to listen on plain HTTP. Common in cloud deployments (AWS ALB, GCP HTTPS LB, nginx, Traefik, Envoy, etc.).
 
+:::note[Remote upload throughput]
+Behind-proxy mode also offloads the browser-leg TLS crypto from the manager process to the load balancer. Media-library uploads are proxied through the manager (browser → manager → node), so this is the operator-traffic the manager would otherwise decrypt itself. If operators reach the manager over an **overlay VPN** (Tailscale, WireGuard), that VPN's per-packet crypto is separate and single-core-bound (WireGuard's single-flow ceiling) — see the [host-sizing note](/manager/getting-started/#going-further) in the install guide.
+:::
+
 ### Setup
 
 Drop every TLS-related line from your existing `manager.env` and add the behind-proxy switch + plain-HTTP port, then restart:

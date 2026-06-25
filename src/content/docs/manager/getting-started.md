@@ -11,7 +11,7 @@ This page walks through a **single-host install** — manager + Postgres on one 
 
 ## What you'll need
 
-- A Linux host (Ubuntu 24.04 / Debian 12 or newer recommended). A 2 vCPU / 4 GB RAM VM is plenty for evaluation.
+- A Linux host (Ubuntu 24.04 / Debian 12 or newer recommended). A 2 vCPU / 4 GB RAM VM is plenty for evaluation. (For production where operators upload large media files over an overlay VPN, the manager host's single-core crypto throughput becomes the limiter — see [host sizing for remote uploads](#going-further).)
 - A reachable **Postgres 18** cluster — or just Docker on the same host (we'll bring one up in step 2).
 - A DNS name or static IP your operators can hit on TCP 8443.
 - About 10 minutes.
@@ -586,4 +586,5 @@ The single-host install above is the right shape for evaluation, lab work, and s
 - [Backup & restore](/manager/backup/) — operator-initiated encrypted backup of config + secrets, with an advisory-locked `pg_dump` that's safe across an HA pair.
 - [Multi-tenant Groups](/manager/multi-tenant-groups/) — isolation and quotas for multi-team installs.
 - [Security](/manager/security/) — auth, MFA, OIDC SSO, threat model.
+- **Host sizing for remote uploads** — media-library uploads are proxied through the manager (browser → manager → node over the WebSocket channel), so the manager host does the upload crypto. When operators reach the manager over an **overlay VPN** (Tailscale, WireGuard, etc.), that browser → manager leg's per-packet crypto runs serially on one CPU core — WireGuard's single-flow ceiling — and a VM adds scheduling overhead on top. Invisible for evaluation; for production where remote media-upload throughput matters, prefer a **bare-metal** manager or a **non-overlay** access path (a direct DNS name, or a [behind-proxy](/manager/tls-deployment/) load balancer that also offloads the browser-leg TLS crypto), and size the host's single-core crypto headroom accordingly.
 - [Install an edge](/edge/getting-started/) — the next step in a fresh deployment.

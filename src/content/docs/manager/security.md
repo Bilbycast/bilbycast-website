@@ -16,7 +16,7 @@ bilbycast-manager handles several categories of sensitive data:
 - **Tunnel keys** — encrypted at rest, never exposed to the relay
 - **Configuration** — non-secret settings stored in plaintext TOML
 
-All cryptographic secrets are loaded from environment variables at startup. The server refuses to start if secrets are missing, empty, too short (< 16 characters), or contain known weak/default values.
+All cryptographic secrets are loaded from environment variables at startup. The server refuses to start if secrets are missing, empty, too short (under 64 hex characters / 32 bytes), or contain known weak/default values.
 
 Full cryptographic design details — key derivation, domain separation, envelope formats, backup file layout — are provided to commercial licensees under NDA.
 
@@ -99,14 +99,17 @@ Login attempts are rate-limited per client IP address: 5 attempts within a 60-se
 
 ### Role-Based Access Control (RBAC)
 
-Four roles are defined, in ascending privilege order:
+Access control uses two orthogonal axes. A platform-level role distinguishes the platform operator (`super_admin`) — who bypasses every group filter and is the only role allowed to touch platform-only chokepoints (group management, TLS, SSO, licensing, backup export/import, master-key rotation) — from every other account (`user`), whose authority flows entirely from per-group memberships.
 
-| Role          | Level | Typical Permissions                                |
-|---------------|-------|----------------------------------------------------|
-| `viewer`      | 0     | Read-only access to dashboards and node status      |
-| `operator`    | 1     | Start/stop flows, acknowledge events                |
-| `admin`       | 2     | Create/delete nodes and users, manage settings      |
-| `super_admin` | 3     | Full access including managing other admins          |
+Per-group permissions are granted in ascending order:
+
+| Role       | Level | Typical Permissions                                |
+|------------|-------|----------------------------------------------------|
+| `viewer`   | 0     | Read-only access to dashboards and node status      |
+| `operator` | 1     | Start/stop flows, acknowledge events                |
+| `admin`    | 2     | Create/delete nodes and users, manage settings      |
+
+A user can hold different per-group roles in different groups (Admin in one, Viewer in another).
 
 ### Temporary Users
 

@@ -13,7 +13,7 @@ This page is for developers integrating new device types. Operators using existi
 
 ## What a driver provides
 
-A driver is a Rust trait implementation in `bilbycast-manager/crates/manager-core/src/drivers/`. It supplies:
+A driver is a Rust implementation of the `DeviceDriver` trait (defined in `bilbycast-manager/crates/manager-core/src/drivers/mod.rs`), living in its own per-device plugin crate `bilbycast-manager/crates/device-<name>/`. It supplies:
 
 | Function | Purpose |
 |---|---|
@@ -57,7 +57,7 @@ The pattern is the same for every driver: the manager core talks to a Rust proce
 
 For a third-party device that doesn't natively speak the bilbycast WebSocket protocol, the recommended pattern is **driver + sidecar**:
 
-1. **Manager-side driver** — A Rust module in `bilbycast-manager/crates/manager-core/src/drivers/<vendor>.rs` that implements the `Driver` trait and exposes vendor-specific actions to the manager.
+1. **Manager-side driver** — A Rust plugin crate `bilbycast-manager/crates/device-<vendor>/` that implements the `DeviceDriver` trait and exposes vendor-specific actions to the manager.
 2. **Sidecar API gateway** — A standalone Rust binary that maintains a persistent WebSocket connection to the manager (using the same auth as a real edge or relay) and translates manager commands into the device's native API calls. It also polls the device for stats / health / alarms and forwards them as bilbycast `stats` / `health` / `event` messages.
 
 The sidecar runs anywhere it can reach the device and the manager — usually colocated with the device. From the manager's perspective, it looks identical to a native bilbycast node.
@@ -125,26 +125,26 @@ The graph view (force-directed) and flow view (deterministic columns) both consu
 
 ## Walking through `AppearXDriver`
 
-To make this concrete, here's how `AppearXDriver` (in `manager-core/src/drivers/appear_x.rs`) implements each piece:
+To make this concrete, here's how `AppearXDriver` (in `crates/device-appear-x/src/lib.rs`) implements each piece:
 
 | Piece | What `AppearXDriver` does |
 |---|---|
 | `device_type` | Returns `"appear_x"` |
 | `validate(command)` | Validates Appear X-specific payloads (IP input/output addressing, slot/board IDs in hex) |
 | `execute(command)` | Sends the command to the connected sidecar over the existing WebSocket; the sidecar handles JSON-RPC translation |
-| `action_descriptors()` | Returns 7 descriptors (`set_ip_input`, `set_ip_output`, `get_inputs`, `get_outputs`, `get_services`, `get_alarms`, `get_chassis`) |
+| `ai_actions()` | Returns the Appear X action descriptors (`set_ip_input`, `set_ip_output`, `get_inputs`, `get_outputs`, `get_services`, `get_alarms`, `get_chassis`, and many more) |
 | `derive_health(stats)` | Reads alarm severity counts from the latest stats and maps to `Healthy`/`Warning`/`Critical` |
 | `topology_metadata()` | Provides the Appear X icon, colour, and a port list synthesised from the chassis layout |
 | `ai_context()` | Returns a short Appear X protocol primer the AI assistant can use to generate sensible commands |
 
-The full source is in `bilbycast-manager/crates/manager-core/src/drivers/appear_x.rs`.
+The full source is in `bilbycast-manager/crates/device-appear-x/src/lib.rs`.
 
 ## Adding a new driver
 
 The high-level steps are:
 
-1. Create a new module `manager-core/src/drivers/<vendor>.rs` and implement the `Driver` trait.
-2. Register the driver in `manager-core/src/drivers/mod.rs` so the manager core discovers it at startup.
+1. Create a new plugin crate `crates/device-<vendor>/` and implement the `DeviceDriver` trait.
+2. Register the driver so the manager core discovers it at startup (the `DriverRegistry` in `manager-core/src/drivers/mod.rs`).
 3. (Optional but recommended) Build a sidecar gateway as a standalone Rust binary — copy the layout of `bilbycast-appear-x-api-gateway/`.
 4. Add a docs page describing the device type, the sidecar setup, and any vendor-specific configuration.
 5. Add unit tests for the validation and action-descriptor surfaces.

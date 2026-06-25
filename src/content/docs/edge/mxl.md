@@ -108,7 +108,7 @@ Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. 
   "id": "mxl-video-in",
   "name": "MXL video in from sibling pod",
   "type": "mxl_video",
-  "domain": "/dev/shm/mxl",
+  "domain_path": "/dev/shm/mxl",
   "flow_name": "studio-1-cam-a"
 }
 ```
@@ -116,7 +116,7 @@ Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. 
 | Field | Type | Notes |
 |-------|------|-------|
 | `type` | string | `"mxl_video"`, `"mxl_audio"`, `"mxl_anc"`. |
-| `domain` | string | MXL domain mount point on the local host. Default `/dev/shm/mxl`. |
+| `domain_path` | string | MXL domain mount point on the local host. Default `/dev/shm/mxl`. |
 | `flow_name` | string | Human flow name. The edge hashes this with `uuid_v5(NAMESPACE_DNS, flow_name)` to compute the MXL flow id — see [Flow id interop](#flow-id-interop) below. |
 
 `mxl_video` carries uncompressed V210 (Y'CbCr 4:2:2 10-bit progressive) at the negotiated raster + rate. `mxl_audio` carries Float32 PCM at 48 kHz (mono or interleaved channels). `mxl_anc` carries RFC 8331-shaped ancillary data (officially supported since libmxl v1.0.1).
@@ -129,7 +129,7 @@ Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. 
 {
   "id": "mxl-audio-in",
   "type": "mxl_audio",
-  "domain": "/dev/shm/mxl",
+  "domain_path": "/dev/shm/mxl",
   "flow_name": "studio-1-mic",
   "audio_encode": { "codec": "aac_lc", "bitrate_kbps": 192 }
 }
@@ -146,7 +146,7 @@ Mirror shape — set `type: "mxl_video" | "mxl_audio" | "mxl_anc"` on the output
   "id": "mxl-video-out",
   "name": "MXL video out to downstream pod",
   "type": "mxl_video",
-  "domain": "/dev/shm/mxl",
+  "domain_path": "/dev/shm/mxl",
   "flow_name": "studio-1-cam-a-branded"
 }
 ```

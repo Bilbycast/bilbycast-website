@@ -83,7 +83,7 @@ Outputs are JSON top-level entities in `config.json`. The minimum:
 | `audio_channel_pair` | `[u8; 2]` | `[0, 1]` | Stereo pair to render from decoded multichannel audio. Both indices must be < 8 and not equal. |
 | `resolution` | string | `null` | `"auto"` (use the connector's preferred mode) or `"WIDTHxHEIGHT"` (e.g. `"1920x1080"`). |
 | `refresh_hz` | u32 | `null` | Refresh rate in Hz. Range 1–240. `null` uses the connector's preferred mode. |
-| `sync_mode` | string | `"vsync_to_display"` | Current builds only accept `"vsync_to_display"`. PTP-genlocked and PCR-master sync modes are planned. |
+| `sync_mode` | string | `"vsync_to_display"` | `"vsync_to_display"` (default, audio-master) or `"genlock"` (locks the display's audio to the flow master clock so the panel stays rate-coherent with the flow's wire outputs; video still follows the audio playout, so lip-sync is identical either way). |
 | `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, or `"vaapi"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ cpu` against the host's probed capabilities. See [Codec matrix](/edge/codec-matrix/). |
 | `show_audio_bars` | bool | `false` | Render translucent audio level bars as an ARGB8888 overlay plane composed at vblank. Stays on the zero-copy path — no CPU-blit demotion. |
 

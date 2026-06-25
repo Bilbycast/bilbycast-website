@@ -18,106 +18,45 @@ This page documents every field in that response.
 ```json
 {
   "uptime_secs": 86400,
-  "software_version": "0.7.1",
-  "totals": {
-    "bytes_in": 1234567890,
-    "bytes_out": 1234567890,
-    "datagrams_in": 1500000,
-    "datagrams_out": 1500000,
-    "streams_opened": 4200,
-    "active_connections": 12,
-    "active_tunnels": 8,
-    "active_edges": 16
-  },
-  "bandwidth": {
-    "current_in_bps": 245000000,
-    "current_out_bps": 245000000,
-    "current_total_bps": 490000000
-  },
-  "peaks": {
-    "peak_connections": 24,
-    "peak_tunnels": 12,
-    "peak_edges": 20,
-    "peak_bps": 980000000,
-    "peak_bps_at": "2026-04-06T18:42:11Z"
-  },
-  "tunnels": [
-    {
-      "tunnel_id": "550e8400-e29b-41d4-a716-446655440000",
-      "ingress_edge": "edge-syd-1",
-      "egress_edge": "edge-perth-1",
-      "bytes_in": 50000000,
-      "bytes_out": 50000000,
-      "datagrams_in": 60000,
-      "datagrams_out": 60000,
-      "current_bps": 122500000,
-      "bound_at": "2026-04-07T00:00:00Z"
-    }
-  ]
+  "connected_edges": 16,
+  "total_tunnels": 9,
+  "active_tunnels": 8,
+  "total_bytes_ingress": 1234567890,
+  "total_bytes_egress": 1234567890,
+  "total_bytes_forwarded": 2469135780,
+  "total_bandwidth_bps": 490000000,
+  "total_tcp_streams": 4200,
+  "active_tcp_streams": 12,
+  "total_udp_datagrams": 1500000,
+  "peak_tunnels": 12,
+  "peak_edges": 20,
+  "connections_total": 24
 }
 ```
 
+The per-tunnel breakdown is served separately on `GET /api/v1/tunnels`.
+
 ## Field reference
 
-### Top-level
+This is a single flat JSON object. All counters are lock-free atomics, cumulative since process start unless noted otherwise.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `uptime_secs` | u64 | Seconds since the relay process started |
-| `software_version` | string | Build version (`0.7.1`, etc.) |
-
-### `totals`
-
-Cumulative since process start. All counters are lock-free atomics.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `bytes_in` | u64 | Total bytes received from any edge across all tunnels |
-| `bytes_out` | u64 | Total bytes sent to any edge across all tunnels |
-| `datagrams_in` | u64 | Total UDP datagrams received |
-| `datagrams_out` | u64 | Total UDP datagrams sent |
-| `streams_opened` | u64 | Total bidirectional QUIC streams opened by edges |
-| `active_connections` | u64 | Number of edges currently connected to the relay |
-| `active_tunnels` | u64 | Number of tunnels currently bound on both legs |
-| `active_edges` | u64 | Number of distinct edge identities currently connected (different from `active_connections` if an edge has multiple connections) |
-
-### `bandwidth`
-
-Current bandwidth derived from the difference of byte counters over a sliding window (default ~1 s).
-
-| Field | Type | Meaning |
-|---|---|---|
-| `current_in_bps` | u64 | Current ingress bitrate to the relay |
-| `current_out_bps` | u64 | Current egress bitrate from the relay |
-| `current_total_bps` | u64 | Sum of in + out (the relay-side throughput observers care about) |
-
-### `peaks`
-
-Peak watermarks since process start, with timestamps.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `peak_connections` | u64 | Maximum concurrent edge connections |
-| `peak_tunnels` | u64 | Maximum concurrent tunnels |
-| `peak_edges` | u64 | Maximum distinct edges |
-| `peak_bps` | u64 | Maximum total bandwidth observed |
-| `peak_bps_at` | string (ISO 8601) | When the bandwidth peak occurred |
-
-### `tunnels[]`
-
-One entry per currently-active tunnel.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `tunnel_id` | UUID | Tunnel identifier (matches the manager's tunnel ID) |
-| `ingress_edge` | string | Edge ID of the ingress side (or `null` if not yet identified) |
-| `egress_edge` | string | Edge ID of the egress side |
-| `bytes_in` | u64 | Bytes received on the ingress leg |
-| `bytes_out` | u64 | Bytes sent on the egress leg |
-| `datagrams_in` | u64 | UDP datagrams on the ingress leg |
-| `datagrams_out` | u64 | UDP datagrams on the egress leg |
-| `current_bps` | u64 | Current per-tunnel bitrate |
-| `bound_at` | string (ISO 8601) | When the tunnel was first bound (oldest leg) |
+| `connected_edges` | usize | Number of edges currently connected to the relay |
+| `total_tunnels` | usize | Number of tunnels currently tracked (active + pending) |
+| `active_tunnels` | usize | Number of tunnels currently bound on both legs |
+| `total_bytes_ingress` | u64 | Total bytes received from ingress edges across all tunnels |
+| `total_bytes_egress` | u64 | Total bytes sent to egress edges across all tunnels |
+| `total_bytes_forwarded` | u64 | Sum of ingress + egress bytes |
+| `total_bandwidth_bps` | u64 | Current forwarding bandwidth, derived from the byte counters over a sliding window |
+| `total_tcp_streams` | u64 | Total TCP streams forwarded since startup |
+| `active_tcp_streams` | u64 | TCP streams currently being forwarded |
+| `total_udp_datagrams` | u64 | Total UDP datagrams forwarded |
+| `peak_tunnels` | u64 | Maximum concurrent active tunnels observed |
+| `peak_edges` | u64 | Maximum concurrent connected edges observed |
+| `connections_total` | u64 | Total QUIC connections accepted since startup |
+| `manager` | object | Manager-link state. Omitted entirely when no manager is configured |
 
 ## Quick examples
 
@@ -126,15 +65,15 @@ One entry per currently-active tunnel.
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
   http://relay.example.com:4434/api/v1/stats \
-  | jq '.totals.active_tunnels'
+  | jq '.active_tunnels'
 ```
 
-### Pull current per-tunnel bitrates
+### Pull per-tunnel byte counters
 
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
-  http://relay.example.com:4434/api/v1/stats \
-  | jq '.tunnels[] | {tunnel_id, current_bps}'
+  http://relay.example.com:4434/api/v1/tunnels \
+  | jq '.tunnels[] | {tunnel_id, ingress: .stats.bytes_ingress, egress: .stats.bytes_egress}'
 ```
 
 ### Calculate average bytes per datagram
@@ -142,7 +81,7 @@ curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
   http://relay.example.com:4434/api/v1/stats \
-  | jq '.totals | (.bytes_in / .datagrams_in)'
+  | jq '(.total_bytes_forwarded / .total_udp_datagrams)'
 ```
 
 ## Prometheus equivalent

@@ -72,7 +72,7 @@ The gateway implements the exact same security model as bilbycast-edge and bilby
    - **Pinned**: SHA-256 fingerprint verification of the server certificate
 3. **Auth as first frame**: Credentials sent in the first WebSocket message, not in URL/headers
 4. **Credential persistence**: After registration, node_id + node_secret saved to a file with 0600 permissions
-5. **Exponential backoff**: 1s → 60s on connection failures, reset on success
+5. **Reconnect backoff**: steps through `1, 2, 5, 10, 30` seconds on connection failures, reset on a successful auth
 
 ### Appear X Connection
 
@@ -91,10 +91,9 @@ main()
   └── await: WS client (blocks until cancellation)
 ```
 
-Communication between tasks uses tokio channels:
-- `mpsc::channel<Value>(64)` — polling → WS client (stats/health messages)
-- `mpsc::channel<CommandMessage>(32)` — WS client → command handler (incoming commands)
-- `oneshot::channel` per command — command handler → WS client (ack response)
+Communication between tasks uses the SDK's channels:
+- An `Emitter` (backed by a single bounded `OutboundFrame` channel) — polling → WS client (stats/health/event messages)
+- A `CommandHandler` trait — the WS client invokes `handle_command` and automatically packs the return value into a `command_ack`
 
 Graceful shutdown uses `tokio_util::CancellationToken` tree — cancelling the root token propagates to all child tokens.
 

@@ -267,7 +267,7 @@ No Auth/AuthOk/AuthError exchange on the control stream. Tunnel bind authenticat
   | Layer 6: Resource Protection                                   |
   |   - Max 1024 concurrent bi-streams per connection              |
   |   - Max 256 uni-streams per connection                         |
-  |   - 15-second keep-alive detects and cleans dead connections   |
+  |   - 5-second keep-alive detects and cleans dead connections    |
   +---------------------------------------------------------------+
 ```
 

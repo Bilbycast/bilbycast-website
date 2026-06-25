@@ -25,9 +25,9 @@ The Media Library makes both flows browser-managed.
 
 ## Upload model
 
-The browser splits the chosen file into **1 MiB chunks** and POSTs them sequentially over the manager's WS proxy. The manager forwards each chunk to the edge as an `upload_media_chunk` WS command. On the final chunk the edge `fsync_all`s the staging file and atomically renames it onto the library directory — no half-written files in the live library.
+The browser splits the chosen file into **1 MiB chunks** and POSTs them sequentially to the manager (one `application/octet-stream` HTTP POST per chunk). The manager forwards each chunk to the edge as a native binary WebSocket frame (it falls back to the legacy base64 `upload_media_chunk` text command only when the edge is owned by another manager instance). On the final chunk the edge `fsync_all`s the staging file and atomically renames it onto the library directory — no half-written files in the live library.
 
-The manager applies a **60 s ACK budget** to upload chunks (vs the default 10 s) because the final-chunk `fsync` can take a noticeable amount of time on slow storage. This is the only WS command path with the extended budget.
+The manager applies a **60 s ACK budget** to upload chunks (vs the default 10 s) because the final-chunk `fsync` can take a noticeable amount of time on slow storage. (The bond-leg capacity probe uses a similar extended budget for its own multi-second ramp.)
 
 ## Quota model
 
@@ -47,7 +47,7 @@ Operators see the cap approaching before they're blocked.
 
 ## Reference-aware delete
 
-Click the trash icon next to any file. The manager checks first: if a `media_player` input on this node still references the file, the operator is warned about which inputs and flows are about to point at a missing file. If they confirm anyway the manager emits a `media_deleted_in_use` warning event with `referencing_input_ids[]` and `referencing_flow_ids[]` so the events feed reflects the operator decision.
+Click the Delete button next to any file (a confirmation prompt guards the click). After the edge confirms the delete, the manager checks the node's cached config: if a `media_player` input still referenced the file, it emits a `media_deleted_in_use` warning event with `referencing_input_ids[]` and `referencing_flow_ids[]` so the events feed records which inputs and flows now point at a missing file.
 
 The edge itself will fall through to the next playlist source on its next `media_player` start; if there's no fallback, the input emits its own event when it next attempts to open the missing file.
 

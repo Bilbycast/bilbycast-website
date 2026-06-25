@@ -163,7 +163,7 @@ For the operator-visible side of this — how the manager authors tunnels and wh
 
 - Bearer tokens: 32–128 characters.
 - QUIC control messages: max 1 MB per message.
-- Per-connection: 1024 bidirectional QUIC streams, 256 unidirectional, 15 s keep-alive.
+- Per-connection: 1024 bidirectional QUIC streams, 256 unidirectional, 5 s keep-alive.
 - UDP datagram buffers: 2 MB send + 2 MB receive (sized for SRT at 10 Mbps in flight).
 
 ## Where to read next

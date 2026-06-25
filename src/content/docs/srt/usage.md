@@ -33,11 +33,10 @@ use tokio::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut socket = SrtSocketBuilder::new_caller("203.0.113.5:9000".parse()?)
+    let mut socket = SrtSocketBuilder::new()
         .latency(Duration::from_millis(120))
-        .passphrase("MyVerySecretPass".to_string())
-        .key_length(16)
-        .connect()
+        .encryption("MyVerySecretPass", KeySize::AES128)
+        .connect("203.0.113.5:9000".parse()?)
         .await?;
 
     // Stream MPEG-TS or any opaque payload
@@ -54,15 +53,14 @@ async fn main() -> anyhow::Result<()> {
 ```rust
 use srt_transport::SrtListenerBuilder;
 
-let mut listener = SrtListenerBuilder::new("0.0.0.0:9000".parse()?)
-    .passphrase("MyVerySecretPass".to_string())
-    .key_length(16)
-    .listen()
+let mut listener = SrtListenerBuilder::new()
+    .encryption("MyVerySecretPass", KeySize::AES128)
+    .bind("0.0.0.0:9000".parse()?)
     .await?;
 
-while let Some(conn) = listener.accept().await {
-    let mut socket = conn?;
-    println!("Accepted from {}", socket.peer_addr());
+loop {
+    let socket = listener.accept().await?;
+    println!("Accepted from {:?}", socket.peer_addr().await);
     println!("Stream ID: {:?}", socket.stream_id());
     tokio::spawn(handle_stream(socket));
 }
@@ -71,12 +69,12 @@ while let Some(conn) = listener.accept().await {
 ## Rendezvous — symmetric peer-to-peer
 
 ```rust
-let mut socket = SrtSocketBuilder::new_rendezvous(
+let mut socket = SrtSocketBuilder::new()
+    .latency(Duration::from_millis(200))
+    .connect_rendezvous(
         "0.0.0.0:9000".parse()?,            // local
         "203.0.113.5:9000".parse()?,        // remote
     )
-    .latency(Duration::from_millis(200))
-    .connect()
     .await?;
 ```
 
@@ -92,13 +90,12 @@ bilbycast-srt supports AES-128, AES-192, and AES-256 in two modes:
 | **AES-GCM** (AEAD) | Production-grade authenticated encryption, recommended for new deployments |
 
 ```rust
-use srt_transport::CryptoMode;
+use srt_protocol::config::{CryptoModeConfig, KeySize};
 
-let socket = SrtSocketBuilder::new_caller(addr)
-    .passphrase("MyVerySecretPass".to_string())
-    .key_length(32)                           // AES-256
-    .crypto_mode(CryptoMode::AesGcm)          // AEAD
-    .connect()
+let socket = SrtSocketBuilder::new()
+    .encryption("MyVerySecretPass", KeySize::AES256)  // AES-256
+    .crypto_mode(CryptoModeConfig::AesGcm)            // AEAD
+    .connect(addr)
     .await?;
 ```
 
@@ -109,9 +106,9 @@ let socket = SrtSocketBuilder::new_caller(addr)
 bilbycast-srt implements libsrt v1.5.5-compatible Forward Error Correction. Configure it with the same `packet_filter` string libsrt uses:
 
 ```rust
-let socket = SrtSocketBuilder::new_caller(addr)
-    .packet_filter("fec,cols:10,rows:5,layout:staircase,arq:onreq")
-    .connect()
+let socket = SrtSocketBuilder::new()
+    .packet_filter("fec,cols:10,rows:5,layout:staircase,arq:onreq".to_string())
+    .connect(addr)
     .await?;
 ```
 
@@ -139,31 +136,34 @@ Callers can send a Stream ID in the handshake; listeners can use it to accept or
 
 ```rust
 // Caller side
-let socket = SrtSocketBuilder::new_caller(addr)
+let socket = SrtSocketBuilder::new()
     .stream_id("#!::r=studio-a,m=publish,u=alice".to_string())
-    .connect()
+    .connect(addr)
     .await?;
 ```
 
 ```rust
 // Listener side — implement an access control callback
-use srt_transport::{AccessControl, HandshakeInfo, RejectReason};
+use srt_protocol::access_control::{AccessControl, HandshakeInfo};
+use srt_protocol::error::RejectReason;
 
 struct MyAcl;
 
 impl AccessControl for MyAcl {
     fn check(&self, info: &HandshakeInfo) -> Result<(), RejectReason> {
-        match info.stream_id() {
-            Some(id) if id.contains("u=alice") => Ok(()),
-            Some(_) => Err(RejectReason::Auth),
-            None => Err(RejectReason::BadResource),
+        if info.stream_id.is_empty() {
+            Err(RejectReason::Rogue)
+        } else if info.stream_id.contains("u=alice") {
+            Ok(())
+        } else {
+            Err(RejectReason::Unsecure)
         }
     }
 }
 
-let listener = SrtListenerBuilder::new(addr)
-    .access_control(Box::new(MyAcl))
-    .listen()
+let listener = SrtListenerBuilder::new()
+    .access_control(MyAcl)
+    .bind(addr)
     .await?;
 ```
 
@@ -194,26 +194,24 @@ use tokio::time::interval;
 let mut tick = interval(Duration::from_secs(1));
 loop {
     tick.tick().await;
-    let s = socket.stats();
+    let s = socket.stats().await;
     println!("RTT={:.1} ms  loss={}  recovered={}",
-        s.rtt_ms, s.pkt_lost_total, s.fec_recovered_pkts);
+        s.ms_rtt, s.pkt_rcv_loss_total, s.pkt_rcv_filter_supply_total);
 }
 ```
 
 ## Pluggable congestion control
 
-The default is `LiveCC` (constant-rate, ~MPEG-TS bitrate, the SRT default). For bulk transfer, switch to `FileCC`:
+The default is `LiveCC` (constant-rate, ~MPEG-TS bitrate, the SRT default). For bulk transfer, switch to `FileCC` via `.file_mode()`:
 
 ```rust
-use srt_transport::{CongestionControl, FileCC};
-
-let socket = SrtSocketBuilder::new_caller(addr)
-    .congestion_control(Box::new(FileCC::default()))
-    .connect()
+let socket = SrtSocketBuilder::new()
+    .file_mode()
+    .connect(addr)
     .await?;
 ```
 
-For research or specialised workloads, implement the `CongestionControl` trait yourself — `srt-protocol` is sans-IO so you can write CC algorithms without touching the transport layer.
+For research or specialised workloads, implement the `CongestionControl` trait (in `srt_protocol::congestion`) yourself — `srt-protocol` is sans-IO so you can write CC algorithms without touching the transport layer.
 
 ## Stability fixes
 

@@ -36,11 +36,11 @@ When enabled, `GET /setup` is publicly accessible (no auth) and serves an inline
 | Field | Stored as | Notes |
 |---|---|---|
 | Device name | `manager.device_name` | Free-form label shown in the manager UI |
-| Manager URL | `manager.url` | Must be `wss://...` — plaintext `ws://` is rejected |
+| Manager URL | `manager.urls` | Must be `wss://...` — plaintext `ws://` is rejected. Stored as a list (one or more entries) |
 | Registration token | `manager.registration_token` | One-time token issued by the manager admin |
 | Accept self-signed cert | `manager.accept_self_signed_cert` | Requires `BILBYCAST_ALLOW_INSECURE=1` env var as a safety guard |
 | Certificate fingerprint (optional) | `manager.cert_fingerprint` | SHA-256 fingerprint for cert pinning |
-| API listen address | `server.bind` | Default `0.0.0.0` |
+| API listen address | `server.bind` | Default `127.0.0.1` (loopback only — expose on the LAN with `--bind-addrs 0.0.0.0,[::]`) |
 | API listen port | `server.port` | Default `8080` |
 
 On submit, the wizard:

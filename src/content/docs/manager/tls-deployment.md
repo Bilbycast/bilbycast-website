@@ -186,7 +186,7 @@ All three modes serve the same security headers on every response:
 |---|---|
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` |
 
 In behind-proxy mode, you may also want to add HSTS at the proxy level to ensure browsers see it on all responses (including any served directly by the proxy).
 

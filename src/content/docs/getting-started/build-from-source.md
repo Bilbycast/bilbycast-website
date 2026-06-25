@@ -93,8 +93,8 @@ The most useful Cargo feature flags on the edge:
 | `video-encoder-x265` | off | HEVC software transcoding via libx265 (GPL-2.0-or-later) |
 | `video-encoder-nvenc` | off | NVIDIA NVENC H.264 / HEVC |
 | `video-encoder-qsv` | off | Intel QuickSync H.264 / HEVC (x86_64 only) |
-| `display-nvdec` | off | NVIDIA NVDEC hardware decode for the local-display output (`h264_cuvid` / `hevc_cuvid`); shares `nv-codec-headers` with `video-encoder-nvenc` |
-| `display-qsv` | off | Intel QSV hardware decode for the local-display output (`h264_qsv` / `hevc_qsv`); shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only |
-| `video-encoders-full` | off | Composite of every video codec backend — encoders (x264 + x265 + NVENC + QSV) **and** display HW decoders (NVDEC + QSV-decode). Used by the release tarball; runtime probe auto-detects which backends the host can actually open |
+| `video-decoder-nvdec` | off | NVIDIA NVDEC hardware decode for the local-display output (`h264_cuvid` / `hevc_cuvid`); shares `nv-codec-headers` with `video-encoder-nvenc` |
+| `video-decoder-qsv` | off | Intel QSV hardware decode for the local-display output (`h264_qsv` / `hevc_qsv`); shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only |
+| `video-encoders-full` | off | Composite of every video codec backend — encoders (x264 + x265 + NVENC + QSV + VAAPI) **and** HW decoders (NVDEC + QSV-decode + VAAPI-decode). Used by the release tarball; runtime probe auto-detects which backends the host can actually open |
 
 Default-off encoder flags are off because they pull in extra system dependencies and (for x264 / x265) flip the binary licence to AGPL-3.0-or-later as a combined work with GPL-2.0-or-later code. The published release tarball turns them on via `video-encoders-full` so you don't have to think about this — install the signed binary unless you have a reason to compile your own.

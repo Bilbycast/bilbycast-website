@@ -218,7 +218,7 @@ To make the abstract template concrete, the Appear X gateway runs three concurre
 
 It polls six data types (alarms, chassis, IP inputs, IP outputs, services, IP interfaces) at independently-configurable intervals, derives health from alarm severity (`MAJOR`/`CRITICAL` → critical, `MINOR`/`WARNING` → degraded, none → ok), and translates eight manager command types into Appear X JSON-RPC calls.
 
-The manager-side `AppearXDriver` lives in `manager-core/src/drivers/appear_x.rs` and exposes seven AI actions, all in `command` execution mode.
+The manager-side `AppearXDriver` lives in the `device-appear-x` plugin crate (`crates/device-appear-x/src/lib.rs`) and exposes its AI actions all in `command` execution mode.
 
 ## Suggested next steps
 

@@ -37,7 +37,7 @@ sidebar:
                             │  │  │                                          │  │  │
                             │  │  │   ┌─────────── Flow N ──────────────┐   │  │  │
                             │  │  │   │                                 │   │  │  │
-                            │  │  │   │  ┌─────────┐   broadcast(2048) │   │  │  │
+                            │  │  │   │  ┌─────────┐   broadcast(16384)│   │  │  │
                             │  │  │   │  │  Input  │──────┬──────────┐ │   │  │  │
                             │  │  │   │  │  Task   │      │          │ │   │  │  │
                             │  │  │   │  └─────────┘      ▼          ▼ │   │  │  │
@@ -96,7 +96,7 @@ sidebar:
   │  │  │ UDP Recv │─┼──▶  Ingress      │                                      │
   │  │  └─────────┘ │  │  Filters       │     ┌───────────────────┐            │
   │  │  ┌─────────┐ │  │  ┌───────────┐ │     │  broadcast::      │            │
-  │  │  │ FEC     │◀┼──┤  │ C5: Src IP│ │     │  channel(2048)    │            │
+  │  │  │ FEC     │◀┼──┤  │ C5: Src IP│ │     │  channel(16384)   │            │
   │  │  │ Decode  │ │  │  │ U4: PT    │ ├────▶│                   │            │
   │  │  │ (2022-1)│─┼──▶  │ C7: Rate  │ │     │  Sender ────┐    │            │
   │  │  └─────────┘ │  │  └───────────┘ │     │             │    │            │
@@ -273,7 +273,7 @@ pub fn spawn_xxx_output(
 ## Backpressure & QoS
 
 ```
-  Input ──▶ broadcast::channel(2048) ──▶ Output subscribers
+  Input ──▶ broadcast::channel(16384, default) ──▶ Output subscribers
 
   Slow output?
   ├─ recv() returns RecvError::Lagged(n)

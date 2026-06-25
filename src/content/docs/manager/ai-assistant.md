@@ -45,9 +45,9 @@ This is what gets injected into the LLM prompt. The LLM only ever sees descripto
 
 | Driver | Action count | Examples |
 |---|---|---|
-| Edge | 10 | `flows.create`, `flows.update`, `flows.delete`, `flows.start`, `flows.stop`, `outputs.add`, `outputs.remove`, `tunnels.create`, `tunnels.delete`, `flow_groups.start` |
-| Relay | 7 | `relay.get_config`, `relay.list_tunnels`, `relay.list_edges`, `relay.disconnect_edge`, `relay.close_tunnel`, `relay.authorize_tunnel`, `relay.revoke_tunnel` |
-| Appear X | 7 | `appear_x.set_ip_input`, `appear_x.set_ip_output`, `appear_x.get_inputs`, `appear_x.get_outputs`, `appear_x.get_services`, `appear_x.get_alarms`, `appear_x.get_chassis` |
+| Edge | 22 | `create_flow`, `update_flow`, `delete_flow`, `start_flow`, `stop_flow`, `create_output`, `delete_output`, `create_tunnel`, `delete_tunnel`, `cue_clip` |
+| Relay | 7 | `get_config`, `list_tunnels`, `list_edges`, `disconnect_edge`, `close_tunnel`, `authorize_tunnel`, `revoke_tunnel` |
+| Appear X | 18 | `set_ip_input`, `set_ip_output`, `get_inputs`, `get_outputs`, `get_services`, `get_alarms`, `get_chassis` |
 
 When a new device driver is added (see [Device Drivers](/manager/device-drivers/)), its action descriptors are picked up automatically — the AI assistant immediately gains the ability to operate on that device type without any prompt-engineering changes.
 

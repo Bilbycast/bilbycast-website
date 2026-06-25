@@ -28,7 +28,7 @@ The edge emits four kinds of outbound messages:
 |---|---|---|
 | `stats` | every 1 s | Per-flow input/output bitrates, packet counts, FEC stats, TR 101 290, IAT / PDV |
 | `health` | every 15 s | Node-level health, software version, capability list |
-| `thumbnail` | every 10 s per flow | 320×180 JPEG preview (when enabled) |
+| `thumbnail` | every 5 s per flow (configurable 1–60 s) | 320×180 JPEG preview (when enabled) |
 | `event` | on state change | Operational events with severity, category, optional `flow_id` and details — see [Events & Alarms](/edge/events-and-alarms/) |
 
 Events are deduplicated — they fire on state transitions, not periodically — and queued when the manager is disconnected so a reconnect delivers the backlog.

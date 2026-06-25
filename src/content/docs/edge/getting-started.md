@@ -75,7 +75,7 @@ sudo bash packaging/install-edge.sh \
 | `--output-nics <nic1,nic2>` | Enable kernel-paced wire emission (SO_TXTIME) on the listed NICs. Installs a boot-persistent ETF qdisc on each NIC and sets `BILBYCAST_ENABLE_TXTIME=1` in the environment file. Each NIC must have >= 3 hardware tx queues (validated). Omit to stay on the default `clock_nanosleep` tier — fine for most deployments. See [ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) for when you need this. |
 | `--channel <name>` | Release channel (`stable` / `nightly` / `beta`). Default `stable`. |
 | `--variant <name>` | Binary variant (`default` / `full`). Default `full` on Linux. |
-| `--allow-insecure` | Allow connecting to a manager with a self-signed certificate. |
+| `--accept-self-signed` | Allow connecting to a manager with a self-signed certificate. |
 | `--upgrade-installer` | Refresh the service unit and install script without touching config or versions. |
 
 If your manager uses a self-signed certificate:
@@ -84,7 +84,7 @@ If your manager uses a self-signed certificate:
 sudo bash packaging/install-edge.sh \
   --manager wss://YOUR_MANAGER:8443/ws/node \
   --registration-token <token> \
-  --allow-insecure
+  --accept-self-signed
 ```
 
 ### 4. Verify

@@ -83,8 +83,8 @@ Every upgrade attempt is recorded in the audit log (`/admin/audit`):
 |---|---|---|
 | `node.upgrade.request` | per-node upgrade | `{version, channel}` |
 | `group.upgrade.schedule` | group rollout | `{version, channel, strategy, node_count}` |
-| `group.upgrade.paused` | rollout pause-on-failure | `{version, failure_count}` |
-| `group.upgrade.complete` | rollout finished | `{version, completed_count}` |
+| `group.upgrade.paused` | rollout pause-on-failure | `{wave, failures, version}` |
+| `group.upgrade.complete` | rollout finished | `{version}` |
 
 Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_staged`, `upgrade_completed`, `upgrade_rolled_back`, `upgrade_*_failed`) ride the normal events stream under `category: upgrade` for dashboard / SIEM consumption.
 

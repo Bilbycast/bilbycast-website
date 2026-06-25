@@ -735,12 +735,13 @@ cases in this guide that are marked READY.
    connections. The validator rejects `transport_mode == "audio_302m"`
    combined with `redundancy` to surface this at config load time.
 
-4. **AAC family coverage.** The Phase A in-process decoder only
-   handles **AAC-LC** (mono / stereo). HE-AAC v1/v2, AAC-Main,
-   AAC-LTP, and multichannel AAC are rejected with an `audio_decode`
-   Critical event. Phase B's `audio_encode` can still *produce*
-   HE-AAC v1/v2 via ffmpeg — the restriction is only on the input
-   side.
+4. **AAC family coverage.** With the default `fdk-aac` feature, the
+   Phase A in-process decoder handles **AAC-LC, HE-AAC v1 (SBR),
+   HE-AAC v2 (PS), AAC-LD, AAC-ELD, and multichannel up to 7.1**.
+   Only when `fdk-aac` is disabled does the `symphonia-codec-aac`
+   fallback restrict the input to **AAC-LC mono / stereo** — under
+   that fallback, HE-AAC v1/v2 and multichannel AAC are rejected with
+   an `audio_decode` Critical event.
 
 5. **Custom channel-map gains in JSON.** The `transcode.channel_map`
    field currently treats every routed input as unity gain. For

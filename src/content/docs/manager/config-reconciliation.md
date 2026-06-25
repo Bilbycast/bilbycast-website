@@ -120,7 +120,8 @@ For developers extending the reconciliation pipeline, the relevant files in `bil
 
 | File | Purpose |
 |---|---|
-| `crates/manager-core/src/reconciliation/` | The pipeline itself: replay, snapshot, diff, ghost cleanup |
-| `crates/manager-core/src/managed_flows.rs` | DB layer for `managed_flows` push status |
-| `crates/manager-core/src/tunnels.rs` | DB layer for tunnel push status (per leg) |
-| `crates/manager-core/src/events.rs` | `config_sync` event categories and emission |
+| `crates/device-edge/src/reconcile.rs` | Driver-owned reconnect reconcile path: re-push, settle, fetch config |
+| `crates/manager-server/src/ws/node_hub.rs` | The diff itself: snapshot compare, drift detection, ghost cleanup |
+| `crates/manager-core/src/db/managed_flows.rs` | DB layer for `managed_flows` push status |
+| `crates/manager-core/src/db/tunnels.rs` | DB layer for tunnel push status (per leg) |
+| `crates/manager-core/src/db/events.rs` | `config_sync` event insertion |

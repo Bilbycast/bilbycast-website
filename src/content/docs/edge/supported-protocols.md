@@ -329,11 +329,12 @@ Supported encoders (opt-in via Cargo features):
 | `video-encoder-x265` | HEVC via libx265 (GPL v2+) | CPU |
 | `video-encoder-nvenc` | H.264 / HEVC via NVIDIA NVENC (LGPL-clean API, requires NVIDIA GPU + driver) | GPU |
 | `video-encoder-qsv` | H.264 / HEVC via Intel QuickSync / oneVPL (LGPL-clean, x86_64 only) | iGPU |
-| `display-nvdec` | NVIDIA NVDEC display HW decode (`h264_cuvid` / `hevc_cuvid`) | GPU |
-| `display-qsv` | Intel QSV display HW decode (`h264_qsv` / `hevc_qsv`, x86_64 only) | iGPU |
-| `video-encoders-full` | Bundle of every video codec backend — encoders + display HW decoders. Used by the release build | — |
+| `video-encoder-vaapi` | H.264 / HEVC via VAAPI (libva MIT, Linux; AMD radeonsi / Intel iHD) | iGPU/dGPU |
+| `video-decoder-nvdec` | NVIDIA NVDEC HW decode (`h264_cuvid` / `hevc_cuvid`) — display + transcode | GPU |
+| `video-decoder-qsv` | Intel QSV HW decode (`h264_qsv` / `hevc_qsv`, x86_64 only) — display + transcode | iGPU |
+| `video-encoders-full` | Bundle of every video codec backend — encoders (x264 + x265 + NVENC + QSV + VAAPI) + HW decoders (NVDEC + QSV + VAAPI). Used by the release build | — |
 
-The release tarball (`bilbycast-edge-$(uname -m)-linux-full.tar.gz`) bundles libx264 + libx265 + NVENC + QSV (encode) and NVDEC + QSV-decode (display HW playout) — the `aarch64` build omits QSV in both directions because Intel iGPU is x86_64-only. Combined work is AGPL-3.0-or-later under the GPL portions; the runtime probe auto-detects which backends actually open on the host.
+The release tarball (`bilbycast-edge-$(uname -m)-linux-full.tar.gz`) bundles libx264 + libx265 + NVENC + QSV + VAAPI (encode) and NVDEC + QSV-decode + VAAPI-decode (display HW playout + transcode decode) — the `aarch64` build omits QSV in both directions because Intel iGPU is x86_64-only. Combined work is AGPL-3.0-or-later under the GPL portions; the runtime probe auto-detects which backends actually open on the host.
 
 ST 2110-22 (JPEG XS) transcoding is deferred pending a libjxs wrapper. HLS `video_encode` is the last deferred transport — tracked in the repo's `transcoding.md`.
 
@@ -400,9 +401,11 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `video-encoder-x265` | HEVC video transcoding via libx265. **GPL v2+** — same combined-work implications as x264 | No |
 | `video-encoder-nvenc` | NVIDIA NVENC H.264 / HEVC hardware encoders. LGPL-clean API layer; requires an NVIDIA GPU + proprietary driver at runtime | No |
 | `video-encoder-qsv` | Intel QuickSync H.264 / HEVC encoders via oneVPL. LGPL-clean; x86_64 only; needs Intel iGPU + media driver | No |
-| `display-nvdec` | NVIDIA NVDEC hardware decode for the local-display output. Shares `nv-codec-headers` with `video-encoder-nvenc` | No |
-| `display-qsv` | Intel QSV hardware decode for the local-display output. Shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only | No |
-| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV) **and** display HW decoders (NVDEC + QSV-decode). Used by the release build | No |
+| `video-encoder-vaapi` | VAAPI H.264 / HEVC encoders (Linux). Royalty-free (libva MIT); AMD radeonsi / Intel iHD; needs `libva-dev` + working VAAPI driver | No |
+| `video-decoder-nvdec` | NVIDIA NVDEC hardware decode (display output + transcode decode path). Shares `nv-codec-headers` with `video-encoder-nvenc` | No |
+| `video-decoder-qsv` | Intel QSV hardware decode (display output + transcode decode path). Shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only | No |
+| `video-decoder-vaapi` | VAAPI hardware decode (display output + transcode decode path). Shares `libva-dev` with `video-encoder-vaapi`; Linux | No |
+| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV + VAAPI) **and** HW decoders (NVDEC + QSV-decode + VAAPI-decode). Used by the release build | No |
 
 The release tarball bundles GPL / NVENC encoders — see `bilbycast-edge/docs/transcoding.md` in the repo for the full licence breakdown.
 

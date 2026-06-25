@@ -84,7 +84,7 @@ ST 2110 controls are available only on nodes whose health capabilities advertise
 | GET    | `/api/v1/nodes/{id}/ptp` | Cached PTP state. |
 | GET    | `/api/v1/nodes/{id}/nmos` | Live NMOS state. |
 | GET    | `/api/v1/nodes/{id}/flows/{flow_id}/sdp/{essence}` | SDP document for one essence of a ST 2110 flow. |
-| GET / PUT  | `/api/v1/nodes/{id}/flows/{flow_id}/channel-map` | Read or stage + activate an IS-08 channel map. |
+| GET / PUT  | `/api/v1/nodes/{id}/audio/channel-map` | Read or stage + activate the node-wide IS-08 channel map. |
 | GET / POST / PUT / DELETE | `/api/v1/nodes/{id}/flow-groups[/{gid}]` | Manage flow groups (essence bundles). |
 
 Mutating endpoints require the Operator role and the usual CSRF + node-access checks. Full payload schemas are provided in the commercial integration reference.
@@ -108,7 +108,8 @@ Mutating endpoints require the Operator role and the usual CSRF + node-access ch
 | GET    | `/api/v1/settings`              | Get current settings                                       |
 | PUT    | `/api/v1/settings`              | Update settings                                            |
 | GET    | `/api/v1/settings/tls`          | Get TLS certificate info                                   |
-| POST   | `/api/v1/settings/tls/upload`   | Upload a new TLS certificate and key (PEM, requires restart) |
+| GET    | `/api/v1/settings/acme`         | Get ACME / Let's Encrypt status                            |
+| POST   | `/api/v1/settings/acme/configure` | Configure ACME / Let's Encrypt certificate provisioning  |
 
 ---
 
@@ -141,9 +142,9 @@ Backups are sealed with a user-supplied passphrase using authenticated encryptio
 
 | Method | Path                           | Description                          |
 |--------|--------------------------------|--------------------------------------|
-| POST   | `/api/v1/ai/generate-config`   | AI flow management (action-based)    |
-| POST   | `/api/v1/ai/analyze`           | AI-powered anomaly analysis          |
-| POST   | `/api/v1/ai/query`             | Natural language query about nodes   |
+| POST   | `/api/v1/ai/chat`              | AI assistant chat (action-based flow management) |
+| POST   | `/api/v1/ai/apply`             | Apply an AI-proposed configuration change |
+| GET    | `/api/v1/ai/threads`           | List AI assistant conversation threads |
 | GET    | `/api/v1/ai/keys`              | List stored AI provider keys         |
 | POST   | `/api/v1/ai/keys`              | Store an AI provider API key         |
 | DELETE | `/api/v1/ai/keys`              | Delete an AI provider API key        |

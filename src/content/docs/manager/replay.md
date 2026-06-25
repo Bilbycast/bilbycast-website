@@ -38,8 +38,7 @@ The timeline shows the rolling buffer for the currently-recording flow. The vert
 | Frame step forward | — | `.` |
 | Mark in | click marker | **I** |
 | Mark out | click marker | **O** |
-| Cancel marks | right-click | **Esc** |
-| Lock to live | click LIVE button | **End** |
+| Lock to live | toggle the Lock-to-live checkbox | — |
 
 **Lock to live** keeps the play-head on the latest frame as new content arrives — useful when you want to stay in step with the broadcast and only break off to clip something on demand.
 
@@ -47,7 +46,7 @@ The timeline shows the rolling buffer for the currently-recording flow. The vert
 
 ## Quick-clip the last N seconds
 
-Below the timeline are three single-button quick-clip pills — typically **5s**, **15s**, **30s**. Each one immediately creates a clip ending at the current play-head position with the corresponding lookback. Useful for the moment-of-action workflow where there's no time to mark in/out manually.
+Below the timeline are four single-button quick-clip pills — **10s**, **20s**, **30s**, **60s**. Each one immediately creates a clip ending at the current play-head position with the corresponding lookback. Useful for the moment-of-action workflow where there's no time to mark in/out manually.
 
 Each button uses the active **tag profile**'s default tag (see below).
 
@@ -55,10 +54,10 @@ Each button uses the active **tag profile**'s default tag (see below).
 
 Once a clip exists, select it in the library and use:
 
-- **`[`** to nudge the in-point earlier by 100 ms.
-- **`]`** to nudge the out-point later by 100 ms.
+- **`[`** to nudge the in-point later by 100 ms.
+- **`]`** to nudge the out-point earlier by 100 ms.
 
-Hold **Shift** for ±1 s steps. Trims fire `update_clip` against the edge — SMPTE timecode strings are cleared on PTS trim because the index doesn't store them.
+Both keys trim the clip inward in 100 ms steps. Trims fire `update_clip` against the edge — SMPTE timecode strings are cleared on PTS trim because the index doesn't store them.
 
 ## The clip library
 

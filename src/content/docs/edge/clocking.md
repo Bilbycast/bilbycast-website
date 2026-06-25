@@ -43,7 +43,7 @@ Operators who run on PTP-disciplined or clean-PCR contribution sources and want 
 
 ## Encoder-style PES PTS regeneration
 
-Every TS-carrying ingress can opt in to byte-level PES PTS/DTS regeneration via the per-input `regenerate_pts: bool` config field (default `false`). When set, the byte-level rewriter rewrites each PES header's PTS (and DTS when present) so emitted timestamps come from the per-flow master clock instead of the source TS bytes.
+Every TS-carrying ingress regenerates PES PTS/DTS at the byte level **by default**. The per-input `passthrough_clock: bool` config field (default `false` — i.e. regeneration on) lets an operator opt **out**: set `passthrough_clock: true` to emit the source PCR/PTS bytes unchanged. With regeneration active, the byte-level rewriter rewrites each PES header's PTS (and DTS when present) so emitted timestamps come from the per-flow master clock instead of the source TS bytes.
 
 The model is per-PID **anchor + source-delta**:
 
@@ -70,14 +70,14 @@ A **10 s safety check** on the anchor candidate falls back to the raw source PTS
 
 The transcoded audio path uses the same model in `engine::ts_audio_replace::TsAudioReplacer::set_av_sync_pacer` — same `anchor_target` helper, same 10 s safety, same opt-in surface.
 
-### When to turn `regenerate_pts` on
+### When to leave `passthrough_clock` off (regeneration on)
 
 | Situation | Recommendation |
 |---|---|
-| Two edges slaved to the same PTP grandmaster, dual-leg 2022-7 to a tier-1 receiver | **On.** Combined with `master_clock.kind = "ptp"` the two edges emit coherent PCR + PTS. |
-| Two edges slaved to the same clean upstream encoder, 2022-7 hitless | **On.** Combined with `master_clock.kind = "contribution"`. Wait for `master_clock.locked = true` before measuring. |
-| Single edge, single output, no cross-host coherence requirement | **Off.** Default behaviour is correct and adds no overhead. |
-| Source carries per-source-restart PCR discontinuities (looping playout, ffmpeg `-stream_loop`) | **Off** unless you've explicitly switched to a non-Wallclock master and accepted that the PLL will keep re-locking on every restart. |
+| Two edges slaved to the same PTP grandmaster, dual-leg 2022-7 to a tier-1 receiver | **Leave on** (default). Combined with `master_clock.kind = "ptp"` the two edges emit coherent PCR + PTS. |
+| Two edges slaved to the same clean upstream encoder, 2022-7 hitless | **Leave on** (default). Combined with `master_clock.kind = "contribution"`. Wait for `master_clock.locked = true` before measuring. |
+| Single edge, single output, no cross-host coherence requirement | Either — the default (regeneration on) is correct and adds negligible overhead; `passthrough_clock: true` is also fine. |
+| You must emit the source PCR/PTS bytes unchanged | Set `passthrough_clock: true` to opt out of regeneration. |
 
 ## PCR pre-roll
 

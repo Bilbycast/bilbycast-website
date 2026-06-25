@@ -15,7 +15,7 @@ bilbycast-relay sits between two edge nodes that are typically behind NAT. It pa
 
 The transport from any edge to the relay is QUIC, which mandates TLS 1.3. ALPN is enforced — the relay only accepts the `bilbycast-relay` protocol identifier, which prevents anyone speaking a different ALPN from completing the handshake even if they reach the QUIC port.
 
-The relay generates a self-signed cert at startup if none is configured (`BILBYCAST_RELAY_CERT` / `BILBYCAST_RELAY_KEY`). Edges connecting to a self-signed relay must explicitly opt in (`accept_self_signed_cert: true` plus `BILBYCAST_ALLOW_INSECURE=1`) — the same safety guard as the manager. For production, supply a real cert.
+The relay generates a self-signed cert at startup if none is configured (`tls_cert_path` / `tls_key_path` in the relay config). Edges connecting to a self-signed relay must explicitly opt in (`accept_self_signed_cert: true` plus `BILBYCAST_ALLOW_INSECURE=1`) — the same safety guard as the manager. For production, supply a real cert.
 
 Edges can also pin the relay's cert via `cert_fingerprint` (SHA-256), which validates the exact cert without trusting any CA store.
 
@@ -95,7 +95,7 @@ This connection is the channel the manager uses to call `authorize_tunnel`, `rev
 
 For production deployments:
 
-- [ ] Provide a real TLS cert for the relay (`BILBYCAST_RELAY_CERT` / `BILBYCAST_RELAY_KEY`). Don't rely on the self-signed fallback.
+- [ ] Provide a real TLS cert for the relay (`tls_cert_path` / `tls_key_path` in the relay config). Don't rely on the self-signed fallback.
 - [ ] Set `api_token` in the relay config to a long random value.
 - [ ] Configure the manager to issue `authorize_tunnel` for every tunnel — never rely on the unauthenticated-bind fallback.
 - [ ] Distribute `tunnel_encryption_key` only via the manager, never out-of-band by hand.

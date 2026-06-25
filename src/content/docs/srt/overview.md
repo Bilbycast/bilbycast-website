@@ -94,7 +94,7 @@ let listener = SrtListener::builder()
         if info.stream_id() == Some("allowed-stream") {
             Ok(())
         } else {
-            Err(RejectReason::Forbidden)
+            Err(RejectReason::Rogue)
         }
     })
     .bind(addr)

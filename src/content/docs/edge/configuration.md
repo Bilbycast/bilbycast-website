@@ -715,7 +715,7 @@ Receives a media flow over the bilbycast multi-path bonding stack — the protoc
   "id": "in-bonded",
   "name": "Bonded receive",
   "local_addr": "0.0.0.0:5500",
-  "psk": "<32-byte hex>"
+  "encryption_key": "<32-byte hex>"
 }
 ```
 
@@ -1112,7 +1112,7 @@ Sends a media flow over the bilbycast multi-path bonding stack — the bonded tr
   "id": "out-bonded",
   "name": "Bonded send",
   "remote_addr": "203.0.113.10:5500",
-  "psk": "<32-byte hex>"
+  "encryption_key": "<32-byte hex>"
 }
 ```
 

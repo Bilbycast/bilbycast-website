@@ -188,13 +188,20 @@ Same as the [production download step](#1-download) above.
 
 ### 2. Install runtime dependencies
 
+libx264 / libx265 (and libnuma) are **statically linked** into the full
+binary, so **no codec runtime package is needed** — and the binary is not
+tied to a distro's ABI-versioned `libx264.so`/`libx265.so` SONAME (which is
+why earlier builds failed to start on newer Ubuntu releases). Install only
+the stable-SONAME system libraries:
+
 ```bash
-# Debian / Ubuntu
+# Debian / Ubuntu (full variant)
 sudo apt update
-sudo apt install libdrm2 libasound2t64 libudev1 libx264-dev libx265-dev libnuma1
+sudo apt install libdrm2 libasound2t64 libva2 libva-drm2
+sudo apt install libvpl2          # x86_64 only — Intel QSV
 
 # RHEL / Fedora
-sudo dnf install libdrm alsa-lib systemd-libs x264-libs x265-libs numactl-libs
+sudo dnf install libdrm alsa-lib libva
 ```
 
 On Ubuntu 22.04 / Debian 12 the ALSA package is `libasound2` (not `libasound2t64`).

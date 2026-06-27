@@ -182,12 +182,21 @@ The modem is now one interface (`wwan0`, or whatever auto-detected — check
 ]
 ```
 
-> **`SO_BINDTODEVICE` needs `CAP_NET_RAW`** on Linux — grant it without running
-> the edge as root:
+> **`SO_BINDTODEVICE` prefers `CAP_NET_RAW`** on Linux (the hard TX + RX device
+> bind) — grant it without running the edge as root:
 > ```bash
 > sudo setcap cap_net_raw+ep /opt/bilbycast/edge/current/bilbycast-edge
 > ```
-> or add `AmbientCapabilities=CAP_NET_RAW` to the edge's systemd unit.
+> or add `AmbientCapabilities=CAP_NET_RAW` to the edge's systemd unit. **Without
+> it the edge falls back to the unprivileged `IP_UNICAST_IF` egress hint** — the
+> leg still leaves the modem; the hint is just TX-only (no RX device bind).
+
+A cellular SIM is almost always on **CGNAT**, so the modem can't accept
+inbound connections — a *direct* bonded leg to it won't work as the
+destination end. When the cellular host is the receiving (destination) edge,
+carry the leg **over a relay**: each relayed leg is its own outbound tunnel, so
+both ends can sit behind NAT. See
+[Bonding over a relay](/edge/bonding/#bonding-over-a-relay-per-leg).
 
 Scheduler choice, ARQ/NACK tuning, and stats are all on the
 [Multi-Path Bonding](/edge/bonding/) page.
@@ -232,5 +241,7 @@ your fixed link's — so traffic is genuinely leaving via the modem.
 - **Background traffic on the metered SIM** — you used a main-table default
   instead of the source-routed one. This script's policy routing prevents that;
   re-run it to restore the table-`70` rule.
-- **`SO_BINDTODEVICE` permission denied** — `CAP_NET_RAW` not granted to the
-  edge; see [Wire it into bonding](#wire-it-into-bonding).
+- **`SO_BINDTODEVICE` permission denied** — `CAP_NET_RAW` not granted, so the
+  edge fell back to the unprivileged `IP_UNICAST_IF` hint (logged at startup).
+  The leg still egresses the modem; grant `CAP_NET_RAW` only if you want the
+  hard RX-side bind. See [Wire it into bonding](#wire-it-into-bonding).

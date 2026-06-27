@@ -233,6 +233,50 @@ No Auth/AuthOk/AuthError exchange on the control stream. Tunnel bind authenticat
   Designed for SRT and real-time media at up to 10 Mbps.
 ```
 
+## Native-UDP Relay Data Plane (no QUIC)
+
+Alongside the QUIC server, the relay runs a **plain-UDP data plane**
+(`udp_relay.rs`, default `:4434`, enabled by default). It is the carrier
+for native SRT / RIST over relay and for individual bond legs — paths
+whose inner protocol already runs its own ARQ + congestion control, so
+wrapping them in QUIC would only add per-packet overhead and a competing
+congestion controller.
+
+```
+  Edge A (NAT)            Relay (:4434, plain UDP)         Edge B (NAT)
+  ===========            ========================          ===========
+
+  Register(tunnel_id) -->  latch A's post-NAT src addr
+                           into the tunnel's ingress slot
+       (re-sent ~5s)
+                                                  <-- Register(tunnel_id)
+                           latch B's post-NAT src addr
+                           into the egress slot
+
+  [16B tunnel_id|AEAD] -->  lookup paired slot
+                            forward payload VERBATIM ----> [16B tunnel_id|AEAD]
+```
+
+- **Source-address rendezvous**: both edges connect *outbound* and
+  periodically send an authenticated `Register` control datagram
+  (nil-UUID-prefixed); the relay latches each edge's post-NAT source
+  address into the tunnel's ingress / egress slot. Because both ends dial
+  out, a tunnel — and therefore a bond leg — works with **both ends
+  behind NAT**.
+- **Opaque forwarding**: media datagrams use the same
+  `[16-byte tunnel_id][AEAD payload]` framing as the QUIC datagram path
+  and are forwarded verbatim to the paired slot. The AEAD layer lives on
+  the edges; the relay holds no media key and stays end-to-end opaque.
+- **Idle reaping**: a session is reaped after ~30 s with no
+  register / keepalive or data (edges re-register every ~5 s, tolerating
+  a few missed keepalives across a cellular / satellite handover).
+- **Non-fatal bind**: if the `:4434` socket can't bind, the relay logs,
+  drops the `udp-relay` capability, and continues QUIC-only.
+
+There is no "bond bridge" anywhere in the relay — a relayed bond leg is
+just one of these native-UDP tunnels, and all bond aggregation /
+recovery stays end-to-end between the edges.
+
 ## Security Layers
 
 ```

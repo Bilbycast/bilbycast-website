@@ -64,7 +64,7 @@ This is a single flat JSON object. All counters are lock-free atomics, cumulativ
 
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
-  http://relay.example.com:4434/api/v1/stats \
+  http://relay.example.com:4480/api/v1/stats \
   | jq '.active_tunnels'
 ```
 
@@ -72,7 +72,7 @@ curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
 
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
-  http://relay.example.com:4434/api/v1/tunnels \
+  http://relay.example.com:4480/api/v1/tunnels \
   | jq '.tunnels[] | {tunnel_id, ingress: .stats.bytes_ingress, egress: .stats.bytes_egress}'
 ```
 
@@ -80,7 +80,7 @@ curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
 
 ```bash
 curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
-  http://relay.example.com:4434/api/v1/stats \
+  http://relay.example.com:4480/api/v1/stats \
   | jq '(.total_bytes_forwarded / .total_udp_datagrams)'
 ```
 

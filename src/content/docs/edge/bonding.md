@@ -57,15 +57,19 @@ NACKs lost packets back to the sender.
 
 ### Media-aware scheduling
 
-The default `media_aware` scheduler reads inside the outbound
+The default `adaptive` scheduler reads inside the outbound
 MPEG-TS stream, detects H.264 and HEVC NAL boundaries, and tags
 SPS / PPS / IDR frames as `Critical` priority. Critical packets are
-**duplicated across the two lowest-RTT paths**; everything else
-rides a single path weighted by live RTT.
+**duplicated across the two best paths**; everything else rides a
+single path chosen by each leg's *measured* capacity (see
+[Adaptive capacity scheduling](#adaptive-capacity-scheduling)). The
+older `media_aware` scheduler does the same NAL tagging but splits
+purely by live RTT with no capacity discovery — `adaptive` supersedes
+it and is the edge default.
 
 The result: even under severe asymmetry — say a 200 ms-RTT Starlink
 leg sharing load with 30 ms-RTT 5G — every IDR frame arrives
-unconditionally on the fastest path even if the slower leg drops
+unconditionally on the best paths even if the slower leg drops
 packets. Non-IDR frames go where they're cheapest, so you don't pay
 2× bandwidth for the whole stream.
 
@@ -81,6 +85,32 @@ Each bond leg uses one of three per-path transports:
 
 Paths are independent — you can mix (e.g. one QUIC leg for the
 trusted fibre path, one UDP leg for the LTE SIM).
+
+## Bonding over a relay (per-leg)
+
+Each bond leg can run **direct** (edge-to-edge over its uplink) or
+**through a relay** — independently, in any combination. A relayed leg
+is just an existing native-UDP [IP tunnel](/manager/ip-tunneling/)
+loopback-bridged onto the leg: the leg's local socket targets
+`127.0.0.1:<port>`, the tunnel carries it to the far edge, and the
+relay forwards `[tunnel_id][encrypted payload]` opaquely. The bond's
+ARQ, FEC, reordering, and capacity scheduling all run **end-to-end
+edge↔edge** — the relay never sees, terminates, or combines bond
+traffic (there is no "bond bridge"; the relay is a generic per-path
+forwarder).
+
+This is what lets a bond work when **both ends are behind NAT**: each
+relayed leg is its own native-UDP tunnel and both edges dial out to the
+relay, so neither end needs to accept inbound connections. A *direct*
+leg, by contrast, is asymmetric — the receiving (destination) edge must
+be reachable. Mix freely: some legs direct, others via a relay, each
+leg able to use a different relay with a primary + backup for failover.
+
+Per-leg relay routing (relay choice, backup relay, and the leg's
+uplink / NIC pin) is provisioned from the manager's **Bonded-Link
+wizard** or the **Tunnels** page — not by hand-editing the leg's
+loopback address in the bonded-output form, where such legs are shown
+locked with a *"Via relay (managed tunnel)"* note.
 
 ## Config reference
 
@@ -130,10 +160,20 @@ trusted fibre path, one UDP leg for the LTE SIM).
 |---|---|---|---|
 | `bond_flow_id` | u32 | *required* | Must match the receiver end |
 | `paths` | array | *required, ≥1* | Paths to transmit across |
-| `scheduler` | enum | `media_aware` | `round_robin`, `weighted_rtt`, or `media_aware` |
+| `scheduler` | enum | `adaptive` | `round_robin`, `weighted_rtt`, `media_aware`, or `adaptive` (see [Scheduler options](#scheduler-options)) |
+| `congestion` | object | — | Optional tuning for the `adaptive` scheduler's per-leg capacity controller (see [Adaptive capacity scheduling](#adaptive-capacity-scheduling)) |
+| `encryption_key` | string (64 hex) | — | Optional 32-byte ChaCha20-Poly1305 AEAD key applied per-datagram on the UDP legs (QUIC legs are already TLS). Both ends must share it |
 | `retransmit_capacity` | usize | 8192 | Sender retransmit buffer capacity (packets). Must exceed `send_rate_pps × max_nack_round_trip_seconds` |
 | `keepalive_ms` | u32 | 200 | Keepalive interval |
 | `program_number` | u16 | — | Optional MPTS → SPTS filter applied before bonding |
+
+Three more optional resilience blocks ship on the bonded output and
+are off by default: `fec` (bond-wide interleaved-XOR repair), per-path
+`fec` (per-leg XOR or Reed-Solomon, adaptive parity), `redundancy`
+(replicate packets across the N best legs), and `equalization` +
+`max_bonding_latency_ms` (time-align heterogeneous legs so high-jitter
+satellite + cellular legs aggregate in order instead of head-of-line
+blocking). They are surfaced in the manager UI's bonded-output editor.
 
 ### Path transport blocks
 
@@ -168,10 +208,15 @@ Receiver: `bind` required, `remote` ignored.
 (e.g. `"wwan0"`, `"eth0"`). Critical when multiple paths share a
 destination IP — without pinning, the kernel routing table collapses
 them onto the same default route and the bond is cosmetic. Linux
-uses `SO_BINDTODEVICE` and requires `CAP_NET_RAW` (grant with
-`sudo setcap cap_net_raw+ep /path/to/bilbycast-edge` or a systemd
-`AmbientCapabilities=CAP_NET_RAW` line; the edge itself does not
-need root). macOS / FreeBSD use `IP_BOUND_IF` and are
+prefers `SO_BINDTODEVICE` (a hard TX + RX device bind), which needs
+`CAP_NET_RAW` (grant with `sudo setcap cap_net_raw+ep
+/path/to/bilbycast-edge` or a systemd `AmbientCapabilities=CAP_NET_RAW`
+line; the edge itself does not need root). **Without `CAP_NET_RAW` the
+edge automatically falls back to the unprivileged `IP_UNICAST_IF`
+egress hint** — the leg still leaves the right NIC, but the hint is
+TX-only (it doesn't device-bind the receive side), so on a multi-homed
+host with overlapping subnets the strict `SO_BINDTODEVICE` path is
+still preferred. macOS / FreeBSD use `IP_BOUND_IF` and are
 unprivileged. Omit the field to let the kernel decide (or to use
 source-IP binding plus `ip rule` policy routing instead).
 
@@ -233,12 +278,63 @@ isolated.
 |---|---|
 | `round_robin` | Equal-weight rotation. Fine when path health is near-identical (two matched fibre legs) |
 | `weighted_rtt` | RTT-weighted rotation — sends more traffic to lower-RTT paths. `Critical`-priority packets (set by upstream tagging, rare without media awareness) are duplicated across the two lowest-RTT paths |
-| **`media_aware`** (default) | `weighted_rtt` plus NAL walking: detects H.264 and HEVC IDR frames (H.264 types 5/7/8; HEVC 19/20/21/32/33/34) inside the outbound TS and duplicates them across the two best paths. Non-IDR frames go single-path. Recommended default for video flows |
+| `media_aware` | `weighted_rtt` plus NAL walking: detects H.264 and HEVC IDR frames (H.264 types 5/7/8; HEVC 19/20/21/32/33/34) inside the outbound TS and duplicates them across the two best paths. Non-IDR frames go single-path. **Legacy** — superseded by `adaptive` |
+| **`adaptive`** (default) | The same NAL walking + IDR duplication as `media_aware`, plus a per-leg **capacity-aware congestion controller**. Each leg discovers its usable bitrate from delivered-rate / loss / RTT-inflation feedback and is filled to (but not past) that capacity, so the split is proportional to *measured* capacity and a saturated leg spills to one with headroom. The right policy for a heterogeneous cellular + satellite bond. See [Adaptive capacity scheduling](#adaptive-capacity-scheduling) |
 
 On an 84/16 traffic split (5G vs Starlink in testing), the
-`media_aware` scheduler delivers zero lost gaps under 200 ms RTT
-and 3% loss on the Starlink leg because every IDR rides both
+`adaptive` scheduler delivers zero lost gaps under 200 ms RTT
+and 3% loss on the Starlink leg because every IDR rides the best
 paths.
+
+## Adaptive capacity scheduling
+
+`adaptive` (the default) runs a closed-loop congestion controller per
+leg. The receiver echoes per-path byte counters + measured jitter in
+its keepalive ack (~5 Hz); the sender differences successive acks into
+a *windowed* delivered bitrate + loss fraction and feeds the
+controller. Each leg probes its capacity estimate **up** while clean,
+backs **off** toward the delivered rate the moment loss or
+queue-building delay appears, and the per-leg token buckets split
+traffic proportionally to the discovered capacities. RTT alone no
+longer drives the split — the old `weighted_rtt` behaviour over-drove a
+low-RTT cellular link past its capacity while starving a high-RTT
+satellite link.
+
+### Clean jittery cellular legs are no longer pinned
+
+A clean but RTT-jittery radio leg (5G or Starlink, whose smoothed RTT
+sits tens of milliseconds above its own windowed minimum even at zero
+loss) used to read as permanently congested and stayed parked at
+`min_rate_kbps` while the bond dropped packets for want of its
+capacity. The controller now discovers capacity from **delivered rate
+versus estimate, not RTT**: when a leg delivers ≥ 85 % of its current
+estimate *and* loss is below `loss_low_pct`, it is treated as
+capacity-limited and the estimate probes up (slow-start style, so a
+starved leg reaches its real capacity in about a second instead of
+crawling). RTT inflation from normal radio jitter no longer
+masquerades as congestion. **Loss is the safety bound** — the instant
+probing up induces real loss the leg backs off, so discovery cannot
+run away. ARQ retransmits are charged their real size against the token
+bucket, so a NACK storm can't self-amplify on a leg that is already
+dropping.
+
+### Congestion tuning (`congestion` block)
+
+Every field is optional; unset falls back to the broadcast-tuned
+default. Set them under the bonded **output**'s `congestion` object.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `min_rate_kbps` | u32 | 250 | Floor a leg's capacity estimate never drops below |
+| `start_rate_kbps` | u32 | — | Starting estimate before measurement for a unit-weight leg |
+| `loss_low_pct` | f32 | 0.5 | Loss below which a leg is "clean" and probes up |
+| `loss_high_pct` | f32 | — | Loss at/above which a leg backs off hard |
+| `delay_inflation_ms` | u32 | — | RTT inflation over a leg's own minimum treated as queue-building congestion. With `delay_inflation_auto` set, this is the *floor* of the auto-derived threshold |
+| `delay_inflation_auto` | bool | **`true` on edge bonded outputs** | Derive the queue-build delay threshold per leg from its own windowed baseline RTT (a bufferbloated cellular leg gets a proportionally looser threshold; a terrestrial leg keeps the tight `delay_inflation_ms` floor). The library default is off; the edge enables it because its headline bond is heterogeneous cellular + satellite. Set `false` to force a fixed threshold |
+| `burst_ms` | u32 | — | Token-bucket burst depth, in milliseconds of capacity |
+| `probe_cap_mult` | f64 | 2.0 | Evidence bound — a leg's estimate never exceeds `delivered × probe_cap_mult` (suspended while the leg is the clean bottleneck so the bound can't re-pin the leg the bond must grow into) |
+| `rtt_min_window_ms` | u64 | 10000 | Window over which each leg's minimum-RTT baseline is tracked (BBR-style); a route change that shifts the floor ages out instead of reading as permanent congestion |
+| `jitter_demote_ms` | u32 | 150 | Smoothed interarrival jitter above which a leg is demoted from carrying *unique* media (it keeps carrying redundancy / FEC copies). Re-admits when jitter recovers. `0` disables demotion |
 
 ## Worked examples
 
@@ -397,11 +493,13 @@ version-controlled deployments.
 2. Set:
    - **Type:** *Bonded*.
    - **Bond Flow ID:** must equal the receiver's.
-   - **Scheduler:** `Media-aware` is the default — walks H.264 /
-     HEVC NAL units and duplicates IDR frames across the two
-     lowest-RTT paths. Use `Weighted RTT` for non-video data where
-     IDR detection is a no-op, or `Round Robin` when all paths are
-     near-identical.
+   - **Scheduler:** `Adaptive` is the default — walks H.264 / HEVC
+     NAL units and duplicates IDR frames across the two best paths,
+     *and* discovers each leg's usable capacity so the split tracks
+     measured bandwidth (right for heterogeneous cellular + satellite
+     bonds). Use `Media-aware` for the legacy RTT-only split,
+     `Weighted RTT` for non-video data where IDR detection is a no-op,
+     or `Round Robin` when all paths are near-identical.
    - **Retransmit buffer (packets):** 8192 default. Must exceed
      `send_rate_pps × worst_NACK_round_trip_seconds`.
    - **Keepalive (ms):** 200.
@@ -469,7 +567,7 @@ aggregate and per-path metrics.
 | `state` | both | `"up"`, `"degraded"`, or `"idle"` |
 | `flow_id` | both | Matches `bond_flow_id` |
 | `role` | both | `"sender"` or `"receiver"` |
-| `scheduler` | sender | `"round_robin"`, `"weighted_rtt"`, or `"media_aware"` |
+| `scheduler` | sender | `"round_robin"`, `"weighted_rtt"`, `"media_aware"`, or `"adaptive"` |
 | `packets_sent` / `bytes_sent` | sender | |
 | `packets_retransmitted` | sender | Count of ARQ retransmits |
 | `packets_duplicated` | sender | Packets intentionally duplicated (IDR frames on two paths) |
@@ -525,23 +623,25 @@ bilbycast_edge_bond_packets_duplicated
   is fine for typical broadcast bitrates.
 - **`keepalive_ms`** — faster keepalives detect dead paths sooner
   but consume more bandwidth. 200 ms is a reasonable default.
-- **Scheduler choice** — `media_aware` is the right default for
-  video flows carried over MPEG-TS. Use `round_robin` for bonded
-  non-video data (e.g. bulk file transfers) where IDR detection is
-  a no-op.
+- **Scheduler choice** — `adaptive` is the right default for video
+  flows carried over MPEG-TS, especially heterogeneous cellular +
+  satellite bonds. Use `round_robin` for bonded non-video data
+  (e.g. bulk file transfers) where IDR detection is a no-op. With
+  `adaptive`, `weight_hint` only seeds each leg's initial capacity
+  prior — the controller then discovers the real capacity, so you no
+  longer hand-shape the split.
 
 ## Limitations
 
 - **SRT paths are deferred.** UDP / QUIC / RIST are supported today;
   SRT as a per-leg transport (with libsrt's own ARQ and encryption
   per-path) is planned but not yet shipped.
-- **No congestion control at the bond layer.** The bond layer does
-  not probe or back off on path saturation. Use scheduler
-  `weight_hint` to shape a known bandwidth ceiling, or rely on
-  path-layer congestion control where available (QUIC, RIST).
-- **Confidentiality is per-path.** QUIC legs are TLS-encrypted;
-  UDP and RIST legs are plaintext. Wrap an already-encrypted inner
-  protocol (SRT-encrypted TS) if you can't run QUIC for every leg.
+- **Confidentiality is per-path.** QUIC legs are TLS-encrypted; RIST
+  legs are plaintext; UDP legs are plaintext **unless** you set
+  `encryption_key` (per-datagram ChaCha20-Poly1305 AEAD, shared by
+  both ends). For a relayed leg the carrying tunnel adds its own
+  edge-to-edge encryption. Otherwise wrap an already-encrypted inner
+  protocol (SRT-encrypted TS).
 - **Topology view shows aggregate state only.** The Node Detail
   page has full per-path tables; the topology view only shows
   `up` / `degraded` / `idle`.

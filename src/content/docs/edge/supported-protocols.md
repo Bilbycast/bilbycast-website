@@ -88,9 +88,10 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   or RIST Simple Profile, chosen per-path
 - **Payload:** Any bytes — MPEG-TS, RTP, or raw — framed inside a 12-byte
   bond header with a 32-bit sequence across all paths
-- **Scheduler:** `media_aware` default (walks H.264/HEVC NAL units and
-  duplicates IDR frames across the two lowest-RTT paths), `weighted_rtt`,
-  or `round_robin`
+- **Scheduler:** `adaptive` default (walks H.264/HEVC NAL units and
+  duplicates IDR frames across the two best paths, *and* discovers each
+  leg's usable capacity so the split tracks measured bandwidth),
+  `media_aware` (legacy RTT-only split), `weighted_rtt`, or `round_robin`
 - **Why it exists:** Carrier-grade path aggregation for broadcast — the
   capability typically sold as a dedicated bonded-cellular encoder or
   SD-WAN bonding appliance, built directly into the edge. Outperforms

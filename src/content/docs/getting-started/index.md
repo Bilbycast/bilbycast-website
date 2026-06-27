@@ -13,7 +13,7 @@ Bilbycast is a suite of Rust projects for professional broadcast media transport
 |-----------|------|
 | **bilbycast-manager** | Web UI + API. Controls edge nodes and relays. Where you click to make things happen. |
 | **bilbycast-edge** | Media transport gateway. Bridges SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF, WebRTC, and SMPTE ST 2110. In-process transcoding and local-display playout. |
-| **bilbycast-relay** | Stateless QUIC relay for NAT traversal between edge sites. |
+| **bilbycast-relay** | Stateless, opaque per-path relay for NAT traversal between edge sites (QUIC tunnels + a native-UDP carrier for SRT/RIST and bond legs). |
 | **bilbycast-appear-x-api-gateway** | Sidecar that bridges Appear X devices into the manager. |
 
 A few helper crates (`bilbycast-srt`, `bilbycast-rist`, `bilbycast-fdk-aac-rs`, `bilbycast-ffmpeg-video-rs`, `bilbycast-bonding`) ship inside the edge — you don't install them separately.

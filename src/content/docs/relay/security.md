@@ -13,7 +13,9 @@ bilbycast-relay sits between two edge nodes that are typically behind NAT. It pa
 
 ## Layer 1 — TLS 1.3 via QUIC
 
-The transport from any edge to the relay is QUIC, which mandates TLS 1.3. ALPN is enforced — the relay only accepts the `bilbycast-relay` protocol identifier, which prevents anyone speaking a different ALPN from completing the handshake even if they reach the QUIC port.
+On the **QUIC carrier**, the transport from any edge to the relay is QUIC, which mandates TLS 1.3. ALPN is enforced — the relay only accepts the `bilbycast-relay` protocol identifier, which prevents anyone speaking a different ALPN from completing the handshake even if they reach the QUIC port.
+
+The **native-UDP carrier** (plain UDP, used for native SRT/RIST and bond legs) has no transport TLS — its confidentiality rests entirely on Layer 2 below. That is by design: the carrier exists precisely to avoid QUIC's per-packet overhead for inner protocols that already encrypt and recover their own traffic, and the relay never sees anything but Layer-2 ciphertext on it either.
 
 The relay generates a self-signed cert at startup if none is configured (`tls_cert_path` / `tls_key_path` in the relay config). Edges connecting to a self-signed relay must explicitly opt in (`accept_self_signed_cert: true` plus `BILBYCAST_ALLOW_INSECURE=1`) — the same safety guard as the manager. For production, supply a real cert.
 
@@ -100,7 +102,7 @@ For production deployments:
 - [ ] Configure the manager to issue `authorize_tunnel` for every tunnel — never rely on the unauthenticated-bind fallback.
 - [ ] Distribute `tunnel_encryption_key` only via the manager, never out-of-band by hand.
 - [ ] On edge configs, prefer `cert_fingerprint` over `accept_self_signed_cert`.
-- [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433) and the REST API port to the systems that need them.
+- [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433), the native-UDP carrier port (default 4434, if you use native SRT/RIST or bond legs over relay), and the REST API port to the systems that need them.
 - [ ] Monitor the relay's `event` stream for `tunnel.bind_rejected` events — repeated failures indicate either misconfiguration or an active attack.
 
 ## What the relay logs and what it doesn't

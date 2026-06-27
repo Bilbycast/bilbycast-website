@@ -51,6 +51,7 @@ If you'd rather build from source instead of using the pre-built tarballs, see [
 | Edge Prometheus `/metrics` | 8080 | HTTP / HTTPS | Same listener as REST API |
 | Edge media-protocol bind ports | _per-flow_ | varies | Set per input / output (SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, ST 2110). Each accepts v4 or v6 via the per-input `bind_addr`. |
 | Relay QUIC | 4433 | QUIC / UDP (TLS 1.3) | Override via `--quic-addr` (legacy) or `--quic-addrs` (comma-separated). Config field `quic_addrs` defaults dual-stack. |
+| Relay native-UDP carrier | 4434 | UDP (plain) | Plain-UDP data plane for native SRT/RIST + bond legs over relay; on by default. Override via `--udp-relay-addrs`; disable via `--no-udp-relay`. Config field `udp_relay_addrs` defaults dual-stack. |
 | Relay REST API | 4480 | HTTP | Override via `--api-addr` / `--api-addrs`. Config field `api_addrs` defaults dual-stack. |
 
 **Dual-stack (IPv4 + IPv6) is on by default** across the manager, edge, and relay binaries. Each listener binds `0.0.0.0` and `[::]` simultaneously, with `IPV6_V6ONLY=1` on the v6 socket so the two families coexist on the same port. Operators with v6 connectivity get it automatically — point an AAAA record at the box alongside the A record. To restrict, set the relevant env var / config field to just `0.0.0.0` (v4 only), `[::]` (v6 only), or a specific interface address.
@@ -60,8 +61,8 @@ If you'd rather build from source instead of using the pre-built tarballs, see [
 Open these in your firewall:
 
 - **Manager host** — TCP 8443 inbound from operators' browsers and from every edge / relay site. TCP 80 inbound from the public internet only when using ACME.
-- **Relay host** — UDP 4433 inbound from every edge that pairs through it. TCP 4480 only if you query its REST stats from the manager or your monitoring host.
-- **Edge host** — typically only outbound: TCP 8443 to the manager and UDP 4433 to the relay. **Inbound** is needed only for media protocols you've configured as listeners (SRT listener, RTSP server, WHIP server, etc.).
+- **Relay host** — UDP 4433 inbound from every edge that pairs through it; UDP 4434 inbound too if edges carry native SRT/RIST or bond legs over this relay. TCP 4480 only if you query its REST stats from the manager or your monitoring host.
+- **Edge host** — typically only outbound: TCP 8443 to the manager and UDP 4433 (plus UDP 4434 for the native-UDP carrier) to the relay. **Inbound** is needed only for media protocols you've configured as listeners (SRT listener, RTSP server, WHIP server, etc.).
 
 ## Verifying the stack end-to-end
 

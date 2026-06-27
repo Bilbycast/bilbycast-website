@@ -20,8 +20,11 @@ The relay listens on two ports:
 
 | Port | Protocol | Source | Purpose |
 |------|----------|--------|---------|
-| **4433** | UDP (QUIC / TLS 1.3) | Every edge that pairs through this relay | Tunnel data plane. Override with `--quic-addr`. |
+| **4433** | UDP (QUIC / TLS 1.3) | Every edge that pairs through this relay | QUIC tunnel data plane. Override with `--quic-addr`. |
+| **4434** | UDP (plain) | Every edge using a native SRT/RIST or bond-leg tunnel through this relay | Native-UDP carrier data plane (on by default). Override with `--udp-relay-addrs`; disable with `--no-udp-relay`. |
 | **4480** | TCP (HTTP) | Manager host, your monitoring host | REST stats + `/health`. Optional — close it if you don't query stats remotely. Override with `--api-addr`. |
+
+If you only use QUIC tunnels you can leave 4434 closed (or pass `--no-udp-relay`). Open it whenever edges carry native SRT/RIST or bond legs over this relay — a native-UDP-carrier bind failure is non-fatal (the relay logs it and continues QUIC-only).
 
 The relay itself connects **outbound** to the manager on TCP 8443 (`wss://`), so no inbound port is needed for control. If you front the relay with a load balancer (multiple relay instances for HA), the LB needs UDP/QUIC pass-through on 4433 — not TLS termination, since QUIC carries its own TLS 1.3.
 
@@ -29,8 +32,8 @@ The relay itself connects **outbound** to the manager on TCP 8443 (`wss://`), so
 
 QUIC binds on `0.0.0.0:4433` (every interface) by default — that's what the relay **listens** on. Remote edges need a different value: the **public address they dial** to reach you. These two are distinct any time the relay sits behind NAT, a cloud-instance public-IP mapping, or a load balancer:
 
-- **Bind address** (`quic_addr` / `quic_addrs`) — the listen socket. `0.0.0.0:4433` is correct for most installs.
-- **Advertised address** (`public_quic_addr`) — what edges connect to. Set this to a hostname or IP edges can actually reach. The manager reads it from health and pre-populates the tunnel-creation dropdown. Without it, the manager can't auto-fill a usable relay address for tunnel configs and the relay shows as disabled in the dropdown.
+- **Bind address** (`quic_addr` / `quic_addrs`, and `udp_relay_addrs` for the native-UDP carrier) — the listen sockets. `0.0.0.0:4433` / `0.0.0.0:4434` are correct for most installs.
+- **Advertised address** (`public_quic_addr`, plus `public_udp_addr` for the native-UDP carrier) — what edges connect to. Set this to a hostname or IP edges can actually reach. The manager reads it from health and pre-populates the tunnel-creation dropdown. Without it, the manager can't auto-fill a usable relay address for tunnel configs and the relay shows as disabled in the dropdown.
 
 Prefer a DNS name when you have one (`relay.example.com:4433`). It survives Lightsail static-IP releases, cloud instance migrations, and lets you front a pool of relays behind one record. Edges resolve the name on every connect attempt, so an IP change behind the record is picked up automatically without a tunnel reconfig. Falls back to a raw IP literal cleanly when DNS isn't an option (`54.1.2.3:4433`, `[2001:db8::1]:4433`).
 

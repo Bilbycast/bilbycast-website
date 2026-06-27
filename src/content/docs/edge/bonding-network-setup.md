@@ -36,8 +36,10 @@ Giving each path **its own interface — a physical NIC or a VLAN sub-interface 
 is the easiest and most robust way to do this**, and it's what this guide
 recommends: the device binding is unambiguous and each interface needs only a
 single route. A shared-interface alternative (one NIC, multiple IPs, policy
-routing) exists for when you can't add interfaces or grant `CAP_NET_RAW` — see
+routing) exists for when you can't add interfaces — see
 [Alternative: one interface, multiple IPs](#alternative-one-interface-multiple-ips).
+(Interface pinning no longer *requires* `CAP_NET_RAW` either: without it the
+edge falls back to the unprivileged `IP_UNICAST_IF` egress hint.)
 
 ## Topology
 
@@ -295,10 +297,12 @@ relaxes only the modem interfaces — the rest of the host stays strict.
 
 ## Alternative: one interface, multiple IPs
 
-If you can't give each path its own interface — or can't grant `CAP_NET_RAW` for
-`SO_BINDTODEVICE` — put **all modems on one L2 segment and the host on one
-interface with multiple IPs**, then bind each bond path to a different **source
-IP** (the path's `bind` field) instead of an interface.
+If you can't give each path its own interface, put **all modems on one L2
+segment and the host on one interface with multiple IPs**, then bind each bond
+path to a different **source IP** (the path's `bind` field) instead of an
+interface. (You no longer need this just because you can't grant `CAP_NET_RAW` —
+interface pinning falls back to the unprivileged `IP_UNICAST_IF` hint — but
+source-IP binding remains the answer when adding interfaces isn't possible.)
 
 Because every IP lives on the *same* device, `SO_BINDTODEVICE` can't tell the
 paths apart, so this is the one case that genuinely needs **policy routing** —
@@ -407,13 +411,17 @@ For **Design A**, set `interface` to the physical NIC instead (`eth1`, `eth2`).
 The far-end [bonded input](/edge/bonding/#bonded-input-receiver) binds matching
 per-path ports (`0.0.0.0:5000`, `:5001`) with the same path `id`s.
 
-> **`SO_BINDTODEVICE` needs `CAP_NET_RAW`** on Linux. Grant it without running
-> the edge as root:
+> **`SO_BINDTODEVICE` prefers `CAP_NET_RAW`** on Linux — it's the hard
+> TX + RX device bind. Grant it without running the edge as root:
 > ```bash
 > sudo setcap cap_net_raw+ep /path/to/bilbycast-edge
 > ```
-> or add `AmbientCapabilities=CAP_NET_RAW` to the systemd unit. macOS/FreeBSD
-> use `IP_BOUND_IF` and need no privilege.
+> or add `AmbientCapabilities=CAP_NET_RAW` to the systemd unit. **Without the
+> capability the edge falls back automatically to the unprivileged
+> `IP_UNICAST_IF` egress hint** — the leg still leaves the right NIC, but the
+> hint is TX-only (it doesn't device-bind the receive side), so on a host with
+> overlapping subnets the strict `SO_BINDTODEVICE` path is still preferred.
+> macOS/FreeBSD use `IP_BOUND_IF` and need no privilege.
 
 Everything else about the bond — scheduler choice, ARQ/NACK tuning, monitoring,
 stats — is on the [Multi-Path Bonding](/edge/bonding/) page.
@@ -450,7 +458,9 @@ stats — is on the [Multi-Path Bonding](/edge/bonding/) page.
   --interface` tests; set `rp_filter = 2` on that interface.
 - **Untagged traffic leaks between paths (Design B)** — a modem VLAN is acting
   as the trunk's native VLAN; keep modem VLANs strictly tagged.
-- **`SO_BINDTODEVICE` errors / permission denied** — `CAP_NET_RAW` not granted;
-  see above.
+- **`SO_BINDTODEVICE` permission denied** — `CAP_NET_RAW` not granted, so the
+  edge fell back to the unprivileged `IP_UNICAST_IF` hint (logged at startup).
+  The leg still egresses the right NIC; grant `CAP_NET_RAW` (see above) only if
+  you need the hard RX-side bind on a host with overlapping subnets.
 </content>
 </invoke>

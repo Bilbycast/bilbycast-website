@@ -423,6 +423,13 @@ per-path ports (`0.0.0.0:5000`, `:5001`) with the same path `id`s.
 > overlapping subnets the strict `SO_BINDTODEVICE` path is still preferred.
 > macOS/FreeBSD use `IP_BOUND_IF` and need no privilege.
 
+**Fit the datagram size to the cellular uplink, not the LAN.** The host↔router
+link is gigabit/1500, but each router's **cellular WAN** is still MTU-constrained
+and CGNAT paths black-hole IP fragments — so an oversized bond datagram is lost
+wholesale. Set **`path_mtu`** on the bonded output to the smallest measured
+uplink MTU (measure with `ping -M do`) so the sender re-chunks the TS to fit. See
+[Fitting datagrams to the path MTU](/edge/bonding/#fitting-datagrams-to-the-path-mtu).
+
 Everything else about the bond — scheduler choice, ARQ/NACK tuning, monitoring,
 stats — is on the [Multi-Path Bonding](/edge/bonding/) page.
 

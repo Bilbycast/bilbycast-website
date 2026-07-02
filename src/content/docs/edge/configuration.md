@@ -687,7 +687,8 @@ Generates a synthetic colour-bars-and-tone test pattern as an MPEG-TS stream wit
   "audio_enabled": true,
   "tone_hz": 1000.0,
   "tone_dbfs": -20.0,
-  "av_sync_marker": false
+  "av_sync_marker": false,
+  "ts_packets_per_datagram": 7
 }
 ```
 
@@ -702,6 +703,7 @@ Generates a synthetic colour-bars-and-tone test pattern as an MPEG-TS stream wit
 | `tone_hz` | number | No | `1000.0` | Audio tone frequency. Range 50–8000. |
 | `tone_dbfs` | number | No | `-20.0` | Audio level in dBFS (negative). `-20 dBFS` is the broadcast reference. |
 | `av_sync_marker` | boolean | No | `false` | A/V-sync test mode (EBU R 49 / SMPTE 2-pop style). When `true`, the tone gates into a ~80 ms burst on the timecode second boundary and a luma flash patch appears next to the timecode on the same frames. Offset between audible pip and visible flash reads off directly as A/V skew. Requires `audio_enabled = true`. |
+| `ts_packets_per_datagram` | integer | No | `7` | Number of 188-byte MPEG-TS packets bundled into each UDP datagram on the flow's broadcast channel and the QUIC/UDP tunnel path (both forward each datagram unchanged). Range 1–348 (348 × 188 = 65424 B, the largest that fits one UDP datagram). Default `7` → 7 × 188 = 1316 B, the standard / SRT datagram size. Lower it (e.g. 4–5) for a constrained / low-MTU internet or cellular path where a big datagram IP-fragments and drops; raise it (8+) to test jumbo datagrams on a LAN. Independent of any downstream UDP/RTP/SRT output, which re-chunk to their own fixed 1316 B wire size. |
 
 Requires the edge build to include the `media-codecs` and `fdk-aac` features (both on by default).
 
@@ -1112,11 +1114,18 @@ Sends a media flow over the bilbycast multi-path bonding stack — the bonded tr
   "id": "out-bonded",
   "name": "Bonded send",
   "remote_addr": "203.0.113.10:5500",
-  "encryption_key": "<32-byte hex>"
+  "encryption_key": "<32-byte hex>",
+  "path_mtu": 1000
 }
 ```
 
-The full Bonded protocol — path adapters, link selection, latency budgets, FEC — is covered in [Bonding](/edge/bonding/). At the receiving end, use a matching [Bonded Input](#bonded-input).
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `path_mtu` | integer | No | `1500` | Smallest IP-layer path MTU (bytes) across this bond's legs. The bonded output re-chunks outbound MPEG-TS at 188-byte packet boundaries into datagrams that fit this MTU *after* every per-datagram overhead (IP/UDP, bond header, AEAD envelope, relay / native-UDP tunnel framing, FEC repair headroom), so no leg emits an IP-fragmented datagram. Range `[576, 9000]`. Default `1500` (standard ethernet) derives the classic 1316-byte (7 × 188) TS datagram; a measured ~1000 B cellular bearer derives 752 B (4 × 188). Sender-side only — the bonded input needs no change. See the cellular note below. |
+
+Cellular CGNAT paths routinely drop IP fragments and black-hole PMTU discovery (no ICMP frag-needed returned), so an oversized datagram — a whole I-frame, say — is lost wholesale and unrecoverably even while the leg reports `state=alive` with healthy RTT. Setting `path_mtu` to the measured MTU of the constrained leg eliminates fragmentation; any residual loss is then per-small-datagram and recoverable by the bond's ARQ + FEC. Measure the constrained leg with a DF ping sweep: `ping -M do -s <n>`.
+
+The full Bonded protocol — path adapters, link selection, latency budgets, FEC, and the `path_mtu` reference — is covered in [Bonding](/edge/bonding/). At the receiving end, use a matching [Bonded Input](#bonded-input).
 
 ---
 

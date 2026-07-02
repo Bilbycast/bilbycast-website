@@ -107,6 +107,15 @@ Optional audio and video codec paths ship as Cargo features. The default build e
     exposed through the manager UI and Prometheus
   - QUIC paths negotiate ALPN `bilbycast-bond` (self-signed dev mode
     and production PEM mode both supported)
+  - Output-side MTU-fit re-chunking via an optional `path_mtu` knob
+    (default 1500, range 576–9000): the bonded output re-chunks
+    outbound TS at 188-byte boundaries into datagrams that fit the
+    smallest leg's IP path MTU after all per-datagram overhead, so no
+    leg emits an IP-fragmented datagram. Essential on cellular CGNAT
+    bearers that silently drop fragments and black-hole PMTU discovery
+    — set it to the measured MTU (e.g. ~1000 B → 4 × 188 = 752 B
+    datagrams). Sender-side only; the receiver reassembles regardless
+    of datagram size. See [Multi-Path Bonding](/edge/bonding/)
   - `program_number` filter on the output side for MPTS → SPTS
     down-selection before bonding
 - **When not to use it:** Use libsrt socket groups for two SRT legs to

@@ -201,6 +201,50 @@ both ends can sit behind NAT. See
 Scheduler choice, ARQ/NACK tuning, and stats are all on the
 [Multi-Path Bonding](/edge/bonding/) page.
 
+## Fit the datagram size to the cellular MTU
+
+This is the single most important setting for a cellular bond leg. A cellular
+bearer's real IP-layer MTU is frequently **below the 1500 you'd assume** — a
+carrier-NAT bearer can measure around **1000 bytes**. The bond's default
+datagram is **1316 B (7 × 188 TS packets)**, and anything larger than the leg's
+MTU is **IP-fragmented**. Cellular CGNAT paths **drop IP fragments and
+black-hole PMTU discovery** (no ICMP *fragmentation needed* is returned), so an
+oversized datagram — a whole I-frame, say — is lost **wholesale and
+unrecoverably**. The tell-tale symptom: the leg shows `state=alive` with a
+healthy RTT, but delivers only **~10–15 % of its bytes** and the picture is
+absent or heavily pixelated.
+
+The fix is one field on the bonded output: **`path_mtu`**, set to the smallest
+IP-layer MTU across the bond's legs. The sender then re-chunks the MPEG-TS at
+188-byte boundaries into datagrams that fit that MTU *after* all per-datagram
+overhead (IP/UDP, tunnel framing, bond header, AEAD, FEC), so no leg fragments —
+and any residual loss is per-small-datagram, recoverable by the bond's ARQ + FEC.
+Full field reference:
+[Fitting datagrams to the path MTU](/edge/bonding/#fitting-datagrams-to-the-path-mtu).
+
+**Measure the modem's MTU** with a DF (don't-fragment) ping sweep bound to the
+modem interface — the largest ICMP payload that still gets a reply, plus 28 bytes
+for the IP + ICMP header, is the path MTU:
+
+```bash
+# -s is the ICMP payload; add 28 for the IP+ICMP header to get the MTU.
+ping -M do -I wwan0 -s 1472 8.8.8.8     # 1472 + 28 = 1500; shrink -s until replies stop fragmenting
+ping -M do -I wwan0 -s 972  8.8.8.8     #  972 + 28 = 1000
+```
+
+Then set `path_mtu` on the bonded output to the measured value:
+
+```json
+{ "type": "bonded", "bond_flow_id": 42, "path_mtu": 1000, "paths": [ ... ] }
+```
+
+- Default `1500` → 1316 B (7 × 188) datagrams — fine on a LAN or a full-MTU uplink.
+- A measured ~1000 B cellular bearer → 752 B (4 × 188) datagrams — no fragmentation.
+
+`path_mtu` is **sender-side only**; the receiving edge reassembles in
+bond-sequence order regardless of datagram size, so there is nothing to change on
+the far end.
+
 ## Verify
 
 ```bash

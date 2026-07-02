@@ -165,6 +165,7 @@ locked with a *"Via relay (managed tunnel)"* note.
 | `encryption_key` | string (64 hex) | — | Optional 32-byte ChaCha20-Poly1305 AEAD key applied per-datagram on the UDP legs (QUIC legs are already TLS). Both ends must share it |
 | `retransmit_capacity` | usize | 8192 | Sender retransmit buffer capacity (packets). Must exceed `send_rate_pps × max_nack_round_trip_seconds` |
 | `keepalive_ms` | u32 | 200 | Keepalive interval |
+| `path_mtu` | u32 | 1500 | Smallest IP-layer path MTU across the bond's legs, `[576, 9000]`. The sender re-chunks outbound MPEG-TS at 188-byte boundaries into datagrams that fit this MTU *after* every per-datagram overhead, so no leg emits an IP-fragmented datagram. Lower it for constrained cellular / satellite bearers — see [Fitting datagrams to the path MTU](#fitting-datagrams-to-the-path-mtu). Sender-side only |
 | `program_number` | u16 | — | Optional MPTS → SPTS filter applied before bonding |
 
 Three more optional resilience blocks ship on the bonded output and
@@ -335,6 +336,47 @@ default. Set them under the bonded **output**'s `congestion` object.
 | `probe_cap_mult` | f64 | 2.0 | Evidence bound — a leg's estimate never exceeds `delivered × probe_cap_mult` (suspended while the leg is the clean bottleneck so the bound can't re-pin the leg the bond must grow into) |
 | `rtt_min_window_ms` | u64 | 10000 | Window over which each leg's minimum-RTT baseline is tracked (BBR-style); a route change that shifts the floor ages out instead of reading as permanent congestion |
 | `jitter_demote_ms` | u32 | 150 | Smoothed interarrival jitter above which a leg is demoted from carrying *unique* media (it keeps carrying redundancy / FEC copies). Re-admits when jitter recovers. `0` disables demotion |
+
+## Fitting datagrams to the path MTU
+
+By default the bond emits **1316-byte (7 × 188) TS datagrams** — the classic
+SRT / standard-ethernet size derived from `path_mtu`'s 1500 default. On a
+constrained path that is a problem: a datagram larger than a leg's real
+IP-layer MTU gets **IP-fragmented**, and cellular CGNAT bearers routinely
+**drop IP fragments and black-hole PMTU discovery** (no ICMP *fragmentation
+needed* comes back). The leg then reports `state=alive` with a healthy RTT yet
+delivers only ~10–15 % of its bytes — video absent or heavily pixelated —
+because every oversized datagram (e.g. a whole I-frame) is lost wholesale and
+unrecoverably.
+
+Set **`path_mtu`** on the bonded output to the smallest IP-layer MTU across the
+legs. The sender re-chunks outbound MPEG-TS at 188-byte packet boundaries into
+datagrams that fit `path_mtu` **after every per-datagram overhead** — IP/UDP
+(28 B v4, or 48 B when a leg dials an IPv6 literal or a hostname), relay /
+native-UDP tunnel framing (16 or 44 B), the RIST/RTP carrier (12 B), the bond
+header (12 B, or 16 B with equalization), the AEAD envelope (29 B when
+`encryption_key` is set), plus FEC repair headroom when `fec` or per-leg FEC is
+on. No leg emits a fragmented datagram, so any residual loss is per-small-datagram
+and recoverable by the bond's ARQ + FEC.
+
+- Default `1500` → 1316-byte (7 × 188) datagrams.
+- A measured ~1000-byte cellular bearer → 752-byte (4 × 188) datagrams.
+
+Measure the constrained leg with a **DF (don't-fragment) ping sweep** — the
+largest size that still gets a reply, plus 28 bytes for the IP + ICMP header, is
+that path's MTU:
+
+```bash
+ping -M do -s 1472 <peer>     # 1472 + 28 = 1500; shrink -s until replies stop fragmenting
+```
+
+`path_mtu` is **sender-side only** — the bonded input reassembles in
+bond-sequence order regardless of datagram size, so nothing changes on the
+receiver. Payloads that are not 188-aligned (non-TS essence) cannot be re-chunked
+and are sent whole, flagged via the `oversize_payloads` stat and a
+`bond_payload_exceeds_mtu` warning event. See
+[Cellular Modem Bonding Path → Fit the datagram size to the cellular MTU](/edge/bonding-cellular-modem/#fit-the-datagram-size-to-the-cellular-mtu)
+for the field-measurement recipe on a live SIM.
 
 ## Worked examples
 

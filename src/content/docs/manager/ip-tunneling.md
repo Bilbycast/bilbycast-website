@@ -124,6 +124,8 @@ For the full NIC-pinning rationale (capability grants, the unprivileged fallback
 
 A [multi-path bond](/edge/bonding/) leg can run direct or over a relay, independently per leg. A relayed leg is just a native-UDP tunnel loopback-bridged onto the leg, so the bond's ARQ / FEC / reordering / capacity scheduling all run end-to-end edge↔edge and the relay forwards it opaquely — there is no "bond bridge". Because each relayed leg is its own outbound tunnel, a bond can work with **both ends behind NAT** (a direct bonded leg is asymmetric — the destination must be reachable). Provision per-leg relay routing from the **Bonded-Link wizard** or the **Tunnels** page; see [Bonding over a relay](/edge/bonding/#bonding-over-a-relay-per-leg).
 
+One tuning note for relayed legs: the bonded output's `path_mtu` (the datagram MTU-fit re-chunker that keeps a big datagram from IP-fragmenting and dropping wholesale on a cellular / low-MTU leg) automatically subtracts the relay's extra native-UDP tunnel framing — 16 B, or 44 B when the leg isn't bond-encrypted — from each datagram's TS-payload budget, on top of the usual IP/UDP and bond-header overhead. So set `path_mtu` to the measured physical path MTU of the constrained leg exactly as you would for a direct leg; a relayed leg simply carries a slightly smaller TS payload per datagram at the same `path_mtu`. See the bonded output's `path_mtu` field on the [Bonding](/edge/bonding/) page.
+
 ## Node Network Type
 
 Each node can be tagged with a network type to help the Manager UI suggest tunnels:

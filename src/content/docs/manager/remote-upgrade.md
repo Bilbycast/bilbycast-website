@@ -97,11 +97,23 @@ Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_sta
 | `upgrade_channel_not_allowed` | Node's `[upgrade] allowed_channels` doesn't include the requested channel | Add the channel locally and restart. |
 | `upgrade_version_too_old` | Node's `[upgrade] min_version` is higher than the requested version | Pick a newer version. |
 | `upgrade_signature_invalid` / `upgrade_identity_not_allowed` | The manifest's Sigstore signature didn't pass — either tampering or a release workflow path that doesn't match the node's compiled-in allowlist | If you renamed the release workflow recently, you must publish a new release from the OLD workflow first that carries the new allowlist. |
+| `upgrade_failed` with a "manifest fetch failed" / download error | The node couldn't fetch `manifest.json` or the release tarball from GitHub. Causes: transient network / DNS / TLS trouble, a proxy or firewall between the node and GitHub, or an **older node build whose upgrader doesn't recognise GitHub's current release-CDN host** (GitHub answers a release download with a `302` redirect to `*.githubusercontent.com` and renames that host from time to time). | Confirm the node has outbound HTTPS to **both** `github.com` and the `*.githubusercontent.com` release CDN, then retry. If the node's own upgrader is too old to follow GitHub's current redirect, a UI upgrade can't self-heal it — [recover it out-of-band](#recovering-a-node-whose-upgrader-is-stuck). |
 | `upgrade_checksum_mismatch` | The downloaded tarball's SHA-256 doesn't match what the verified manifest claims | Network corruption or release-asset tampering. Retry; if it persists, file a security issue. |
 | `upgrade_disk_full` | Less than ~3× the tarball size free on the install root | Free up disk on the node. |
 | `upgrade_rolled_back` | The new version failed to come up healthy; watchdog reverted | Inspect `journalctl -u bilbycast-edge -e` on the node for the actual failure. The node is running the previous version again — safe to investigate. |
 
 For deeper diagnostics, the edge ships a per-event `details.error_code` on every `category: upgrade` event — filter the events page by that category to see the full state machine.
+
+### Recovering a node whose upgrader is stuck
+
+The manager-driven flow relies on the node's **currently-running** binary to fetch and verify the next one. So if a node is stuck on a build whose upgrader itself is broken — it can't reach GitHub, can't follow a changed release-CDN redirect, or predates the upgrade module entirely — scheduling another UI upgrade won't help: the same broken code runs the download.
+
+Recover it out-of-band by re-running the installer **on the box**. The installer fetches and verifies the release directly (it follows GitHub's download redirects via `curl`, independently of the node's own upgrader), so it isn't affected by whatever left the in-process upgrader stuck:
+
+- **Edge** — re-run the [curl-pipe-bash installer](/edge/getting-started/) or the [manual tarball upgrade](/edge/getting-started/#manual-upgrade). Both verify the Sigstore signature against the same allowlist the UI path uses, then swap the `current` symlink and respawn.
+- **Sidecar** — re-run the [Appear X gateway installer](/appear-x-gateway/setup-guide/).
+
+Once the node is on a fixed build and re-registers over the WebSocket, the manager UI upgrade path works normally again.
 
 ## See also
 

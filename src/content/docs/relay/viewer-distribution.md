@@ -41,65 +41,53 @@ curl -fsSL -o bilbycast-relay \
 chmod +x bilbycast-relay
 ```
 
-The capability is **off until you configure it** — this binary still behaves as a
-pure forwarder unless you add the `distribution` block below.
-
-## 2. Configure it
-
-Add a `distribution` block to the relay's config:
-
-```json
-{
-  "distribution": {
-    "enabled": true,
-    "http_addrs": ["0.0.0.0:4485", "[::]:4485"],
-    "public_ip": "203.0.113.10",
-    "public_base_url": "https://relay.example.com",
-    "ingest_addrs": ["0.0.0.0:4486", "[::]:4486"],
-    "token_secret": "<64 hex chars — the same value you set in the manager>",
-    "require_viewer_token": false,
-    "require_ingest_token": true,
-    "max_viewers_per_ip": 256,
-    "origin_window_segments": 8
-  }
-}
-```
-
-- **`public_ip`** — the relay's reachable IP, advertised to browsers so their
-  WebRTC media can reach it. Required for viewers off the relay's own network.
-- **`public_base_url`** — the HTTPS URL viewers use (see TLS below).
-- **`token_secret`** — a shared 64-hex secret; set the same value on the manager
-  (`distribution_token_secret` setting) so its minted viewer links validate.
+Run it (or install it as a service). It comes up **idle and secure** and is
+configured entirely from the manager — no config-file editing.
 
 ### TLS / secure context
 
 Browsers require a secure context, so **front the relay's HTTP listener
 (`:4485`) with a TLS-terminating reverse proxy or load balancer** presenting a
-CA-signed certificate on `public_base_url`'s hostname. (The WebRTC media path is
-independently encrypted with DTLS/SRTP either way.)
+CA-signed certificate on the relay's hostname, and use that `https://` hostname
+as the public base URL below. (The WebRTC media path is independently encrypted
+with DTLS/SRTP either way.)
 
-## 3. Send a stream to it
+## 2. Configure it from the manager
 
-**No edge changes needed.** On the edge's flow, add (or edit) a **WebRTC output**
-in WHIP-client mode and point its endpoint at the relay:
+On the relay's detail page, open **Configure distribution** and set:
 
-```
-https://relay.example.com/whip/<stream-name>
-```
+- **Public IP** — the relay's reachable IP (advertised to browsers so their
+  WebRTC media can reach it).
+- **Public base URL** — the `https://` hostname viewers use.
+- **Require ingest token** (recommended on) / **Require viewer token** (off =
+  public streams).
+- **Cascade sources** — optional, for scale-out (see below).
 
-The edge's existing output does the H.264 + Opus encoding; the relay fans it out.
+Click **Save + push to relay**. The manager generates a shared token secret (or
+use the one on the Settings page), stores your config, and pushes it to the
+relay. The relay applies it live and remembers it across restarts — you never
+edit the relay's `config.json`.
+
+## 3. Send a stream to it — one click
+
+**No edge changes needed.** On the edge flow, add a **WebRTC output**, and in the
+WHIP-client fields use **"Distribute via a bilbycast relay"**: pick your
+distribution relay, type a stream name, and click **Fill from relay**. The
+manager mints the tokens, fills in the WHIP URL + token, and shows you a
+shareable viewer link. Save the output — the edge starts pushing to the relay,
+which fans it out to browsers.
 
 ## 4. Share the viewer link
 
-Viewers open, in any modern browser:
+The **Fill from relay** step gives you a copyable link like:
 
 ```
 https://relay.example.com/watch/<stream-name>
 ```
 
-That's a built-in player. For embedding in your own page, point a WHEP player at
-`https://relay.example.com/whep/<stream-name>`. The relay caches the latest
-keyframe, so late-joiners start playing immediately.
+Open it in any modern browser — that's a built-in player. For embedding in your
+own page, point a WHEP player at `https://relay.example.com/whep/<stream-name>`.
+The relay caches the latest keyframe, so late-joiners start playing immediately.
 
 The relay's detail page in the manager shows a **Viewer Distribution** card with
 live viewer counts, active streams, and bytes served.
@@ -119,8 +107,9 @@ viewers before its uplink or CPU saturates. Beyond that:
 - **WHEP cascade** — deploy additional *regional* relays that pull the stream
   from an *origin* relay and re-fan-it-out locally. Each regional relay is
   simply a WHEP client of the origin, so an origin feeds N regionals and each
-  serves nearby viewers. Configure a regional relay with a `cascade_sources`
-  entry pointing at the origin's WHEP URL:
+  serves nearby viewers. Add cascade sources from the regional relay's
+  **Configure distribution** panel in the manager (one line per source:
+  `local_stream  http://origin-relay:4485/whep/stream`), or in config:
 
   ```json
   {

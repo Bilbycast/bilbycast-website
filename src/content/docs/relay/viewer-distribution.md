@@ -116,8 +116,29 @@ viewer links via `POST /api/v1/nodes/{relay}/distribution/streams` — the retur
 A single relay serves roughly **hundreds to low-thousands** of concurrent WHEP
 viewers before its uplink or CPU saturates. Beyond that:
 
-- **WHEP** — deploy additional regional relays and let the manager assign
-  viewers to the nearest one *(cascade — roadmap)*.
+- **WHEP cascade** — deploy additional *regional* relays that pull the stream
+  from an *origin* relay and re-fan-it-out locally. Each regional relay is
+  simply a WHEP client of the origin, so an origin feeds N regionals and each
+  serves nearby viewers. Configure a regional relay with a `cascade_sources`
+  entry pointing at the origin's WHEP URL:
+
+  ```json
+  {
+    "distribution": {
+      "enabled": true,
+      "cascade_sources": [
+        { "upstream_whep_url": "http://origin-relay:4485/whep/big-game",
+          "local_stream": "big-game",
+          "token": "<origin viewer token, if the origin is gated>" }
+      ]
+    }
+  }
+  ```
+
+  Viewers then watch `https://<regional-relay>/watch/big-game`. Point each
+  viewer at the nearest regional relay (automatic geo assignment is a planned
+  manager enhancement).
+
 - **LL-HLS** — front the relay's origin (`/origin/<stream>/…`, fed by the edge's
   CMAF output) with any CDN. This inherits HTTP caching and scales to millions
   with zero per-viewer state, at the cost of a few seconds of latency.

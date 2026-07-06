@@ -13,6 +13,8 @@ It forwards three logically distinct path types, all the same opaque way:
 - **Native SRT / RIST over relay** — plain UDP, no QUIC (`:4434`), so SRT/RIST keep their own ARQ + congestion control without QUIC's overhead.
 - **Individual bond legs** — a relayed [multi-path bond](/edge/bonding/) leg is just a native plain-UDP tunnel. Bond aggregation, cross-leg ARQ, FEC, and reordering run **end-to-end edge↔edge**; the relay forwards each leg opaquely. There is **no "bond bridge"** — the relay does not terminate or combine bonds.
 
+A relay can also optionally run as a [**viewer-distribution node**](/relay/viewer-distribution/) — reaching browser viewers directly with a WHEP SFU (sub-second WebRTC) plus an LL-HLS/CMAF origin (CDN-scale), with no external streaming server and no ports opened on the edge. This is a separate, default-off capability shipped in the `-distribution` release variant; the opaque forwarding described above is unaffected.
+
 ## Key Features
 
 - **Zero-config startup** — Runs with no config file, self-signed TLS certificate auto-generated
@@ -23,6 +25,7 @@ It forwards three logically distinct path types, all the same opaque way:
 - **Optional tunnel auth** — Per-tunnel HMAC-SHA256 bind tokens managed via manager
 - **Manager integration** — Optional WebSocket connection for centralized monitoring
 - **Lock-free design** — DashMap registries, AtomicU64 stats, zero Mutex usage
+- **Viewer distribution (optional)** — [WHEP SFU + LL-HLS origin](/relay/viewer-distribution/) to reach browser viewers natively; default-off, in the `-distribution` release variant
 
 ## Security Layers
 

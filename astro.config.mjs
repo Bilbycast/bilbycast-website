@@ -91,6 +91,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'relay/overview' },
 						{ label: 'Install the Relay', slug: 'relay/getting-started' },
+						{ label: 'Viewer Distribution (WHEP + LL-HLS)', slug: 'relay/viewer-distribution' },
 						{ label: 'Architecture', slug: 'relay/architecture' },
 						{ label: 'Security & Authentication', slug: 'relay/security' },
 						{ label: 'API Reference', slug: 'relay/api-reference' },

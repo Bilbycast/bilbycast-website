@@ -307,7 +307,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Status:** Fully implemented. The `webrtc` feature is enabled by default.
 - **Four modes:**
   - **WHIP input** (server): Accept contributions from OBS, browsers — endpoint at `/api/v1/flows/{id}/whip`
-  - **WHIP output** (client): Push media to external WHIP endpoints (CDN, cloud)
+  - **WHIP output** (client): Push media to external WHIP endpoints (CDN, cloud) — or to a bilbycast relay's [viewer-distribution](/relay/viewer-distribution/) ingest to reach browser viewers natively (WHEP SFU + LL-HLS), with no external streaming server and no ports opened on the edge
   - **WHEP output** (server): Serve browser viewers — endpoint at `/api/v1/flows/{id}/whep`
   - **WHEP input** (client): Pull media from external WHEP servers
 - **Video:** H.264 only on egress (browsers don't decode HEVC over WebRTC). HEVC sources are auto-transcoded to H.264 by the same `VideoDecoder` / `VideoEncoder` pair used for explicit `video_encode` — drop an HEVC SRT feed onto a WHEP output and browsers just work. Validation rejects `x265` / `hevc_nvenc` targets for WebRTC outputs. The encoder is opened with `global_header = false` so SPS/PPS ride in-band on every IDR and the RFC 6184 packetizer forwards them as ordinary NAL units

@@ -54,19 +54,36 @@ with DTLS/SRTP either way.)
 
 ## 2. Configure it from the manager
 
-On the relay's detail page, open **Configure distribution** and set:
+On the relay's detail page, click **Configure →** on the Viewer Distribution
+card (or open the relay's **Configure** page and pick the **Distribution** tab).
+Set:
 
 - **Public IP** — the relay's reachable IP (advertised to browsers so their
-  WebRTC media can reach it).
-- **Public base URL** — the `https://` hostname viewers use.
+  WebRTC media can reach it). The form suggests the address the manager already
+  observed for the relay — click to accept it. It must be a routable IP, not a
+  hostname or a private/LAN address; the readiness panel flags either.
+- **Public base URL** — the `https://` hostname viewers use. The readiness panel
+  shows a hard warning if it isn't `https://`, because browsers silently refuse
+  WebRTC and playback from a non-secure origin — the most common "it just doesn't
+  work" trap. The form suggests the URL the relay already advertises.
 - **Require ingest token** (recommended on) / **Require viewer token** (off =
-  public streams).
-- **Cascade sources** — optional, for scale-out (see below).
+  public streams). Each shows the consequence of the choice inline.
+- **Cascade sources** — optional, for scale-out (see below). Add one structured
+  row per source; the form validates each and warns if a source points back at
+  this relay (a cascade loop).
+
+The **Readiness** panel at the top of the form is a live checklist (secure
+context, routable public IP, token secret, relay online) so you can see whether
+viewers will actually be able to connect before you walk away.
 
 Click **Save + push to relay**. The manager generates a shared token secret (or
 use the one on the Settings page), stores your config, and pushes it to the
 relay. The relay applies it live and remembers it across restarts — you never
-edit the relay's `config.json`.
+edit the relay's `config.json`. If the relay is momentarily offline the config
+is stored and applied automatically on reconnect (the result line tells you
+which happened). A **Get a viewer link** helper on the same page mints a
+shareable `…/watch/{stream}` link and shows you its expiry so you don't hand out
+a link that stops working before the event.
 
 ## 3. Send a stream to it — one click
 
@@ -107,9 +124,9 @@ viewers before its uplink or CPU saturates. Beyond that:
 - **WHEP cascade** — deploy additional *regional* relays that pull the stream
   from an *origin* relay and re-fan-it-out locally. Each regional relay is
   simply a WHEP client of the origin, so an origin feeds N regionals and each
-  serves nearby viewers. Add cascade sources from the regional relay's
-  **Configure distribution** panel in the manager (one line per source:
-  `local_stream  http://origin-relay:4485/whep/stream`), or in config:
+  serves nearby viewers. Add cascade sources on the regional relay's
+  **Configure → Distribution** tab in the manager (one structured row per
+  source: local stream id · upstream WHEP URL · optional token), or in config:
 
   ```json
   {

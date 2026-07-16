@@ -109,6 +109,7 @@ Static support is one thing; what your host actually opens at runtime is another
 | x86_64 AMD | VAAPI | libx265 (AMD radeonsi rejects 4:2:2) |
 | aarch64 NVIDIA Jetson | NVENC | libx265 |
 | aarch64 AMD APU SBC | VAAPI | libx265 |
+| aarch64 Rockchip RK3568 / RK3588 | RKMPP | libx265 (RKMPP is 8-bit 4:2:0 only) |
 | Headless / no GPU | libx264 | libx265 |
 
 ## Verification — confirm Auto activates the right backend

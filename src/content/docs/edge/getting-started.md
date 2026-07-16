@@ -32,6 +32,10 @@ tar xzf "bilbycast-edge-$(uname -m)-linux-full.tar.gz"
 cd bilbycast-edge-*
 ```
 
+:::note[Rockchip SBCs — use the `rockchip` build]
+On a Rockchip RK3568 / RK3588 board (NanoPi R5S/R6S, Orange Pi 5, Radxa Rock 5B…), `$(uname -m)` is `aarch64`, so the commands above fetch the generic `aarch64-linux-full` build — which has **no** RKMPP hardware encoder. To get RKMPP (`h264_rkmpp` / `hevc_rkmpp`), download `bilbycast-edge-aarch64-linux-rockchip.tar.gz` instead (swap `aarch64-linux-full` for `aarch64-linux-rockchip` above). It needs a Rockchip **BSP kernel** exposing `/dev/mpp_service` and the BSP's `librockchip_mpp.so`. See the [codec matrix](/edge/codec-matrix/) for what RKMPP encodes (8-bit 4:2:0; x264/x265 handle the rest). The manager's remote-upgrade path selects this build automatically once a node is running it.
+:::
+
 ### 2. Create the node in the manager
 
 1. Sign in to the manager UI.

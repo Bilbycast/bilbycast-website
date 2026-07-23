@@ -9,7 +9,7 @@ sidebar:
 
 bilbycast-edge is a media gateway supporting multiple transport protocols for professional broadcast and streaming workflows.
 
-Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `media-codecs` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC software video encoding requires `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), or `video-encoder-nvenc` (NVIDIA GPU required); the `*-full` release channel bundles all three. The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
+Optional audio and video codec paths ship as Cargo features. The default build enables `fdk-aac` (in-process AAC via Fraunhofer FDK AAC) and `media-codecs` (FFmpeg libavcodec/libswscale for in-process video decode + JPEG encode + Opus/MP2/AC-3 audio encode). H.264/HEVC video encoding requires a video-encoder feature — `video-encoder-x264` (GPL), `video-encoder-x265` (GPL), `video-encoder-nvenc` (NVIDIA), `video-encoder-qsv` (Intel), or `video-encoder-vaapi`; the `*-full` release channel bundles all five (plus the matching HW decoders). The full video-encode reference, per-codec defaults, and licence breakdown live in `bilbycast-edge/docs/transcoding.md` in the repo.
 
 ## Input Protocols
 
@@ -84,8 +84,9 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 
 ### Bonded (multi-path aggregation)
 - **Direction:** Input and Output
-- **Transport:** N heterogeneous paths over UDP, QUIC (RFC 9221 DATAGRAM),
-  or RIST Simple Profile, chosen per-path
+- **Transport:** N heterogeneous aggregation legs over UDP or QUIC
+  (RFC 9221 DATAGRAM), chosen per-leg. (RIST is unidirectional at the
+  bond layer, so it is not selectable as an aggregation leg.)
 - **Payload:** Any bytes — MPEG-TS, RTP, or raw — framed inside a 12-byte
   bond header with a 32-bit sequence across all paths
 - **Scheduler:** `adaptive` default (walks H.264/HEVC NAL units and
@@ -123,6 +124,19 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   the universal option for N ≥ 2 heterogeneous links carrying any
   inner protocol — see [Multi-Path Bonding](/edge/bonding/) for the
   full reference.
+
+### Synthetic / local inputs (`test_pattern`, `media_player`, `replay`)
+- **Direction:** Input
+- **`test_pattern`** — a synthetic colour-bar / test-raster generator (optional
+  screen-ID text, tone/beep ident, A/V-sync sweep) muxed as a paced MPEG-TS.
+  No external source needed — handy for standing up and validating a flow.
+- **`media_player`** (default `media-codecs` build) — replays a playlist of
+  local assets (TS / MP4 / MOV / MKV / still image) from the edge media
+  library as a paced fresh MPEG-TS: `loop_playback`, `shuffle`, optional
+  `paced_bitrate_bps` (TS only), and optional MPTS→SPTS `program_number`.
+- **`replay`** (default-on `replay` feature) — plays a recorded clip or
+  recording back into a flow as a fresh input, driven by the replay
+  command channel (cue / play / scrub). See [Replay](/edge/replay/).
 
 ## Output Protocols
 
@@ -317,6 +331,53 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Security:** Bearer token authentication on WHIP/WHEP endpoints, DTLS/SRTP encryption, ICE-lite for server modes.
 - **NAT traversal:** Configurable `public_ip` and optional `stun_server` for ICE candidate advertisement.
 
+### SDI (Blackmagic DeckLink) — `sdi-decklink` feature
+- **Direction:** Input and Output (`type: "sdi"`)
+- **Status:** Off in a plain `cargo build`, but compiled into every `*-full`
+  release artefact on both arches (when the DeckLink SDK headers are available
+  at build time). Also needs `media-codecs` (default on). Talks to the
+  Blackmagic DeckLink SDK directly through the sibling `bilbycast-decklink-rs`
+  crate — **not** FFmpeg's `decklink` avdevice (which hides
+  `bmdFrameHasNoInputSource`, making a pulled cable look like a live feed).
+- **Input (capture):** UYVY422 8-bit capture → encoder (x264 / x265 / NVENC /
+  QSV / VAAPI / `*_auto`) + embedded-PCM → AAC → MPEG-TS onto the flow.
+  VANC extraction covers SCTE-104/35 (translated to a SCTE-35 PID), SMPTE 12M
+  ATC timecode, and CEA-608/708 caption presence. Signal loss raises
+  `sdi_signal_lost` / `sdi_signal_restored` events.
+- **Output (playout):** decode the flow's video + audio and play out to the
+  card with hardware A/V sync and optional SCTE-35→SCTE-104 VANC injection.
+- **Runtime:** `libDeckLinkAPI.so` (Blackmagic Desktop Video) is `dlopen`ed;
+  the boot probe enumerates cards and advertises the `sdi-decklink` capability
+  only on success, so a host with no card simply doesn't offer SDI. Per-port
+  hardware health rides `HealthPayload.sdi_devices[]`.
+
+### MXL (Media eXchange Layer) — `mxl` feature
+- **Direction:** Input and Output (`mxl_video` / `mxl_audio` / `mxl_anc`)
+- **Status:** **Off by default** (heavy build prerequisites). EBU / Linux
+  Foundation same-host shared-memory bus mirroring the ST 2110-20/-30/-40
+  pattern for cloud-native broadcast composition. The MXL **video** bridge
+  (V210 ↔ H.264/HEVC) is implemented; the MXL audio bridge is currently a stub.
+- **PTP:** mandatory at validation time (`master_clock = wallclock` is rejected
+  on MXL flows). The boot probe `dlopen`s `libmxl.so` and only advertises the
+  `mxl-video` / `mxl-audio` / `mxl-anc` capability bits on success.
+- **Reference:** dedicated [MXL](/edge/mxl/) page for config, install, and
+  capability details.
+
+### Local-display output (HDMI / DisplayPort + ALSA) — `display` feature
+- **Direction:** Output only (`type: "display"`)
+- **Status:** `display` feature is **on by default** (Linux-only effect).
+  Decodes the flow's video + audio and renders to a KMS connector
+  (HDMI / DisplayPort) plus an ALSA audio device — a confidence / playout
+  monitor with no network egress.
+- **Pipeline:** demux + decode (H.264 / HEVC video, AAC / MP2 / AC-3 / E-AC-3 /
+  Opus audio) → KMS/DRM atomic-commit page flip (zero-copy VAAPI DMA-BUF
+  scanout where available, CPU-blit fallback otherwise) + blocking ALSA
+  playback. A/V sync is audio-master. Optional audio-bars overlay, HDR-on-HDR
+  passthrough with HDR-on-SDR tonemap fallback, and bob deinterlacing.
+- **Runtime:** capability `"display"` advertised only when the feature is on
+  **and** at least one KMS connector enumerates; `HealthPayload.display_devices`
+  drives the manager UI's connector dropdown.
+
 ## MPEG-TS Program Handling
 
 ### MPTS / SPTS Support
@@ -407,6 +468,8 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `webrtc` | Enable WebRTC WHIP/WHEP input and output via `str0m` | **Yes** |
 | `fdk-aac` | In-process AAC decode + encode via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1). Replaces symphonia decode and the ffmpeg AAC encode subprocess | **Yes** |
 | `media-codecs` | In-process video decode, JPEG thumbnail encode, uncompressed ST 2110-20/-23 video decode, and Opus / MP2 / AC-3 audio encode via FFmpeg libavcodec / libswscale / libopus. Eliminates all ffmpeg subprocess dependencies on the default build | **Yes** |
+| `replay` | Continuous flow recording to disk + clip playback as a fresh input (variable-speed 0.1×–1.0×, frame-step, MP4 export, recordings library). Pure Rust, no new C deps | **Yes** |
+| `display` | Local-display output (HDMI / DisplayPort via KMS + ALSA) for confidence-monitor playout. Linux-only effect | **Yes** |
 | `video-encoder-x264` | H.264 video transcoding via libx264. **GPL v2+** — binaries with this feature are an AGPL-3.0-or-later combined work | No |
 | `video-encoder-x265` | HEVC video transcoding via libx265. **GPL v2+** — same combined-work implications as x264 | No |
 | `video-encoder-nvenc` | NVIDIA NVENC H.264 / HEVC hardware encoders. LGPL-clean API layer; requires an NVIDIA GPU + proprietary driver at runtime | No |

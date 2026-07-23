@@ -15,7 +15,7 @@ For the operator-facing `/replay` UI in the manager — JKL scrubbing, push-to-a
 - **Compliance recording** — continuous capture of an outgoing feed with a 24 h retention default. The recorder is a sibling subscriber on the broadcast channel and never feeds back into the data path, so enabling recording cannot affect live egress.
 - **Time-shift workflows** — record the rehearsal and play it out as a fresh input on a different flow, paced by PCR.
 
-It is **not** a video editing surface. There is no reverse playback, slow-motion, multi-track timeline, or render-to-file export.
+It is **not** a video editing surface. There is no reverse playback or multi-track timeline. Variable-speed slow-motion (0.1×–1.0× forward) is supported, and clips or whole recordings can be exported to MP4 (see [Export to MP4](#export-to-mp4) below).
 
 ## Storage root
 
@@ -96,7 +96,26 @@ Add a new input with `type: "replay"`:
 | `start_paused` | `true` | When `true`, the input idles on flow start until a `play_clip` / `cue_clip` command activates playback. |
 | `loop_playback` | `false` | When `true`, restart at the beginning on EOF. |
 
-Phase 1 supports **1.0× forward playback only** — no reverse, no slow-mo. Mark / cue / play / scrub / stop are driven by WS commands (`mark_in`, `mark_out`, `cue_clip`, `play_clip`, `scrub_playback`, `stop_playback`).
+Playback is **forward-only** but variable-speed: **0.1×–1.0×** (no reverse). Set the rate with the `speed` param on `play_clip`, or live via the `set_speed` command; `step_frame` single-steps forward **or** backward while paused.
+
+Playback and clip lifecycle are driven by WS commands:
+
+| Command | Purpose |
+|---|---|
+| `mark_in` / `mark_out` | Set the in/out points of a new clip. |
+| `cue_clip` | Load a clip and hold on its first frame. |
+| `play_clip` | Start playback (optional `speed` param, `0.1`–`1.0`). |
+| `set_speed` | Change the playback rate live (`0.1`–`1.0`). |
+| `step_frame` | Single-step one frame forward or backward while paused. |
+| `scrub_playback` | Seek to an arbitrary PTS. |
+| `stop_playback` | Stop / cancel playback. |
+| `list_recordings` | Enumerate the on-disk Recordings library. |
+| `delete_recording` | Remove a recording and its clips from disk. |
+| `export_clip` / `export_recording` | Render a clip or whole recording to MP4 (see [Export to MP4](#export-to-mp4)). |
+
+## Export to MP4
+
+`export_clip` and `export_recording` remux the on-disk MPEG-TS to a fragmented MP4 (`format: "mp4"`) via the TS→fMP4 remuxer, with a plain TS download also available. The edge advertises the `replay_export_mp4` capability, and the manager UI gates its export controls on this bit — older edges without the capability simply don't offer export.
 
 ## Operating modes
 

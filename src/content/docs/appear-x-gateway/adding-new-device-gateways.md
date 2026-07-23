@@ -208,15 +208,15 @@ And add `pub mod <device>;` to `manager-core/src/drivers/mod.rs`.
 
 ## Reference: what the Appear X gateway does
 
-To make the abstract template concrete, the Appear X gateway runs three concurrent tasks:
+To make the abstract template concrete, the Appear X gateway is built from three parts. Two run as concurrent top-level tasks — the SDK `GatewayClient` (WebSocket client) and the polling engine — while the command handler is a `CommandHandler` trait the SDK read loop invokes inline (not a separately spawned task):
 
-| Task | Source | Purpose |
+| Part | Source | Purpose |
 |---|---|---|
-| WebSocket client | `ws/client.rs` | Connects to manager, handles auth, sends stats/health, receives commands |
+| WebSocket client (SDK `GatewayClient`) | `bilbycast-gateway-sdk` | Connects to manager, handles auth, sends stats/health, receives commands; its read loop dispatches each command inline |
 | Polling engine | `appear_x/polling.rs` | Periodically calls Appear X JSON-RPC methods, maps responses to manager stats/health messages |
-| Command handler | `appear_x/commands.rs` | Receives commands from manager via the WS client, translates them to Appear X JSON-RPC calls, returns ack |
+| Command handler | `appear_x/commands.rs` | `CommandHandler` trait invoked inline by the SDK read loop; translates each command to Appear X JSON-RPC calls and returns the value the SDK packs into `command_ack` |
 
-It polls six data types (alarms, chassis, IP inputs, IP outputs, services, IP interfaces) at independently-configurable intervals, derives health from alarm severity (`MAJOR`/`CRITICAL` → critical, `MINOR`/`WARNING` → degraded, none → ok), and translates eight manager command types into Appear X JSON-RPC calls.
+It polls a range of data types (alarms, chassis, IP inputs, IP outputs, services, IP interfaces, plus card status, XGER config, and uptime) at independently-configurable intervals — with configurable SFP RX-level and temperature thresholds — derives health from alarm severity (`MAJOR`/`CRITICAL` → critical, `MINOR`/`WARNING` → degraded, none → ok), and translates 73 distinct manager command types into Appear X JSON-RPC calls.
 
 The manager-side `AppearXDriver` lives in the `device-appear-x` plugin crate (`crates/device-appear-x/src/lib.rs`) and exposes its AI actions all in `command` execution mode.
 

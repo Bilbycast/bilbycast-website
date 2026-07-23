@@ -5,7 +5,9 @@ sidebar:
   order: 4
 ---
 
-Complete REST API reference for bilbycast-edge. The API server listens on the address and port configured in `server.listen_addr` and `server.listen_port` (default `0.0.0.0:8080`).
+Complete REST API reference for bilbycast-edge. The API server binds the addresses configured in `server.listen_addrs` (dual-stack, precedence over the legacy single `server.listen_addr`) on port `server.listen_port` (default `8080`). New installs bind **loopback only** — `127.0.0.1` and `[::1]` — so the API is not reachable off-box out of the box. LAN exposure requires launching with `--bind-addrs 0.0.0.0,[::]` (or setting `server.listen_addrs` accordingly) **and** enabling authentication.
+
+**Inputs, outputs, and flows are independent first-class entities.** Inputs and outputs are top-level, individually CRUDable resources; a flow references them by ID via its `input_ids` and `output_ids` arrays rather than embedding their definitions. Internally the edge resolves those IDs into a `ResolvedFlow` (dereferencing every input/output) before the engine runs the flow.
 
 All successful responses use a standard envelope:
 
@@ -32,9 +34,11 @@ All error responses use the same envelope without `data`:
 - [Health](#health)
 - [Setup Wizard](#setup-wizard)
 - [Authentication](#authentication)
+- [Inputs](#inputs)
 - [Flows](#flows)
 - [Flow Actions](#flow-actions)
 - [Outputs](#outputs)
+- [PTP](#ptp)
 - [Statistics](#statistics)
 - [Configuration](#configuration)
 - [Tunnels](#tunnels)
@@ -231,6 +235,73 @@ The returned JWT contains these claims:
 
 ---
 
+## Inputs
+
+Inputs are top-level, first-class entities, independent of any flow. A flow references inputs by ID via its `input_ids` array; the same input can be referenced by more than one flow. Create/read/update/delete them here, then wire them into flows.
+
+The request/response body is an `InputDefinition` whose `type` field selects the variant. `type` is a free-form string: `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](configuration-guide.md) for per-type fields.
+
+### GET /api/v1/inputs
+
+List all configured inputs.
+
+**Auth:** Requires valid JWT (any role).
+
+### POST /api/v1/inputs
+
+Create a new input. The definition is validated and persisted.
+
+**Auth:** Requires `admin` role.
+
+**Request body:**
+
+```json
+{
+  "type": "rtp",
+  "id": "rtp-in-1",
+  "name": "Main RTP Input",
+  "bind_addr": "239.1.1.1:5000",
+  "interface_addr": "192.168.1.100",
+  "fec_decode": { "columns": 10, "rows": 10 }
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Validation failure (invalid addresses, empty ID/name, bad FEC params) |
+| 409 | An input with the same ID already exists |
+| 500 | Failed to persist config to disk |
+
+### GET /api/v1/inputs/{input_id}
+
+Retrieve a single input definition.
+
+**Auth:** Requires valid JWT (any role). Returns 404 if not found.
+
+### PUT /api/v1/inputs/{input_id}
+
+Replace an input definition. Flows referencing this input pick up the change on their next (re)start; hot-swappable changes are applied surgically without stopping running outputs where possible.
+
+**Auth:** Requires `admin` role.
+
+### DELETE /api/v1/inputs/{input_id}
+
+Delete an input. Fails if the input is still referenced by a flow.
+
+**Auth:** Requires `admin` role.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 404 | Input not found |
+| 409 | Input is still referenced by one or more flows |
+| 500 | Failed to persist config to disk |
+
+---
+
 ## Flows
 
 ### GET /api/v1/flows
@@ -270,8 +341,8 @@ List all configured flows. Returns a summary for each flow without full input/ou
 | `flows[].id` | string | Unique flow identifier |
 | `flows[].name` | string | Human-readable display name |
 | `flows[].enabled` | boolean | Whether the flow is enabled in config |
-| `flows[].input_type` | string | `"rtp"` or `"srt"` |
-| `flows[].output_count` | integer | Number of configured outputs |
+| `flows[].input_type` | string | Type of the flow's first referenced input. A free-form string — one of `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). |
+| `flows[].output_count` | integer | Number of outputs referenced by the flow |
 
 **curl example:**
 
@@ -283,7 +354,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/flows
 
 ### GET /api/v1/flows/{flow_id}
 
-Retrieve the full configuration of a single flow, including all input and output details.
+Retrieve the full configuration of a single flow. A flow references its input(s) and output(s) by ID — the returned object carries `input_ids` and `output_ids`, not embedded definitions. Fetch the referenced entities from `GET /api/v1/inputs/{id}` and `GET /api/v1/outputs/{id}`.
 
 **Auth:** Requires valid JWT (any role).
 
@@ -302,36 +373,13 @@ Retrieve the full configuration of a single flow, including all input and output
     "id": "main-feed",
     "name": "Main Program Feed",
     "enabled": true,
-    "input": {
-      "type": "rtp",
-      "bind_addr": "239.1.1.1:5000",
-      "interface_addr": "192.168.1.100",
-      "fec_decode": {
-        "columns": 10,
-        "rows": 10
-      }
-    },
-    "outputs": [
-      {
-        "type": "rtp",
-        "id": "rtp-out-1",
-        "name": "Local Playout",
-        "dest_addr": "192.168.1.50:5004",
-        "dscp": 46
-      },
-      {
-        "type": "srt",
-        "id": "srt-out-1",
-        "name": "Remote Site",
-        "mode": "caller",
-        "local_addr": "0.0.0.0:0",
-        "remote_addr": "203.0.113.10:9000",
-        "latency_ms": 500
-      }
-    ]
+    "input_ids": ["rtp-in-1"],
+    "output_ids": ["rtp-out-1", "srt-out-1"]
   }
 }
 ```
+
+`input_ids` is normally a single-element array; it carries multiple IDs for redundancy (SMPTE 2022-7 hitless) and switcher flows. `output_ids` lists every output the flow fans out to. The engine dereferences these into a `ResolvedFlow` (pulling each `InputDefinition` / `OutputConfig` from the top-level entity tables) before starting the flow.
 
 **Error responses:**
 
@@ -349,7 +397,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/flows/main-f
 
 ### POST /api/v1/flows
 
-Create a new flow. The flow is validated, persisted to the config file, and (if `enabled: true`) started immediately.
+Create a new flow. The flow is validated, persisted to the config file, and (if `enabled: true`) started immediately. The `input_ids` and `output_ids` must reference inputs/outputs that already exist as top-level entities — create them first via `POST /api/v1/inputs` and `POST /api/v1/outputs`.
 
 **Auth:** Requires `admin` role.
 
@@ -360,18 +408,8 @@ Create a new flow. The flow is validated, persisted to the config file, and (if 
   "id": "new-flow",
   "name": "New Feed",
   "enabled": true,
-  "input": {
-    "type": "rtp",
-    "bind_addr": "0.0.0.0:5000"
-  },
-  "outputs": [
-    {
-      "type": "rtp",
-      "id": "out-1",
-      "name": "Output 1",
-      "dest_addr": "192.168.1.50:5004"
-    }
-  ]
+  "input_ids": ["rtp-in-1"],
+  "output_ids": ["out-1"]
 }
 ```
 
@@ -397,16 +435,8 @@ curl -X POST http://localhost:8080/api/v1/flows \
     "id": "new-flow",
     "name": "New Feed",
     "enabled": true,
-    "input": {
-      "type": "rtp",
-      "bind_addr": "0.0.0.0:5000"
-    },
-    "outputs": [{
-      "type": "rtp",
-      "id": "out-1",
-      "name": "Output 1",
-      "dest_addr": "192.168.1.50:5004"
-    }]
+    "input_ids": ["rtp-in-1"],
+    "output_ids": ["out-1"]
   }'
 ```
 
@@ -450,17 +480,8 @@ curl -X PUT http://localhost:8080/api/v1/flows/main-feed \
     "id": "main-feed",
     "name": "Main Feed (Updated)",
     "enabled": true,
-    "input": {
-      "type": "rtp",
-      "bind_addr": "239.1.1.1:5000",
-      "interface_addr": "192.168.1.100"
-    },
-    "outputs": [{
-      "type": "rtp",
-      "id": "out-1",
-      "name": "Output 1",
-      "dest_addr": "192.168.1.50:5004"
-    }]
+    "input_ids": ["rtp-in-1"],
+    "output_ids": ["out-1"]
   }'
 ```
 
@@ -618,7 +639,119 @@ curl -X POST http://localhost:8080/api/v1/flows/main-feed/restart \
 
 ---
 
+### POST /api/v1/flows/{flow_id}/activate-input
+
+Switch the live input of a multi-input flow (switcher / redundancy). Selects which of the flow's `input_ids` is on-air without restarting the flow.
+
+**Auth:** Requires `admin` role.
+
+**Request body:**
+
+```json
+{
+  "input_id": "backup-srt-in"
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 400 | The named input is not one of the flow's `input_ids` |
+| 404 | Flow not found |
+| 409 | Flow is not running |
+
+---
+
+### PUT /api/v1/flows/{flow_id}/assembly
+
+Hot-swap the PID-bus assembly plan of an assembled (PID-bus / MPTS) flow in place, without tearing the flow down. Used to re-program the ES-to-program mapping of a running assembled flow.
+
+**Auth:** Requires `admin` role.
+
+**Request body:** A flow-assembly plan object (see the [Configuration Guide](configuration-guide.md)).
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Assembly plan validation failure |
+| 404 | Flow not found |
+| 409 | Flow is not an assembled flow |
+
+---
+
 ## Outputs
+
+Like inputs, outputs are top-level, first-class entities; a flow references them by ID via its `output_ids` array. The body is an `OutputConfig` whose `type` field selects the variant — a free-form string: `udp`, `rtp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whip`, `hls`, `cmaf`, `bonded`, `display`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](configuration-guide.md) for per-type fields.
+
+### GET /api/v1/outputs
+
+List all configured outputs.
+
+**Auth:** Requires valid JWT (any role).
+
+### POST /api/v1/outputs
+
+Create a new top-level output. Validated and persisted.
+
+**Auth:** Requires `admin` role.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Output validation failure |
+| 409 | An output with the same ID already exists |
+| 500 | Failed to persist config to disk |
+
+### GET /api/v1/outputs/{output_id}
+
+Retrieve a single output definition. Returns 404 if not found.
+
+**Auth:** Requires valid JWT (any role).
+
+### PUT /api/v1/outputs/{output_id}
+
+Replace an output definition.
+
+**Auth:** Requires `admin` role.
+
+### DELETE /api/v1/outputs/{output_id}
+
+Delete an output. Fails if the output is still referenced by a flow.
+
+**Auth:** Requires `admin` role.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 404 | Output not found |
+| 409 | Output is still referenced by one or more flows |
+| 500 | Failed to persist config to disk |
+
+### POST /api/v1/outputs/{output_id}/active
+
+Toggle an output on or off at runtime without removing it from the flow. A disabled output stops emitting but stays configured.
+
+**Auth:** Requires `admin` role.
+
+**Request body:**
+
+```json
+{
+  "active": false
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 404 | Output not found |
+
+---
 
 ### POST /api/v1/flows/{flow_id}/outputs
 
@@ -715,6 +848,24 @@ Remove an output from a flow. If the flow is running, the output is hot-removed 
 curl -X DELETE http://localhost:8080/api/v1/flows/main-feed/outputs/srt-backup \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+---
+
+## PTP
+
+Read and update the node's PTP (Precision Time Protocol) settings, used by the master-clock discipline for ST 2110 / MXL and PTP-locked flows. The edge reports the live lock/offset view separately via `FlowStats.ptp_state`.
+
+### GET /api/v1/ptp
+
+Retrieve the current PTP configuration and status.
+
+**Auth:** Requires valid JWT (any role).
+
+### PUT /api/v1/ptp
+
+Update the PTP configuration (e.g. clock domain, interface).
+
+**Auth:** Requires `admin` role.
 
 ---
 
@@ -865,7 +1016,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_type` | string | `"rtp"`, `"srt"`, `"rtmp"`, `"rtsp"`, `"webrtc"`, or `"whep"` |
+| `input_type` | string | Input variant — a free-form string such as `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features) |
 | `state` | string | Connection state (e.g., `"receiving"`, `"connecting"`) |
 | `packets_received` | integer | Total RTP packets received |
 | `bytes_received` | integer | Total bytes received |
@@ -883,7 +1034,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 |-------|------|-------------|
 | `output_id` | string | Output identifier |
 | `output_name` | string | Display name |
-| `output_type` | string | `"udp"`, `"srt"`, `"rtmp"`, `"hls"`, or `"webrtc"` |
+| `output_type` | string | Output variant — a free-form string such as `udp`, `rtp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whip`, `hls`, `cmaf`, `bonded`, `display`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features) |
 | `state` | string | Connection state |
 | `packets_sent` | integer | Total packets sent |
 | `bytes_sent` | integer | Total bytes sent |
@@ -959,9 +1110,9 @@ Retrieve the running application configuration with infrastructure secrets strip
 {
   "success": true,
   "data": {
-    "version": 1,
+    "version": 2,
     "server": {
-      "listen_addr": "0.0.0.0",
+      "listen_addrs": ["127.0.0.1", "[::1]"],
       "listen_port": 8080
     },
     "monitor": {
@@ -1376,6 +1527,17 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | GET | `/health` | No | - | Health check |
 | POST | `/oauth/token` | No | - | Get JWT token |
 | GET | `/metrics` | Configurable | any | Prometheus metrics |
+| GET | `/api/v1/inputs` | Yes | any | List all inputs |
+| POST | `/api/v1/inputs` | Yes | admin | Create input |
+| GET | `/api/v1/inputs/{input_id}` | Yes | any | Get input details |
+| PUT | `/api/v1/inputs/{input_id}` | Yes | admin | Update input |
+| DELETE | `/api/v1/inputs/{input_id}` | Yes | admin | Delete input |
+| GET | `/api/v1/outputs` | Yes | any | List all outputs |
+| POST | `/api/v1/outputs` | Yes | admin | Create output |
+| GET | `/api/v1/outputs/{output_id}` | Yes | any | Get output details |
+| PUT | `/api/v1/outputs/{output_id}` | Yes | admin | Update output |
+| DELETE | `/api/v1/outputs/{output_id}` | Yes | admin | Delete output |
+| POST | `/api/v1/outputs/{output_id}/active` | Yes | admin | Enable/disable output at runtime |
 | GET | `/api/v1/flows` | Yes | any | List all flows |
 | GET | `/api/v1/flows/{flow_id}` | Yes | any | Get flow details |
 | POST | `/api/v1/flows` | Yes | admin | Create flow |
@@ -1384,8 +1546,10 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | POST | `/api/v1/flows/{flow_id}/start` | Yes | admin | Start flow |
 | POST | `/api/v1/flows/{flow_id}/stop` | Yes | admin | Stop flow |
 | POST | `/api/v1/flows/{flow_id}/restart` | Yes | admin | Restart flow |
-| POST | `/api/v1/flows/{flow_id}/outputs` | Yes | admin | Add output |
-| DELETE | `/api/v1/flows/{flow_id}/outputs/{output_id}` | Yes | admin | Remove output |
+| POST | `/api/v1/flows/{flow_id}/activate-input` | Yes | admin | Switch live input (switcher/redundancy) |
+| PUT | `/api/v1/flows/{flow_id}/assembly` | Yes | admin | Hot-swap PID-bus assembly plan |
+| POST | `/api/v1/flows/{flow_id}/outputs` | Yes | admin | Add output to flow |
+| DELETE | `/api/v1/flows/{flow_id}/outputs/{output_id}` | Yes | admin | Remove output from flow |
 | POST | `/api/v1/flows/{flow_id}/whip` | Yes | admin | WHIP: Accept WebRTC publisher (SDP offer → answer) |
 | DELETE | `/api/v1/flows/{flow_id}/whip/{session_id}` | Yes | admin | WHIP: Disconnect publisher |
 | POST | `/api/v1/flows/{flow_id}/whep` | Yes | admin | WHEP: Accept WebRTC viewer (SDP offer → answer) |
@@ -1399,6 +1563,8 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | GET | `/api/v1/config` | Yes | any | Get running config |
 | PUT | `/api/v1/config` | Yes | admin | Replace entire config |
 | POST | `/api/v1/config/reload` | Yes | admin | Reload config from disk |
+| GET | `/api/v1/ptp` | Yes | any | Get PTP configuration + status |
+| PUT | `/api/v1/ptp` | Yes | admin | Update PTP configuration |
 | GET | `/api/v1/ws/stats` | Yes | any | WebSocket stats stream |
 | GET | `/x-nmos/node/v1.3/` | No | - | NMOS IS-04: Node API root |
 | GET | `/x-nmos/node/v1.3/self` | No | - | NMOS IS-04: Node resource |

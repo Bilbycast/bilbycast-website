@@ -26,6 +26,8 @@ The gateway:
 
 ## Supported Commands
 
+The command handler ships **73 distinct action arms**. The most commonly used are:
+
 | Command | Description |
 |---------|-------------|
 | `get_inputs` | List all input channels |
@@ -33,8 +35,11 @@ The gateway:
 | `get_services` | List running services |
 | `get_alarms` | List active alarms |
 | `get_ip_interfaces` | List network interfaces |
+| `get_chassis` | Chassis / board inventory |
 | `set_ip_input` | Configure an IP input |
 | `set_ip_output` | Configure an IP output |
+
+Beyond these, the handler also covers PTP and system-time status, licensing (`install_license`), redundancy groups, DPI / ESAM SCTE-35 config, audio profiles, coder and multi-service management, HIP encoders / decoders, SRT / PID / lock / PSI status, IP connections, card allocations, pool config, and `clear_all_counters` — 73 action types in total.
 
 ## Quick Start
 
@@ -47,4 +52,4 @@ See the [Setup Guide](/appear-x-gateway/setup-guide/) for configuration details 
 
 ## Extending to Other Devices
 
-The Appear X gateway serves as the reference implementation for the **API gateway sidecar pattern**. This same pattern can be used to integrate any third-party broadcast device with bilbycast-manager. See [Adding New Gateways](/appear-x-gateway/architecture/) for the implementation guide.
+The Appear X gateway serves as the reference implementation for the **API gateway sidecar pattern**. This same pattern can be used to integrate any third-party broadcast device with bilbycast-manager. See [Adding New Device Gateways](/appear-x-gateway/adding-new-device-gateways/) for the implementation guide.

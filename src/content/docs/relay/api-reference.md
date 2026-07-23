@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-bilbycast-relay exposes a small REST API on port 4480 (default) for health checks, Prometheus scraping, and tunnel introspection. The API is read-only — operational changes (`authorize_tunnel`, `revoke_tunnel`, `disconnect_edge`) flow through the manager's WebSocket protocol, not REST.
+bilbycast-relay exposes a small REST API on port 4480 (default) for health checks, Prometheus scraping, and tunnel introspection. It's read-mostly: the introspection endpoints are read-only, and normal operational changes (`authorize_tunnel`, `revoke_tunnel`, `disconnect_edge`) flow through the manager's WebSocket protocol rather than REST. The only mutating REST routes are two **fail-closed administrative teardown** endpoints — `DELETE /api/v1/tunnels/{id}` and `DELETE /api/v1/udp-sessions/{id}` — escape hatches for tearing down an orphaned tunnel or native-UDP session when the manager (the normal cleanup path) is unavailable. Both refuse with `403` unless `api_token` is configured and presented.
 
 ## Authentication
 
@@ -150,6 +150,55 @@ curl -H "Authorization: Bearer <token>" \
 ```
 
 `edge_id` is whatever the edge sent in its optional `Identify { edge_id }` message — typically the manager `node_id` so the manager can correlate topology. If the edge never sent `Identify`, the relay synthesises a `connection_id` from the remote address plus a counter.
+
+### `GET /api/v1/udp-sessions`
+
+Per-session state for the **native plain-UDP data plane** (native SRT/RIST over relay and individual bond legs carried on the `:4434` carrier). Auth-gated.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://relay-host:4480/api/v1/udp-sessions
+```
+
+```json
+{
+  "sessions": [
+    {
+      "tunnel_id": "550e8400-e29b-41d4-a716-446655440000",
+      "transport": "udp",
+      "status": "active",
+      "ingress_addr": "203.0.113.10:53219",
+      "egress_addr": "198.51.100.7:41888",
+      "bytes_ingress": 1234567,
+      "bytes_egress": 1234567,
+      "datagrams": 5678,
+      "uptime_secs": 321
+    }
+  ]
+}
+```
+
+A session is `active` once both edges' post-NAT source addresses have been latched by source-address rendezvous; before that it's `waiting`. `ingress_addr` / `egress_addr` are `null` until each side latches.
+
+### `DELETE /api/v1/tunnels/{id}` (admin, fail-closed)
+
+Force-tears-down a QUIC tunnel: revokes its bind authorisation **and** removes the live tunnel entry, notifying any still-bound peer with `TunnelDown`. This is an administrative escape hatch for orphaned tunnels — the normal teardown path is the manager's `close_tunnel` WebSocket command.
+
+**Fail-closed:** this route returns `403` unless `api_token` is configured, regardless of whether a token is presented (a destructive route must never be reachable unauthenticated). Invalid UUID → `400`; unknown tunnel → `404`.
+
+```bash
+curl -X DELETE -H "Authorization: Bearer <token>" \
+  http://relay-host:4480/api/v1/tunnels/550e8400-e29b-41d4-a716-446655440000
+```
+
+### `DELETE /api/v1/udp-sessions/{id}` (admin, fail-closed)
+
+The native-UDP counterpart to the tunnel DELETE — removes an orphaned plain-UDP session by tunnel UUID. Same fail-closed semantics: `403` without a configured `api_token`, `400` on an invalid UUID, `404` on an unknown session.
+
+```bash
+curl -X DELETE -H "Authorization: Bearer <token>" \
+  http://relay-host:4480/api/v1/udp-sessions/550e8400-e29b-41d4-a716-446655440000
+```
 
 ## Tunnel authorisation (manager-driven)
 

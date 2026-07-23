@@ -24,21 +24,26 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
 - [Input Types](#input-types)
   - [RTP Input](#rtp-input)
   - [SRT Input](#srt-input)
+  - [RIST Input](#rist-input)
   - [RTMP Input](#rtmp-input)
   - [RTSP Input](#rtsp-input)
   - [WebRTC/WHIP Input](#webrtcwhip-input)
   - [WHEP Input](#whep-input)
+  - [Media Player Input](#media-player-input)
   - [TestPattern Input](#testpattern-input)
   - [Bonded Input](#bonded-input)
   - [Replay Input](#replay-input)
+  - [SDI Input (Blackmagic DeckLink)](#sdi-input-blackmagic-decklink)
 - [Output Types](#output-types)
   - [RTP Output](#rtp-output)
   - [SRT Output](#srt-output)
+  - [RIST Output](#rist-output)
   - [RTMP Output](#rtmp-output)
   - [HLS Output](#hls-output)
   - [CMAF Output](#cmaf-output)
   - [WebRTC Output](#webrtc-output)
   - [Display Output](#display-output)
+  - [SDI Output (Blackmagic DeckLink)](#sdi-output-blackmagic-decklink)
   - [Bonded Output](#bonded-output)
 - [Recording (Flow Attribute)](#recording-flow-attribute)
 - [Resource Limits](#resource-limits)
@@ -70,7 +75,7 @@ If neither file exists at startup, an empty default configuration is used. Both 
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "device_name": "Studio-A Encoder",
   "setup_enabled": true,
   "server": {
@@ -166,7 +171,7 @@ If neither file exists at startup, an empty default configuration is used. Both 
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `version` | integer | Yes | - | Schema version. Currently must be `1`. |
+| `version` | integer | Yes | - | Schema version. Currently must be `2`. |
 | `node_id` | string | No | Auto-generated | Persistent UUID v4 identifying this edge node. Auto-generated on first startup and saved to config. Used as the NMOS IS-04 Node ID. |
 | `device_name` | string | No | `null` | Optional human-readable label for this edge node (e.g. "Studio-A Encoder"). Max 256 characters. |
 | `setup_enabled` | boolean | No | `true` | When true, the browser-based setup wizard is accessible at `/setup`. Set to false to disable after provisioning. |
@@ -180,12 +185,12 @@ If neither file exists at startup, an empty default configuration is used. Both 
 
 ## Server Configuration
 
-The `server` object controls the API server listener.
+The `server` object controls the API server listener. New installs bind **loopback only** — `127.0.0.1` and `[::1]` — so the API is not reachable off-box out of the box. LAN exposure requires an explicit `0.0.0.0` / `[::]` bind (via `listen_addrs` or launching with `--bind-addrs 0.0.0.0,[::]`) **and** enabling authentication (see the `auth` sub-object).
 
 ```json
 {
   "server": {
-    "listen_addr": "0.0.0.0",
+    "listen_addrs": ["0.0.0.0", "[::]"],
     "listen_port": 8080,
     "tls": { ... },
     "auth": { ... }
@@ -195,7 +200,8 @@ The `server` object controls the API server listener.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `listen_addr` | string | Yes | `"0.0.0.0"` | IP address to bind the API server to. Use `"0.0.0.0"` for all interfaces or a specific IP. |
+| `listen_addrs` | array | No | `["127.0.0.1", "[::1]"]` | List of addresses to bind the API server to (dual-stack). Takes precedence over the legacy single `listen_addr`. Defaults to loopback only; set to `["0.0.0.0", "[::]"]` (or use `--bind-addrs`) for LAN exposure. |
+| `listen_addr` | string | No | `"127.0.0.1"` | Legacy single bind address. Superseded by `listen_addrs` when that field is present. Defaults to loopback. |
 | `listen_port` | integer | Yes | `8080` | TCP port for the API server. |
 | `tls` | object | No | `null` | TLS configuration for HTTPS (`tls` feature enabled by default). |
 | `auth` | object | No | `null` | OAuth 2.0 / JWT authentication configuration. When absent or `enabled: false`, all endpoints are open. |
@@ -489,7 +495,7 @@ This is distinct from `max_bitrate_mbps` on RTP input, which is a hard token-buc
 
 ## Input Types
 
-The `input` object uses a `type` discriminator field to determine which input variant is used: `rtp`, `udp`, `srt`, `rtmp`, `rtsp`, `webrtc`, or `whep`.
+The `input` object uses a `type` discriminator field to determine which input variant is used: `rtp`, `udp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `media_player`, `test_pattern`, `bonded`, `replay`, or `sdi`.
 
 ### RTP Input
 
@@ -594,6 +600,31 @@ Receives RTP encapsulated in SRT. Supports caller, listener, and rendezvous mode
 - `aes_key_len` must be 16, 24, or 32.
 - `crypto_mode` must be `"aes-ctr"` or `"aes-gcm"`. AES-GCM with `aes_key_len` 24 is rejected.
 
+### RIST Input
+
+Receives RIST Simple Profile (VSF TR-06-1:2020) — reliable RTP transport with RTCP NACK-based retransmission. Interoperable with librist `ristsender` / `ristreceiver`. RIST is always compiled in — there is no feature flag. It binds an even RTP port `P` locally and RTCP on `P+1`, learning the peer's RTCP address dynamically. Optional SMPTE 2022-7 redundancy merges a second RIST leg.
+
+```json
+{
+  "type": "rist",
+  "bind_addr": "0.0.0.0:6000",
+  "buffer_ms": 1000,
+  "max_nack_retries": 10,
+  "rtcp_interval_ms": 100
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | - | Must be `"rist"`. |
+| `bind_addr` | string | Yes | - | Local socket address to bind (`ip:port`). The port **must be even** — RIST binds RTCP on `port+1`. |
+| `buffer_ms` | integer | No | `1000` | Receiver jitter / retransmit buffer depth in milliseconds. Range 50–30000. |
+| `max_nack_retries` | integer | No | `10` | Maximum NACK retransmission attempts per lost packet. |
+| `cname` | string | No | `null` | CNAME emitted in RTCP SDES packets. Auto-generated when absent. |
+| `rtcp_interval_ms` | integer | No | `null` | RTCP emission interval in milliseconds (TR-06-1 requires ≤ 100 ms). |
+| `redundancy` | object | No | `null` | SMPTE 2022-7 redundancy — the primary `bind_addr` is leg 1; this defines leg 2. |
+| `external_address` | string | No | `null` | Optional public `host:port` reachable from outside this node's network (advertised, not consumed). |
+
 ### RTMP Input
 
 Accepts incoming RTMP publish connections from OBS, ffmpeg, Wirecast, etc.
@@ -671,6 +702,38 @@ Pulls media from an external WHEP server. The edge acts as a WHEP client. The `w
 | `bearer_token` | string | No | `null` | Bearer token for WHEP authentication. |
 | `video_only` | boolean | No | `false` | Receive only video (ignore audio). |
 
+### Media Player Input
+
+Replays one or more local files (MPEG-TS, MP4 / MOV / MKV, or still images) as a paced fresh MPEG-TS feed onto the flow's broadcast channel, so every output type works unchanged. The marquee use case is a slate / standby fallback on a PID-bus Hitless leg of an assembled flow — the live primary takes precedence; if it stalls past the hitless threshold, playback of the local file kicks in transparently. Files live under the edge's media library directory (`BILBYCAST_MEDIA_DIR`) and are uploaded from the manager.
+
+```json
+{
+  "type": "media_player",
+  "id": "slate-1",
+  "name": "Standby slate",
+  "sources": [
+    { "kind": "ts",    "name": "loop.ts" },
+    { "kind": "mp4",   "name": "promo.mp4" },
+    { "kind": "image", "name": "slate.png", "fps": 5, "bitrate_kbps": 250, "audio_silence": true }
+  ],
+  "loop_playback": true,
+  "shuffle": false,
+  "paced_bitrate_bps": null
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"media_player"`. |
+| `sources` | array | Yes | — | 1–256 entries. Each is a source tagged by `kind` (`"ts"`, `"mp4"`, or `"image"`) with a `name` referencing a file in the media library. |
+| `loop_playback` | boolean | No | `true` | Restart at the head of the playlist when the last source ends. |
+| `shuffle` | boolean | No | `false` | Randomise source order each time the playlist starts. |
+| `paced_bitrate_bps` | integer | No | `null` | TS-only override for the egress pacer when the source has no usable PCR. Range 100 000 – 200 000 000. Leave `null` to pace from PCR. |
+| `program_number` | integer | No | `null` | MPTS program filter. Must be `> 0` if set. |
+| `ts_packets_per_datagram` | integer | No | `7` | 188-byte TS packets bundled into each broadcast-channel / tunnel datagram. Range 1–348. |
+
+**Source fields:** `kind` (`"ts"` / `"mp4"` / `"image"`) and `name` are required on every entry. Image sources also take `fps` (1–60, default 5), `bitrate_kbps` (50–50 000, default 250), and `audio_silence` (default `true`). `mp4` sources must be **plain (unfragmented)** H.264 + AAC — fragmented MP4 is rejected with a Critical `media_player_source_unsupported` event.
+
 ### TestPattern Input
 
 Generates a synthetic colour-bars-and-tone test pattern as an MPEG-TS stream with H.264 video and AAC audio. Useful for end-to-end pipeline tests, smoke-testing newly-deployed flows, and exercising downstream gear without a real source.
@@ -747,7 +810,36 @@ Plays back a recording (or a single clip from a recording) onto a flow's broadca
 | `start_paused` | boolean | No | `true` | When `true`, the input idles on flow start until a `play_clip` / `cue_clip` command activates playback. |
 | `loop_playback` | boolean | No | `false` | When `true`, restart at the beginning on EOF. |
 
-Phase 1 supports 1.0× forward playback only. Full operator workflow: [Replay](/edge/replay/) and [Replay (operator UI)](/manager/replay/).
+Playback supports variable speed (0.1×–1.0× via `set_speed`), frame-step forward and back (`step_frame`), MP4 export of a clip or whole recording (`export_clip` / `export_recording`), and a recordings library (`list_recordings` / `delete_recording`). Full operator workflow: [Replay](/edge/replay/) and [Replay (operator UI)](/manager/replay/).
+
+### SDI Input (Blackmagic DeckLink)
+
+Captures SDI directly off a Blackmagic **DeckLink** card — video plus embedded audio — encodes in-process, and publishes a standard A+V MPEG-TS flow with no external SDI→IP converter in the path. Self-clocked (no PTP requirement). Gated on the `sdi-decklink` Cargo feature, which is compiled into every `*-full` release; the schema is always present so configs round-trip on builds without it, and the capability is advertised only when the host has Blackmagic Desktop Video and a card.
+
+```json
+{
+  "type": "sdi",
+  "id": "sdi1",
+  "name": "SDI 1",
+  "device": "DeckLink Quad (1)",
+  "format": "auto",
+  "pixel_format": "uyvy422",
+  "audio_channels": 2,
+  "video_encode": { "codec": "h264_nvenc", "chroma": "yuv420p", "bitrate_kbps": 10000, "gop_size": 50 }
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"sdi"`. |
+| `device` | string | Yes | — | DeckLink display name as listed by the boot probe and `HealthPayload.sdi_devices[]`, e.g. `"DeckLink Quad (1)"`. |
+| `format` | string | No | `"auto"` | `"auto"` (card input-format detection — recommended) or a DeckLink mode FourCC (`"Hi50"`, `"Hp25"`, …). A forced mode that mismatches the source makes the card report no signal. |
+| `pixel_format` | string | No | `"uyvy422"` | `"uyvy422"` (8-bit) is the only implemented format. `"v210"` is rejected at config load (no 10-bit unpacker). |
+| `audio_channels` | integer | No | `2` | Embedded-audio channels to capture: `0` (video-only), `2`, `8`, or `16`. |
+| `video_encode` | object | Yes | — | Mandatory H.264/HEVC encoder block. `chroma` must be `yuv420p` or `yuv422p`, `bit_depth` `8` (a constraint of the 8-bit 4:2:2 capture format); every backend is reachable, including `h264_auto` / `hevc_auto`. |
+| `audio_encode` | object | No | AAC-LC | AAC family only (`aac_lc` / `he_aac_v1` / `he_aac_v2`). Unset gives an AAC-LC default. |
+
+Signal loss does **not** stop the stream — the card keeps delivering frames (bars/black) with the cable out and the edge keeps encoding them, so bitrate and `state` read healthy on a dead feed; `InputStats.sdi_stats.signal_present` is the honest indicator. Build prereqs, per-port health payload, and event catalogue: `bilbycast-edge/docs/sdi.md`.
 
 ---
 
@@ -864,6 +956,35 @@ Sends RTP encapsulated in SRT.
 | `crypto_mode` | string | No | `null` | Cipher mode: `"aes-ctr"` (default) or `"aes-gcm"`. |
 | `redundancy` | object | No | `null` | SMPTE 2022-7 redundancy for a second SRT output leg. |
 | `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Applied once and mirrored to both legs when 2022-7 is enabled. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
+
+### RIST Output
+
+Sends RIST Simple Profile (VSF TR-06-1:2020) reliable RTP to a peer, with RTCP NACK-based retransmission. Interoperable with librist `ristreceiver`. RIST is always compiled in — there is no feature flag. Binds a local even RTP port (RTCP on `port+1`) and transmits to the peer's even RTP port; the peer's RTCP is learned dynamically. Optional SMPTE 2022-7 redundancy duplicates the output to a second leg.
+
+```json
+{
+  "type": "rist",
+  "id": "rist-out-1",
+  "name": "Remote Site",
+  "remote_addr": "203.0.113.10:6000",
+  "buffer_ms": 1000,
+  "rtcp_interval_ms": 100
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | - | Must be `"rist"`. |
+| `id` | string | Yes | - | Unique output ID within the flow. |
+| `name` | string | Yes | - | Human-readable display name. |
+| `remote_addr` | string | Yes | - | Remote RIST address (`ip:port`). Port **must be even**. |
+| `local_addr` | string | No | `"0.0.0.0:0"` | Local bind for the sender's RTP socket. When set, the port must be even. |
+| `buffer_ms` | integer | No | `1000` | Sender retransmit buffer depth in milliseconds. |
+| `retransmit_buffer_capacity` | integer | No | `2048` | Retransmit buffer capacity in packets. |
+| `cname` | string | No | `null` | CNAME emitted in RTCP SDES packets. |
+| `rtcp_interval_ms` | integer | No | `null` | RTCP emission interval in milliseconds. |
+| `redundancy` | object | No | `null` | SMPTE 2022-7 redundancy — duplicate this output to a second leg. |
+| `program_number` | integer | No | `null` | MPTS → SPTS program filter. Must be `> 0` if set. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
 ### RTMP Output
 
@@ -1103,6 +1224,37 @@ Plays the flow's video to a locally-attached HDMI / DisplayPort connector and (o
 Connectors are enumerated at edge startup and surfaced in `HealthPayload.display_devices` — the manager UI populates the **Device** dropdown from this list. HDMI hotplug discovery is startup-only in v1; new cables require restarting the edge.
 
 Full reference, including A/V sync, supported codecs, capacity budget, and the `display_*` event catalogue: [Display Output](/edge/display/).
+
+### SDI Output (Blackmagic DeckLink)
+
+Native SDI playout via a Blackmagic **DeckLink** card: the flow's video and audio are decoded and scheduled against the card's clock, with no external IP→SDI converter. Gated on the `sdi-decklink` Cargo feature (compiled into every `*-full` release); the schema is always present so configs round-trip on builds without it.
+
+```json
+{
+  "type": "sdi",
+  "id": "sdi-out-1",
+  "name": "SDI playout",
+  "device": "DeckLink Quad (1)",
+  "mode": "Hi50",
+  "pixel_format": "uyvy422",
+  "audio_channels": 2
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Must be `"sdi"`. |
+| `id` | string | Yes | — | Unique output ID within the flow. |
+| `name` | string | Yes | — | Human-readable display name. |
+| `device` | string | Yes | — | DeckLink device display name, e.g. `"DeckLink Quad (1)"`. |
+| `mode` | string | Yes | — | DeckLink mode FourCC to play out (`"Hi50"`, `"Hp25"`, …). Determines the raster + frame rate the card opens at; must match the decoded video's raster. |
+| `pixel_format` | string | No | `"uyvy422"` | Wire pixel format. `"uyvy422"` (8-bit) is the only one implemented. |
+| `audio_channels` | integer | No | `2` | Embedded-audio channels to play out: `0` (video-only), `2`, `8`, or `16`. Audio is scheduled at 48 kHz on the card. |
+| `program_number` | integer | No | `null` | MPTS program filter (1-based). `null` selects the lowest program in the PAT. |
+| `scte35_injection` | boolean | No | `false` | Translate inbound SCTE-35 cues into SCTE-104 VANC on playout. |
+| `audio_offset_ms` | integer | No | `0` | Operator A/V-sync trim for embedded audio, `-1000`..`1000` ms. Positive delays audio; negative advances it. |
+
+Two SDI ports are not co-clocked unless the card is genlocked. Full reference: `bilbycast-edge/docs/sdi.md`.
 
 ### Bonded Output
 
@@ -1722,13 +1874,15 @@ Use `POST /api/v1/config/reload` to re-read both `config.json` and `secrets.json
 }
 ```
 
-## SMPTE ST 2110 (Phase 1)
+## SMPTE ST 2110
 
-bilbycast-edge supports SMPTE **ST 2110-30** (linear PCM L16/L24),
-**ST 2110-31** (AES3 transparent for Dolby E and similar), and **ST 2110-40**
-(RFC 8331 ancillary data including SCTE-104, SMPTE 12M timecode, and
-CEA-608/708 captions). Video essences (ST 2110-22 JPEG XS, ST 2110-20
-uncompressed) are reserved for Phase 2 and Phase 3.
+bilbycast-edge supports SMPTE **ST 2110-20** (single-stream uncompressed
+video, RFC 4175) and **ST 2110-23** (one video essence partitioned across
+multiple -20 sub-streams) as both input and output, plus **ST 2110-30**
+(linear PCM L16/L24), **ST 2110-31** (AES3 transparent for Dolby E and
+similar), and **ST 2110-40** (RFC 8331 ancillary data including SCTE-104,
+SMPTE 12M timecode, and CEA-608/708 captions). ST 2110-22 (JPEG XS
+compressed video) is not yet implemented.
 
 PTP integration is best-effort and reads from an external `ptp4l` daemon's
 management Unix socket — no PTP daemon ships in the edge. SMPTE 2022-7
@@ -1819,6 +1973,88 @@ validity, and parity bits.
       "payload_type": 100
     }
   ]
+}
+```
+
+### ST 2110-20 uncompressed video input/output
+
+Uncompressed 4:2:2 video over RFC 4175. On **input**, RFC 4175 is
+depacketized, the raw YUV is fed into an in-process H.264/HEVC encoder
+(the mandatory `video_encode` block), and the result is muxed to MPEG-TS
+on the flow's broadcast channel. On **output**, the flow's H.264/HEVC is
+decoded, converted to planar 4:2:2 at the configured bit depth, and RFC
+4175 packetized onto the wire.
+
+```json
+{
+  "id": "studio-a-video",
+  "name": "Studio A — video",
+  "enabled": true,
+  "clock_domain": 0,
+  "input": {
+    "type": "st2110_20",
+    "bind_addr": "239.0.0.30:5000",
+    "interface_addr": "10.0.0.5",
+    "width": 1920,
+    "height": 1080,
+    "frame_rate_num": 30000,
+    "frame_rate_den": 1001,
+    "pixel_format": "yuv422_10bit",
+    "payload_type": 96,
+    "video_encode": { "codec": "x264", "bitrate_kbps": 20000, "preset": "fast" }
+  },
+  "outputs": [
+    {
+      "type": "st2110_20",
+      "id": "video-out",
+      "name": "Video egress",
+      "dest_addr": "239.2.0.30:5000",
+      "dscp": 46,
+      "width": 1920,
+      "height": 1080,
+      "frame_rate_num": 30000,
+      "frame_rate_den": 1001,
+      "pixel_format": "yuv422_10bit",
+      "payload_type": 96
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `bind_addr` / `dest_addr` | string | Yes | Multicast (or unicast) socket address for the essence. |
+| `width` / `height` | integer | Yes | Active raster dimensions. |
+| `frame_rate_num` / `frame_rate_den` | integer | Yes | Frame-rate fraction (e.g. `30000` / `1001` for 29.97 fps, `60` / `1` for 60 fps). |
+| `pixel_format` | string | Yes | Wire pgroup format. Only `"yuv422_8bit"` and `"yuv422_10bit"` are accepted. |
+| `payload_type` | integer | No (`96`) | Dynamic RTP payload type, `96`–`127`. |
+| `video_encode` | object | Yes (input only) | Mandatory H.264/HEVC encoder block for the ingress encode stage. Same schema as the transcode `video_encode`. A `video-encoder-*` backend must be compiled in. |
+| `redundancy` | object | No | SMPTE 2022-7 Red/Blue dual-network operation. |
+
+### ST 2110-23 partitioned video input/output
+
+A single video essence carried across N ST 2110-20 sub-streams. Same
+encode/decode path as -20; the `sub_streams` array replaces the single
+`bind_addr` / `dest_addr`, and `partition_mode` describes how the frame
+is split across them.
+
+```json
+{
+  "type": "st2110_23",
+  "id": "uhd-video",
+  "name": "UHD 2SI",
+  "sub_streams": [
+    { "dest_addr": "239.4.0.1:5000" },
+    { "dest_addr": "239.4.0.2:5000" },
+    { "dest_addr": "239.4.0.3:5000" },
+    { "dest_addr": "239.4.0.4:5000" }
+  ],
+  "partition_mode": "two_sample_interleave",
+  "width": 3840,
+  "height": 2160,
+  "frame_rate_num": 60,
+  "frame_rate_den": 1,
+  "pixel_format": "yuv422_10bit"
 }
 ```
 

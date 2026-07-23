@@ -3,17 +3,17 @@ const features = [
   {
     icon: '12+',
     title: 'Twelve Protocols, One Gateway',
-    description: 'SRT, RIST (VSF TR-06-1), RTP, UDP, RTMP/RTMPS, RTSP, HLS, WebRTC (WHIP/WHEP), and SMPTE ST 2110-20/-23/-30/-31/-40. Inputs, outputs, and flows are independently managed entities — reuse outputs across flows, attach multiple inputs to one flow, and swap them mid-stream.',
+    description: 'SRT (with multi-path bonding), RIST (VSF TR-06-1), RTP, UDP, RTMP/RTMPS (+ Enhanced-RTMP HEVC), RTSP, HLS, CMAF / CMAF-LL, WebRTC (WHIP/WHEP), SMPTE ST 2110-20/-23 uncompressed video + -30/-31/-40 audio/ANC, MXL (Media eXchange Layer), and SDI (Blackmagic DeckLink) capture + playout. Inputs, outputs, and flows are independently managed entities — reuse outputs across flows, attach multiple inputs to one flow, and swap them mid-stream.',
   },
   {
     icon: '\u21C4',
     title: 'Hot Input Switching',
-    description: 'Flows with multiple inputs support zero-gap cutover via a single API call. A shared TS continuity fixer resets CC state, injects the new input\u2019s PAT/PMT with a bumped version, and forwards immediately — receivers keep playing without a glitch. Fully format-agnostic: switch between different codecs, containers, and transports (H.264, HEVC, JPEG XS, uncompressed ST 2110) on the same flow.',
+    description: 'Flows with multiple inputs support zero-gap cutover via a single API call. A shared TS continuity fixer resets CC state, injects the new input\u2019s PAT/PMT with a bumped version, and forwards immediately — receivers keep playing without a glitch. Fully format-agnostic: switch between different codecs, containers, and transports (H.264, HEVC, uncompressed ST 2110) on the same flow.',
   },
   {
     icon: 'VID',
     title: 'Video Transcoding',
-    description: 'In-process H.264 / HEVC transcoding on SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs via libx264, libx265, or NVIDIA NVENC. TS outputs use a streaming PMT rewriter that preserves non-video PIDs. WebRTC auto-transcodes HEVC sources to H.264 so every browser can play. Shipped bundled in the release binary as an AGPL-3.0-or-later combined work under the GPL portions.',
+    description: 'In-process H.264 / HEVC transcoding on SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs via libx264, libx265, or hardware encoders — NVIDIA NVENC, Intel QSV, AMD/Intel VAAPI, and Rockchip RKMPP. TS outputs use a streaming PMT rewriter that preserves non-video PIDs. WebRTC auto-transcodes HEVC sources to H.264 so every browser can play. Shipped bundled in the release binary as an AGPL-3.0-or-later combined work under the GPL portions.',
   },
   {
     icon: '\u266B',
@@ -24,6 +24,11 @@ const features = [
     icon: 'AAC',
     title: 'Compressed-Audio Bridge',
     description: 'AAC carried in MPEG-TS over RTMP, RTSP, SRT, UDP, or RTP decodes in-process via Fraunhofer FDK AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1). Land it on ST 2110-30/-31, rtp_audio, or SMPTE 302M outputs — or re-encode to AAC-LC, HE-AAC v1/v2, Opus, MP2, or AC-3 on any RTMP, HLS, WebRTC, SRT, UDP, RTP, or RIST output. All codecs encode in-process via FDK AAC and libavcodec — no external ffmpeg subprocess on the default build.',
+  },
+  {
+    icon: 'BOND',
+    title: 'Multi-Path Bonding',
+    description: 'Aggregate multiple UDP + QUIC legs \u2014 cellular modems, Starlink, and fixed links \u2014 into one resilient path. An adaptive, capacity-aware scheduler balances traffic across links in real time, with cross-leg ARQ, FEC, and SMPTE 2022-7 hitless redundancy for loss protection. A shared-leg capacity broker arbitrates bonded outputs by priority tier when links are shared. Requires a bilbycast node at both ends.',
   },
   {
     icon: '\u29D9',

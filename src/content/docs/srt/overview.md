@@ -111,3 +111,7 @@ let socket = SrtSocket::builder()
 ```
 
 See [libsrt Comparison](/srt/libsrt-comparison/) for a detailed feature comparison with the C++ library.
+
+## Related: the RIST library
+
+SRT isn't the only pure-Rust transport in the bilbycast suite. **bilbycast-rist** is a sibling library implementing the RIST Simple Profile (VSF TR-06-1), wire-verified against librist 0.2.11 and shipped as an always-compiled input and output protocol in bilbycast-edge. If your workflow needs RTP/RTCP with NACK-based ARQ rather than SRT, see the [RIST Library Overview](/rist/overview/).

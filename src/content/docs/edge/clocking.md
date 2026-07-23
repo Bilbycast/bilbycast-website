@@ -21,25 +21,30 @@ A single per-flow clock fixes this:
 
 ## Master kinds
 
+Auto-selection is resolved per flow by `build_master_clock` from the **flow role**, which overrides the older per-input default table:
+
 | Kind | When auto-selected | Lock criterion |
 |------|--------------------|----------------|
-| `Wallclock` | **Default** for SRT / RTP / UDP / RIST / RTMP / RTSP / `media_player` / `replay` / `test_pattern` / `rtp_audio` / `bonded`; WebRTC ingress; idle flows. | Always locked, monotonic — no convergence concept. |
-| `SourcePcrPll` | Flow Assembly (PID bus) flows — the assembler needs the recovered source clock to keep cross-program PCR coherent. | PI loop converges; p99 jitter < 100 µs over 64-sample window after ≥ 100 samples. |
+| **Auto PLL cascade** (`SourcePcrPll` → `Ptp` → `Wallclock`) | **Default** for a single-source live-contribution flow (SRT / RTP / UDP / RIST / RTMP / RTSP) **and** for a single-input Flow Assembly (PID bus) flow. The cascade tries the source-PCR PLL **first**, holding Wallclock only until the PLL locks, then promotes to PTP if disciplined. | Active rung's own criterion — see below. Wallclock rung is always locked; PLL rung converges (PI loop, p99 jitter < 100 µs over a 64-sample window after ≥ 100 samples); PTP rung follows `ptp4l`. |
+| `Wallclock` | Multi-input switcher, `file` / `media_player` / `replay`, WebRTC, `test_pattern`, `rtp_audio`, and `bonded` flows; idle flows. | Always locked, monotonic — no convergence concept. |
 | `Ptp` | ST 2110-20/-23/-30/-31/-40 and MXL inputs. | `ptp4l` reports `port_state == SLAVE` and the offset is within tolerance. |
 
-### Why Wallclock is the default for contribution TS sources
+### How the auto cascade behaves on contribution sources
 
-An earlier auto-policy picked `SourcePcrPll` for SRT / RTP / UDP / RIST / RTMP / RTSP. In practice the PLL never locks on contribution sources that carry per-source-restart PCR discontinuities — `ffmpeg -re -stream_loop -1 -c copy` on a 30-second file, every kind of looping playout, SCTE-35 splice insertions, source encoder restarts. With Wallclock as the default the master is always locked, always monotonic, and the encoder-style PES PTS regenerators can anchor against a clean timeline immediately.
+The cascade lets a clean, PTP-disciplined, or locked-PLL contribution source reach cross-edge-coherent timing automatically, while staying always-locked on messier feeds. It starts on Wallclock (always monotonic, so the encoder-style PES PTS regenerators can anchor against a clean timeline immediately), attempts the source-PCR PLL, and only promotes off Wallclock once a rung actually locks. On contribution sources that carry per-source-restart PCR discontinuities — `ffmpeg -re -stream_loop -1 -c copy` on a 30-second file, looping playout, SCTE-35 splice insertions, source encoder restarts — the PLL never locks, so the cascade stays on the Wallclock rung and behaves exactly like a forced Wallclock master.
 
-Operators who run on PTP-disciplined or clean-PCR contribution sources and want cross-edge coherence opt in via the per-flow `master_clock.kind` config field:
+The active rung shows up on telemetry as `kind`, and the operator's request shows up as `configured_kind` (see [Telemetry](#telemetry)), so the manager can render `Auto → Source PCR PLL` / `Auto → PTP` / `Auto → Wallclock`.
+
+Operators can pin a specific master rather than take the auto cascade, via the per-flow `master_clock.kind` config field:
 
 | Value | Effect |
 |---|---|
-| `"contribution"` *(preferred)* | Opt in to the source-PCR PLL — surfaces intent on telemetry as a "contribution" master kind. |
+| `"auto"` / `null` *(default)* | Auto-pick per the table above (the cascade for single-source contribution + single-input assembly; Wallclock or PTP for the rest). `null` and the explicit string `"auto"` are equivalent. |
+| `"contribution"` *(preferred)* | Force the source-PCR PLL — surfaces intent on telemetry as a "contribution" master kind. |
 | `"source_pcr_pll"` *(legacy alias)* | Retained for back-compat. Identical behaviour to `"contribution"`. |
+| `"passthrough"` | Wallclock-backed master with **no PLL and no lock/fallback alarm** — the plain always-locked timeline intended for most contribution-to-distribution flows where the operator hasn't pinned `source_pcr_pll`. |
 | `"ptp"` | Force the PTP master regardless of input type. Refuses to start if `ptp4l` isn't reporting `SLAVE`. |
 | `"wallclock"` | Force Wallclock regardless of input type. (Refused on ST 2110 + MXL flows — they need real time discipline.) |
-| `null` *(default)* | Auto-pick per the table above. |
 
 ## Encoder-style PES PTS regeneration
 
@@ -110,6 +115,7 @@ Every running flow surfaces a `master_clock` block on `FlowStats`:
 {
   "master_clock": {
     "kind": "source_pcr_pll",
+    "configured_kind": "auto",
     "locked": true,
     "rate_offset_ppm": -2.34,
     "jitter_us": 18,
@@ -118,7 +124,10 @@ Every running flow surfaces a `master_clock` block on `FlowStats`:
 }
 ```
 
-The manager renders the kind label, lock chip, rate offset, p99 jitter, and the trim knob on the per-flow detail page.
+- `kind` is the **active rung** — the master actually running right now.
+- `configured_kind` is the **operator's request** — what `master_clock.kind` was set to (`"auto"` when unset). The auto cascade carries both so the manager can render a compound label like `Auto → Source PCR PLL` / `Auto → PTP` / `Auto → Wallclock`; when a specific kind is pinned, `kind` and `configured_kind` agree.
+
+The manager renders the kind label (including the compound `configured → active` form), lock chip, rate offset, p99 jitter, and the trim knob on the per-flow detail page.
 
 ## Capability gating
 

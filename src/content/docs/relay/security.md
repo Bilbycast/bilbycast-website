@@ -69,8 +69,13 @@ The relay exposes a small REST API for stats and topology inspection:
 | `GET /health` | No — always public |
 | `GET /metrics` | Yes |
 | `GET /api/v1/tunnels` | Yes |
+| `GET /api/v1/udp-sessions` | Yes |
 | `GET /api/v1/edges` | Yes |
 | `GET /api/v1/stats` | Yes |
+| `DELETE /api/v1/tunnels/{id}` | **Fail-closed** — `403` unless `api_token` is set |
+| `DELETE /api/v1/udp-sessions/{id}` | **Fail-closed** — `403` unless `api_token` is set |
+
+The read-only `GET` endpoints stay open-by-default for backwards compatibility when `api_token` is unset. The two `DELETE` teardown routes are the exception: they are **fail-closed**, refusing with `403` unless `api_token` is configured, so a destructive route is never reachable unauthenticated.
 
 To enable token auth, set `api_token` in the relay config to a 32–128 character string:
 
@@ -103,7 +108,7 @@ For production deployments:
 - [ ] Distribute `tunnel_encryption_key` only via the manager, never out-of-band by hand.
 - [ ] On edge configs, prefer `cert_fingerprint` over `accept_self_signed_cert`.
 - [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433), the native-UDP carrier port (default 4434, if you use native SRT/RIST or bond legs over relay), and the REST API port to the systems that need them.
-- [ ] Monitor the relay's `event` stream for `tunnel.bind_rejected` events — repeated failures indicate either misconfiguration or an active attack.
+- [ ] Monitor the relay's `event` stream for bind-rejection events (category `tunnel`, message _"Tunnel bind rejected: invalid token"_) and for the structured `relay_dos_suspect` DoS identifier raised when a source trips the per-IP connection or per-connection tunnel-bind caps — repeated hits indicate either misconfiguration or an active attack.
 
 ## What the relay logs and what it doesn't
 

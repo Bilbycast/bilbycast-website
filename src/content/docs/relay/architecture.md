@@ -35,7 +35,8 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
 +===========================================================================+
 |                          bilbycast-relay process                          |
 |                                                                           |
-|  tokio::select! { quic_server, rest_api, ctrl_c }                        |
+|  tokio::select! { quic_server, udp_relay(:4434), rest_api, manager,       |
+|                   ctrl_c }                                                 |
 |                                                                           |
 |  +----------------------------------+   +-----------------------------+  |
 |  |        QUIC Server (:4433)       |   |     REST API (:4480)        |  |
@@ -46,8 +47,11 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
 |  |  Self-signed or user-provided    |   |  GET /api/v1/tunnels        |  |
 |  |                                  |   |  GET /api/v1/edges          |  |
 |  |                                  |   |  GET /api/v1/stats          |  |
-|  |  For each connection:            |   |  All public, read-only.     |  |
-|  |    tokio::spawn(session)         |   |  No admin routes.           |  |
+|  |                                  |   |  GET /api/v1/udp-sessions   |  |
+|  |                                  |   |  DELETE .../tunnels/{id}    |  |
+|  |                                  |   |  DELETE .../udp-sessions/.. |  |
+|  |  For each connection:            |   |  GETs public read-only;     |  |
+|  |    tokio::spawn(session)         |   |  DELETEs fail-closed (auth) |  |
 |  +----------------------------------+   +-----------------------------+  |
 |                  |                                                        |
 |                  v                                                        |
@@ -80,8 +84,8 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
 |  |                               |  |     DashMap<String, Conn>  |       |
 |  |   bind() -> Active|Waiting    |  |                            |       |
 |  |   unbind() -> notify peer     |  |   No shared_secret.        |       |
-|  |   get_peer_connection()       |  |   No max_edges/tunnels.    |       |
-|  |   remove_edge() -> cleanup    |  |                            |       |
+|  |   get_peer_connection()       |  |   Per-IP conn cap (64),    |       |
+|  |   remove_edge() -> cleanup    |  |   per-conn tunnel cap (100)|       |
 |  +-------------------------------+  +----------------------------+       |
 |                  |                                                        |
 |                  v                                                        |
@@ -333,7 +337,11 @@ Security is defense-in-depth: end-to-end encryption protects payload confidentia
   |           |
   |           +-- Datagram loop ------- inline forwarding (non-blocking send)
   |
+  +-- Native-UDP relay task (udp_relay.rs, :4434) -- plain-UDP data plane
+  |
   +-- REST API task (api.rs) ---- Axum with shared Arc<SessionContext>
+  |
+  +-- Manager client task (manager/client.rs) -- optional outbound WebSocket
   |
   +-- Ctrl+C handler ------------ graceful shutdown
 

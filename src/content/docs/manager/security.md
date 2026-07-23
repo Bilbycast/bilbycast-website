@@ -275,7 +275,7 @@ The log is append-only at the data layer — no API path deletes rows. Retention
 - **Hardware Security Module (HSM) support** — master keys are stored in environment variables.
 - **Audit log signing** — events are logged but not cryptographically signed.
 - **IP allowlisting** for node connections.
-- **Content-Security-Policy (CSP) header**.
+- **Content-Security-Policy _enforcement_** — a `Content-Security-Policy-Report-Only` header (with a `report-uri` to the built-in `/api/v1/csp-report` collector) already ships on every response, but the policy is not yet switched to enforcing mode.
 - **API rate limiting** on authenticated endpoints.
 - **SAML SSO** — only OIDC is supported.
 

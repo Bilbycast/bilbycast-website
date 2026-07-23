@@ -108,6 +108,14 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'RIST Library',
+					items: [
+						{ label: 'Overview', slug: 'rist/overview' },
+						{ label: 'Usage Guide', slug: 'rist/usage' },
+						{ label: 'Protocol Reference', slug: 'rist/protocol-reference' },
+					],
+				},
+				{
 					label: 'Appear X Gateway',
 					items: [
 						{ label: 'Overview', slug: 'appear-x-gateway/overview' },

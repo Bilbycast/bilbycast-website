@@ -45,7 +45,7 @@ This is what gets injected into the LLM prompt. The LLM only ever sees descripto
 
 | Driver | Action count | Examples |
 |---|---|---|
-| Edge | 22 | `create_flow`, `update_flow`, `delete_flow`, `start_flow`, `stop_flow`, `create_output`, `delete_output`, `create_tunnel`, `delete_tunnel`, `cue_clip` |
+| Edge | 23 | `create_flow`, `update_flow`, `delete_flow`, `start_flow`, `stop_flow`, `create_output`, `delete_output`, `create_tunnel`, `delete_tunnel`, `cue_clip`, `set_bond_uplinks` |
 | Relay | 7 | `get_config`, `list_tunnels`, `list_edges`, `disconnect_edge`, `close_tunnel`, `authorize_tunnel`, `revoke_tunnel` |
 | Appear X | 18 | `set_ip_input`, `set_ip_output`, `get_inputs`, `get_outputs`, `get_services`, `get_alarms`, `get_chassis` |
 

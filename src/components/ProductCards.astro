@@ -2,7 +2,7 @@
 const products = [
   {
     name: 'bilbycast-edge',
-    description: 'Media transport gateway bridging SRT, RTP, UDP, RTMP, RTSP, HLS, WebRTC, and SMPTE ST 2110-30/-31/-40 with FEC, hitless redundancy, and TCP/UDP port forwarding over encrypted QUIC tunnels.',
+    description: 'Media transport gateway bridging SRT (with multi-path bonding), RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF-LL, WebRTC, SMPTE ST 2110-20/-23 uncompressed video + -30/-31/-40 audio/ANC, MXL, and SDI (Blackmagic DeckLink) — with FEC, hitless redundancy, and TCP/UDP port forwarding over encrypted QUIC tunnels.',
     link: '/edge/overview/',
     color: 'sky',
   },
@@ -14,7 +14,7 @@ const products = [
   },
   {
     name: 'bilbycast-relay',
-    description: 'Stateless QUIC relay enabling IP tunneling between NAT\'d edge nodes with end-to-end ChaCha20-Poly1305 encryption and per-tunnel HMAC bind tokens.',
+    description: 'Stateless per-path forwarder for NAT traversal between edge nodes — carries QUIC tunnels plus native SRT/RIST and individual bond legs over a plain-UDP carrier, all end-to-end ChaCha20-Poly1305 encrypted with per-tunnel HMAC bind tokens. Optional viewer-distribution role: WHEP SFU + LL-HLS/CMAF origin to reach web viewers.',
     link: '/relay/overview/',
     color: 'emerald',
   },

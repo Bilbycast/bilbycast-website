@@ -161,6 +161,47 @@ The disconnect event fires **once per connection cycle** — if the RTSP server 
 
 ---
 
+### RTP Input (`rtp`)
+
+| Severity | Message | Trigger |
+|----------|---------|---------|
+| info | RTP input listening on {addr} | UDP socket successfully bound |
+| critical | RTP input bind failed: {error} | Bind failed (port in use, permission denied) |
+
+For redundant RTP inputs, each leg emits its own bind event with a `leg` field in details.
+
+**Source**: `src/engine/input_rtp.rs`
+
+---
+
+### UDP Input (`udp`)
+
+| Severity | Message | Trigger |
+|----------|---------|---------|
+| info | UDP input listening on {addr} | UDP socket successfully bound |
+| critical | UDP input bind failed: {error} | Bind failed (port in use, permission denied) |
+
+**Source**: `src/engine/input_udp.rs`
+
+---
+
+### RIST (`rist`)
+
+RIST Simple Profile (always compiled in — no feature flag) input and output connection lifecycle.
+
+| Severity | Message | Trigger |
+|----------|---------|---------|
+| info | RIST input listening on {addr} | Input socket bound |
+| critical | RIST input lost: {error} | Input task exited unexpectedly |
+| info | RIST output '{id}' connected -> {remote} | Output established its RIST session |
+| critical | RIST output '{id}' exited with error: {error} | Output task exited unexpectedly |
+
+Bind failures surface under the unified `port_conflict` / `bind_failed` categories.
+
+**Source**: `src/engine/input_rist.rs`, `src/engine/output_rist.rs`
+
+---
+
 ### WebRTC (`webrtc`)
 
 | Severity | Message | Trigger |
@@ -194,6 +235,33 @@ ffmpeg-sidecar audio encoder lifecycle for the Phase B compressed-audio egress o
 | critical | output '{id}': audio_encode encoder spawn failed: {error} | `AudioEncoder::spawn` failed for any other reason (codec rejected by ffmpeg, etc.) |
 
 **Source**: `src/engine/audio_encode.rs`, `src/engine/output_rtmp.rs`, `src/engine/output_hls.rs`, `src/engine/output_webrtc.rs`.
+
+---
+
+### Video Encoder (`video_encode`)
+
+In-process video transcoding lifecycle for TS outputs (SRT, RIST, RTP, UDP) and video-encode inputs.
+
+| Severity | Message | Trigger | Details |
+|----------|---------|---------|---------|
+| info | Video encoder started: output '{id}' | `TsVideoReplacer` created successfully | `{ codec }` |
+| critical | Video encoder failed: output '{id}': {error} | `TsVideoReplacer` construction rejected (missing feature, unsupported codec) | `{ error }` |
+| warning | Output/Input '{id}': the video transcoder is consuming input but producing no decoded frames | Decode-stall watchdog: ≥ 200 input frames consumed with zero decoded output (e.g. a HW decode backend that opened but fails every frame). One-shot, re-armed on recovery | `{ error_code: "video_transcode_decode_stalled", input_frames, output_frames, decode_errors, source_stream_type }` |
+
+**Source**: `src/engine/ts_video_replace.rs`, output modules (`output_srt.rs`, `output_rist.rs`, `output_rtp.rs`, `output_udp.rs`).
+
+---
+
+### Master Clock (`master_clock`)
+
+PLL lock-state transitions for flows whose master clock runs the source-PCR PLL (`master_clock.kind = contribution` / `source_pcr_pll`, or the `auto` cascade's PLL rung).
+
+| Severity | Message | Trigger | Details |
+|----------|---------|---------|---------|
+| warning | PCR PLL did not lock within {n}s on flow '{id}'; falling back to wallclock | The PLL failed to lock within the grace window (`pll_lock_timeout_s`, default 30 s) — the master clock drops to the wallclock rung; output PCR is bounded but no longer tracks the source | `{ error_code: "master_clock_pll_fallback", input_id, samples_received, samples_needed, p99_jitter_us, fallback_reason }` |
+| info | PCR PLL re-acquired lock on flow '{id}'; leaving wallclock fallback | The PLL converged again after a prior fallback and self-healed back to the PLL rung | `{ error_code: "master_clock_pll_recovered", input_id, samples_received, p99_jitter_us }` |
+
+**Source**: `src/engine/master_clock.rs`
 
 ---
 
@@ -306,6 +374,114 @@ Full reference: [Replay](/edge/replay/) and the operator-facing [Replay UI](/man
 
 ---
 
+### SDI (`sdi`)
+
+Native SDI (Blackmagic DeckLink) capture and playout, gated by the `sdi-decklink` Cargo feature (compiled into every `*-full` release artefact on both arches). Both halves emit on category `sdi`; every event carries `details.error_code` — match alarm rules on that, never on message text. The governing design intent is that **signal loss never stops the transport stream**: the card substitutes bars/black and the edge keeps encoding them, so the operator gets an alarm instead of a silently healthy-looking stream.
+
+#### Capture (`sdi_io`)
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `sdi_signal_lost` | warning | Card reports `bmdFrameHasNoInputSource` — cable pulled, source down, or a forced `format` mismatch. Nothing restarts; the card's bars/black keep being encoded. |
+| `sdi_signal_restored` | info | Signal came back (transition-triggered). |
+| `sdi_capture_opened` | info | Capture (re)opened. Carries raster + frame-rate details. |
+| `sdi_capture_open_failed` | warning | Device open failed; retried every 500 ms — one event per session, not per retry. |
+| `sdi_capture_lost` | warning | Device errored or vanished; supervision loop re-opens with backoff. |
+| `sdi_raster_changed` | warning | Source raster changed; the session re-opens with `auto` re-detection while the muxer + PTS clocks persist. |
+| `sdi_scte35_emitted` | info | An SCTE-104 VANC trigger was decoded and translated into an SCTE-35 section on the egress PID (`scte35_extraction: true`). |
+| `sdi_captions_detected` | info | CEA-608/708 caption data appeared in VANC (`captions_extraction: true`); once per caption type per capture session. |
+| `sdi_encode_failed` | critical | Video encoder would not open — fatal for the input. |
+| `sdi_no_media_codecs` | critical | Build lacks the `media-codecs` feature; the input cannot encode. |
+
+#### Playout (`output_sdi`)
+
+| Event | Severity | Trigger |
+|---|---|---|
+| `sdi_playout_opened` | info | Playout opened on the card. |
+| `sdi_scte104_queued` | info | An inbound SCTE-35 section was re-encoded as SCTE-104 VANC and queued (`scte35_injection: true`). |
+| `sdi_playout_open_failed` | warning | Device open failed; retrying on a 500 ms backoff. |
+| `sdi_playout_mode_unsupported` | critical | The card refused this mode/device combination — fatal. |
+| `sdi_playout_raster_mismatch` | warning | Decoded raster ≠ configured `mode`; frames are dropped rather than displayed garbled (throttled). |
+| `sdi_playout_card_not_draining` | warning | 25 consecutive frames refused by the card — every frame is now being dropped (usual cause is lost reference/genlock). |
+| `sdi_playout_audio_stalled` | warning | An audio block scheduled before the playout epoch — audio has stopped scheduling and the output is silent. |
+| `sdi_playout_lost` | warning | Scheduled write failed; the device is re-opened with backoff. |
+
+Flow bring-up gates (category `flow`): `sdi_decklink_unavailable` (an `sdi` input configured but no DeckLink device found), `sdi_feature_disabled` / `sdi_playout_unavailable` (an `sdi` input/output in a build without the `sdi-decklink` feature).
+
+**Source**: `src/engine/sdi_io.rs`, `src/engine/output_sdi.rs`. Full reference: [SDI](/edge/sdi/).
+
+---
+
+### NMOS Registry Client (`nmos_registry`)
+
+Emitted by the opt-in IS-04 registration client when the edge is configured to push to an external NMOS registry. All four events carry `details.error_code`.
+
+| Severity | Message | `details.error_code` |
+|----------|---------|----------------------|
+| info | Registered with NMOS registry {url} | `nmos_registered` |
+| warning | NMOS heartbeat to {url} returned HTTP {status} — re-registering | `nmos_heartbeat_lost` |
+| critical | NMOS registration of {type} at {url} failed: HTTP {status} | `nmos_registration_failed` |
+| warning | NMOS registry {url} unreachable: {error} | `nmos_registry_unreachable` |
+
+**Source**: `src/api/nmos_registration.rs`
+
+---
+
+### Cellular Uplink (`cellular`)
+
+Read-only cellular-uplink telemetry events for a USB/PCIe modem (via ModemManager) or a RutOS router the edge polls. Node-level (no `flow_id`); all carry `details.error_code` + `details.interface` and are debounced against flapping.
+
+| Severity | Message | `details.error_code` |
+|----------|---------|----------------------|
+| info / warning | cellular uplink '{iface}' registration {from} → {to} | `cellular_registration_changed` |
+| warning | cellular uplink '{iface}' signal degraded ({n}/5 bars) | `cellular_signal_degraded` |
+| info | cellular uplink '{iface}' signal recovered ({n}/5 bars) | `cellular_signal_recovered` |
+| warning | cellular uplink '{iface}' unreachable | `cellular_uplink_unreachable` |
+| info | cellular uplink '{iface}' reachable again | `cellular_uplink_recovered` |
+| warning | cellular uplink '{iface}' is {state} with no keep-alive daemon | `cellular_keeper_missing` |
+
+**Source**: `src/util/cellular`. Full reference: [Cellular](/edge/cellular/).
+
+---
+
+### Starlink Dish (`starlink`)
+
+Read-only Starlink dish telemetry events for an interface that egresses over a Starlink terminal (the edge polls the dish's local gRPC). Node-level (no `flow_id`); all carry `details.error_code` + `details.interface` and are debounced.
+
+| Severity | Message | `details.error_code` |
+|----------|---------|----------------------|
+| info / warning | starlink uplink '{iface}' {from} → {to} | `starlink_state_changed` |
+| warning | starlink uplink '{iface}' obstructed | `starlink_obstructed` |
+| info | starlink uplink '{iface}' obstruction cleared | `starlink_obstruction_cleared` |
+| warning | starlink uplink '{iface}' alert: {name} | `starlink_alert` |
+| warning | starlink uplink '{iface}' unreachable | `starlink_uplink_unreachable` |
+| info | starlink uplink '{iface}' reachable again | `starlink_uplink_recovered` |
+
+**Source**: `src/util/starlink`. Full reference: [Starlink](/edge/starlink/).
+
+---
+
+### Remote Upgrade (`upgrade`)
+
+Lifecycle events for the `upgrade_binary` command. Manager UI gates the per-node "Upgrade" button on the `"upgrade"` capability bit. Every event carries `details.error_code`.
+
+| Severity | Error code | Trigger |
+|----------|------------|---------|
+| info | `upgrade_started` | Manager command accepted, staging begins. |
+| info | `upgrade_downloaded` | Manifest verified, tarball downloaded, SHA-256 matched. |
+| info | `upgrade_staged` | Tarball extracted, symlink swapped; edge about to drain + exit for systemd respawn. |
+| info | `upgrade_completed` | New binary booted, authenticated, healthy for the boot health window — status flipped to `stable`. |
+| critical | `upgrade_rolled_back` | Boot watchdog reverted to `previous` after failed boots, or the new binary failed to authenticate in time. |
+| critical | `upgrade_signature_invalid` | Sigstore bundle signature did not verify against the manifest. |
+| critical | `upgrade_identity_not_allowed` | Bundle signed but the cert identity does not match the compiled-in `ALLOWED_SIGNERS` allowlist. |
+| critical | `upgrade_rekor_invalid` | Rekor inclusion proof missing or malformed. |
+| warning | `upgrade_url_invalid` / `upgrade_checksum_mismatch` / `upgrade_network_error` / `upgrade_arch_mismatch` | Download / verification guard failures (retryable). |
+| warning | `upgrade_disabled` / `upgrade_channel_not_allowed` / `upgrade_version_too_old` / `upgrade_sequence_too_old` | Policy rejections (audit only). |
+
+**Source**: `src/upgrade/`. Full reference: [Upgrade](/edge/upgrade/).
+
+---
+
 ### Content Analysis (`content_analysis`)
 
 Tier-gated content health events fired by the in-depth analysis subscribers. Tiers are configured per-flow on `FlowConfig.content_analysis` (`lite` / `audio_full` / `video_full`). All event names start with `content_analysis_*` and carry a structured `details.error_code`.
@@ -352,18 +528,24 @@ Distinct from the edge's static `HealthPayload.resource_budget` snapshot — tha
 
 ---
 
-### Bonded (`bonded`)
+### Bonding (`bond`)
 
-Multi-path bonding stack events on the bonded input / output type. Drives the per-leg link indicators in the manager UI.
+Multi-path bonding stack events on the bonded input / output type, emitted on category `bond`. Per-path RTT / loss / throughput / alive-dead stats flow every snapshot regardless — these events are transition-only alarms that complement the live stats pane. Per-path alive/dead events are flap-deduped with a 2 s grace window; bond-aggregate events always emit.
 
 | Event | Severity | Trigger |
 |---|---|---|
-| `bonded_path_up` | info | A bonded path adapter completed handshake. |
-| `bonded_path_down` | warning | Handshake heartbeat timed out on a bonded leg. |
-| `bonded_all_paths_down` | critical | Every bonded leg has lost its peer — flow is down. |
-| `bonded_path_throughput_degraded` | warning | A leg's effective throughput dropped below the configured floor. |
+| bonded path '{name}' alive (M/N paths up) | info | A previously-dead path saw a keepalive ack (sender) or an inbound datagram (receiver). |
+| bonded path '{name}' dead: {reason} (M/N paths up) | warning | No keepalive ack / inbound packet within `keepalive_miss_threshold × keepalive_interval`. `reason` is `keepalive_timeout`, `receive_timeout`, or `transport_error`. |
+| bonded {input\|output} degraded — 1/N paths up (redundancy lost) | warning | Bond dropped from ≥ 2 alive paths to exactly one. |
+| bonded {input\|output} down — 0/N paths up (media plane offline) | critical | Every path went dead. |
+| bonded {input\|output} recovered — M/N paths up | info | Bond returned to ≥ 2 alive paths after a Degraded or Down state. |
+| `bond_session_reset` | warning | A different nonzero session epoch arrived on 2 consecutive control packets — the sender restarted and the receiver re-anchored reassembly, pending NACKs, and FEC state. |
+| `bond_path_rebuilt` | warning | The interface watcher re-created, re-pinned, and swapped a UDP leg's socket in place (`interface_changed`, `interface_restored`, or `send_errors`). |
+| `bond_interface_lost` | warning | The pinned interface (or bound source address) vanished under a UDP leg. |
+| `bond_payload_exceeds_mtu` | warning | A non-188-aligned (non-TS) output payload exceeds the per-datagram budget — it is sent whole and may IP-fragment. TS payloads are re-chunked at 188-byte boundaries and never trigger this. |
+| `bond_gateway_route_lost` | critical | A gateway-mode leg's policy route was flushed by the kernel and re-programming failed (device still absent); the leg rides the main default route until repaired. |
 
-Full reference: [Bonding](/edge/bonding/).
+There is no `bonded_path_up` / `bonded_all_paths_down` / `bonded_path_throughput_degraded` event — the category is `bond`, and throughput degradation is a stats signal, not an event. Full reference: [Bonding](/edge/bonding/).
 
 ---
 
@@ -392,25 +574,42 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 
 ## Event Categories Summary
 
-| Category | Count | Description |
-|----------|-------|-------------|
-| `flow` | 18 | Flow lifecycle (start/stop/fail, output add/remove) + PID bus / Flow Assembly errors |
-| `bandwidth` | 4 | Per-flow bandwidth monitoring (alarm, block, recovery) |
-| `srt` | 9 | SRT input and output connection state |
-| `redundancy` | 3 | SMPTE 2022-7 dual-leg status |
-| `rtmp` | 3 | RTMP publisher connections |
-| `rtsp` | 2 | RTSP input state |
-| `hls` | 2 | HLS output failures |
-| `webrtc` | 8 | WHIP/WHEP session lifecycle |
-| `audio_encode` | 7 | ffmpeg-sidecar audio encoder lifecycle (Phase B) |
-| `tunnel` | 8 | Tunnel connection state |
-| `manager` | 3 | Manager WebSocket connection |
-| `config` | 2 | Configuration changes |
-| `ptp` | — | SMPTE ST 2110 PTP slave clock state changes (Phase 1) |
-| `network_leg` | — | SMPTE 2022-7 Red/Blue per-leg loss / recovery (Phase 1) |
-| `nmos` | — | NMOS IS-04 / IS-05 / IS-08 controller activity (Phase 1) |
-| `scte104` | — | SCTE-104 splice events parsed from ST 2110-40 ANC (Phase 1) |
-| **Total** | **69** | |
+The edge declares 36 event-category constants; the full authoritative catalogue lives in the [in-repo `docs/events-and-alarms.md`](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md). The categories documented on this page:
+
+| Category | Description |
+|----------|-------------|
+| `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, MXL) |
+| `bandwidth` | Per-flow bandwidth monitoring (alarm, block, recovery) |
+| `srt` | SRT input and output connection state |
+| `redundancy` | SMPTE 2022-7 dual-leg status |
+| `rtmp` | RTMP publisher connections |
+| `rtsp` | RTSP input state |
+| `hls` | HLS output failures |
+| `rtp` | RTP input bind and lifecycle |
+| `udp` | UDP input bind and lifecycle |
+| `rist` | RIST Simple Profile input/output connection lifecycle |
+| `webrtc` | WHIP/WHEP session lifecycle |
+| `audio_encode` | Audio encoder lifecycle (ffmpeg-sidecar + in-process `TsAudioReplacer`) |
+| `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`) |
+| `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
+| `tunnel` | Tunnel connection state |
+| `manager` | Manager WebSocket connection |
+| `config` | Configuration changes |
+| `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW-encoder oversubscription |
+| `bond` | Bonded input/output — per-path alive/dead, bond-aggregate degraded/down/recovered, session reset, socket rebuild, interface lost, MTU-budget, gateway route lost |
+| `sdi` | Native SDI (DeckLink) capture **and** playout lifecycle (`sdi-decklink` feature) |
+| `display` | Local-display output (HDMI / DisplayPort + ALSA) |
+| `replay` | Recording writer + clip playback lifecycle |
+| `content_analysis` | Tier-gated content-health events (lite / audio_full / video_full) |
+| `cellular` | Cellular-uplink telemetry (modem / RutOS) |
+| `starlink` | Starlink dish telemetry |
+| `upgrade` | Remote binary upgrade lifecycle |
+| `nmos_registry` | IS-04 registration client lifecycle |
+| `port_conflict` / `bind_failed` | Unified bind-failure events |
+| `ptp` | SMPTE ST 2110 PTP slave clock state changes |
+| `network_leg` | SMPTE 2022-7 Red/Blue per-leg loss / recovery |
+| `nmos` | NMOS IS-04 / IS-05 / IS-08 controller activity |
+| `scte104` | SCTE-104 splice events parsed from ST 2110-40 ANC |
 
 ### Phase 1 ST 2110 categories
 
@@ -425,8 +624,8 @@ The four categories are declared up-front in `src/manager/events.rs` so the mana
 
 ### By Severity
 
-| Severity | Count | Description |
-|----------|-------|-------------|
-| critical | 26 | Service-impacting: flow/tunnel failures, auth rejection, both legs lost, bandwidth block, audio_encode build/restart-cap failures, PID-bus bring-up errors |
-| warning | 21 | Degradation: disconnects, stale connections, upload failures, reconnects, bandwidth exceeded, audio_encode restart / per-segment HLS remux failure, PID-bus stream_type mismatch |
-| info | 23 | State changes: connections established, flows started, config updated, bandwidth recovery, audio_encode started |
+| Severity | Typical events |
+|----------|----------------|
+| critical | Service-impacting: flow/tunnel failures, manager auth rejection, both redundant legs lost, bandwidth block, audio/video encoder build & restart-cap failures, PID-bus bring-up errors, RTP/UDP/RIST bind failures, bond media-plane offline, SDI encode failure, upgrade rollback / signature-invalid |
+| warning | Degradation: disconnects, stale connections, upload failures, reconnects, bandwidth exceeded, encoder restart / per-segment HLS remux failure, PID-bus stream_type mismatch, master-clock PLL fallback, bond path dead / degraded, SDI signal lost, cellular/starlink degradation, NMOS heartbeat lost |
+| info | State changes: connections established, flows started, config updated, bandwidth recovery, encoder started, input/output CRUD, master-clock PLL recovery, bond path/aggregate recovery, SDI signal restored, upgrade lifecycle progress |

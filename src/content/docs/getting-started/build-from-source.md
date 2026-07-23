@@ -39,26 +39,31 @@ sudo apt install build-essential cmake make clang libclang-dev pkg-config \
                  libssl-dev g++ libdrm-dev libasound2-dev libudev-dev
 ```
 
-To match the release feature set (libx264 + libx265 software encoders, plus NVENC + NVDEC headers):
+To match the `*-full` release feature set you need the dev headers for **every** backend `video-encoders-full` compiles in — x264 + x265 (software encoders), VAAPI (encode + decode), and QSV (x86_64). Most come from apt:
 
 ```bash
 sudo apt update
-sudo apt install libx264-dev libx265-dev libnuma-dev
+sudo apt install libx264-dev libx265-dev libnuma-dev \
+                 libva-dev libvpl-dev
 ```
 
-x86_64 only, for the QuickSync encoder (oneVPL):
+`libva-dev` is required by both `video-encoder-vaapi` and `video-decoder-vaapi`; `libvpl-dev` (oneVPL) covers `video-encoder-qsv` + `video-decoder-qsv` and is **x86_64 only** — omit it on aarch64 (Intel QuickSync is x86_64-only, and the aarch64 `*-full` artefact excludes QSV).
+
+`video-encoders-full` also compiles in NVENC (`video-encoder-nvenc`) and NVDEC (`video-decoder-nvdec`), which need the **NVIDIA codec headers**. Ubuntu does not package these — they must be cloned and installed from source before the full build will compile:
 
 ```bash
-sudo apt update
-sudo apt install libvpl-dev
+git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+cd nv-codec-headers && sudo make install && cd ..
 ```
 
-ARM Rockchip SBCs (RK3568 / RK3588 — NanoPi R5S/R6S, Orange Pi 5, Radxa Rock 5B) only, for the **RKMPP** hardware H.264 / HEVC encoder. `rockchip_mpp` isn't in stock Ubuntu, so add the maintained Rockchip multimedia PPA first:
+Without both the VAAPI headers and the NVENC/NVDEC headers in place, `--features video-encoders-full` fails to compile. (You don't need an NVIDIA GPU or driver to *build* — the headers are enough; NVENC/NVDEC simply stay dormant at runtime on hosts without the driver.)
+
+ARM Rockchip SBCs (RK3568 / RK3588 — NanoPi R5S/R6S, Orange Pi 5, Radxa Rock 5B) only, for the **RKMPP** hardware H.264 / HEVC encode + decode and the **RGA** DRM_PRIME→sysmem transfer (`rga-transfer`). Neither `rockchip_mpp` nor `librga` is in stock Ubuntu, so add the maintained Rockchip multimedia PPA first:
 
 ```bash
 sudo add-apt-repository -y ppa:jjriek/rockchip-multimedia
 sudo apt update
-sudo apt install librockchip-mpp-dev libdrm-dev
+sudo apt install librockchip-mpp-dev librga-dev libdrm-dev
 ```
 
 Only the userspace dev package is needed to *build* — the VPU (`/dev/mpp_service`) is a runtime dependency, so this compiles on any aarch64 host, not just a Rockchip board.
@@ -72,9 +77,11 @@ cd bilbycast-edge && cargo build --release --features video-encoders-full && cd 
 # Or a minimal edge — protocol bridging only, no software video encoders
 cd bilbycast-edge && cargo build --release && cd ..
 
-# Edge with Rockchip RKMPP hardware encode (RK3568 / RK3588 only)
+# Edge with Rockchip RKMPP hardware encode + decode (RK3568 / RK3588 only)
+# rga-transfer is the RGA DRM_PRIME->sysmem copy that fixes RK3588 display stutter —
+# the feature that distinguishes the aarch64-linux-rockchip release artefact.
 cd bilbycast-edge && cargo build --release \
-    --features "video-encoder-x264 video-encoder-x265 video-encoder-rkmpp display" && cd ..
+    --features "video-encoder-rkmpp video-decoder-rkmpp rga-transfer display" && cd ..
 
 # Relay
 cd bilbycast-relay && cargo build --release && cd ..

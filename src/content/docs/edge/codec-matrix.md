@@ -5,7 +5,7 @@ sidebar:
   order: 14
 ---
 
-The release binary bundles every video encoder + decoder backend the edge knows about — libx264, libx265, NVIDIA NVENC + NVDEC, Intel QSV (x86_64 only), and VAAPI. At startup the hardware probe walks the active set, opens a minimal session against each, and advertises capability bits on `HealthPayload.capabilities` for the ones that actually work on this host. The manager UI keys per-output codec dropdowns off those bits.
+The release binary bundles every video encoder + decoder backend the edge knows about — libx264, libx265, NVIDIA NVENC + NVDEC, Intel QSV (x86_64 only), VAAPI, and Rockchip RKMPP (`h264_rkmpp` / `hevc_rkmpp` encode + RKMPP decode, shipped in the `aarch64-linux-rockchip` artefact). At startup the hardware probe walks the active set, opens a minimal session against each, and advertises capability bits on `HealthPayload.capabilities` for the ones that actually work on this host. The manager UI keys per-output codec dropdowns off those bits.
 
 This page covers the **static support matrix**, the **`*_auto` resolver** that does the right thing without operator hand-holding, and the **verification commands** for confirming what activated on a given host.
 
@@ -15,9 +15,9 @@ For most operators the right answer on `video_encode.codec` is **`h264_auto`** o
 
 | Family + chroma + bit-depth | Resolver chain (head → tail) |
 |---|---|
-| H.264 + 4:2:0 + 8-bit (the dominant distribution path) | NVENC ≻ QSV ≻ VAAPI ≻ libx264 |
+| H.264 + 4:2:0 + 8-bit (the dominant distribution path) | RKMPP (Rockchip) ≻ NVENC ≻ QSV ≻ VAAPI ≻ libx264 |
 | H.264 + anything else | libx264 (no HW H.264 backend supports 4:2:2 / 10-bit / 4:4:4) |
-| HEVC + 4:2:0 + 8-bit | NVENC ≻ QSV ≻ VAAPI ≻ libx265 |
+| HEVC + 4:2:0 + 8-bit | RKMPP (Rockchip) ≻ NVENC ≻ QSV ≻ VAAPI ≻ libx265 |
 | HEVC + 4:2:0 + 10-bit | NVENC ≻ VAAPI ≻ QSV ≻ libx265 |
 | HEVC + 4:2:2 + 8-bit | VAAPI (Intel iHD) ≻ libx265 |
 | HEVC + 4:2:2 + 10-bit | VAAPI (Intel iHD) ≻ libx265 |
@@ -38,6 +38,8 @@ Operators who need wire-level reproducibility (compliance deployments, vendor-sp
 | **h264_vaapi** (Linux, `video-encoder-vaapi`) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **hevc_vaapi** (Intel iHD Tiger Lake+) | ✓ | ✓ | ✓ | ✓ | ✗ (NV24 deferred) |
 | **hevc_vaapi** (AMD radeonsi) | ✓ | usually ✗ | ✓ | usually ✗ | ✗ |
+| **h264_rkmpp** (ARM Rockchip RK3568 / RK3588, `video-encoder-rkmpp`) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **hevc_rkmpp** (ARM Rockchip RK3568 / RK3588) | ✓ | ✗ | ✗ | ✗ | ✗ |
 
 **Implication for broadcast 4:2:2 contribution:** on NVIDIA-only and AMD-only hosts there is **no GPU path** for 4:2:2 10-bit; libx265 is the only option. Intel Tiger Lake+ iGPUs have the full broadcast HEVC matrix through VAAPI.
 
@@ -51,6 +53,7 @@ Static rejection happens at config validation **and** at encoder open, so an ope
 | **NVDEC** (`video-decoder-nvdec`) | ✓ zero-copy scanout | ✓ | x86_64; 4:2:0 only. |
 | **QSV decode** (`video-decoder-qsv`) | ✓ | ✓ | x86_64; 4:2:0 only. |
 | **VAAPI decode** (`video-decoder-vaapi`) | ✓ zero-copy DMA-BUF | ✓ | Linux; Intel iHD does 4:2:2 + Main10. |
+| **RKMPP decode** (`video-decoder-rkmpp`) | ✓ (sysmem NV12) | ✓ | aarch64 Rockchip RK3568 / RK3588. |
 
 **Auto resolution priority** — both the display path and the transcode input-decode path share the same priority:
 
@@ -80,15 +83,17 @@ Edges advertise the following when the matching feature is compiled in **and** t
 
 | Capability | Source | Meaning |
 |---|---|---|
-| `video-encode` | any of x264 / x265 / nvenc / qsv / vaapi | Edge can re-encode video at all. |
+| `video-encode` | any of x264 / x265 / nvenc / qsv / rkmpp | Edge can re-encode video at all. |
 | `video-encoder-x264` | `video-encoder-x264` | libx264 available. |
 | `video-encoder-x265` | `video-encoder-x265` | libx265 available. |
 | `video-encoder-nvenc` | `video-encoder-nvenc` + probe | h264_nvenc / hevc_nvenc available. |
 | `video-encoder-qsv` | `video-encoder-qsv` + probe | h264_qsv / hevc_qsv available. |
 | `video-encoder-vaapi` | `video-encoder-vaapi` + probe | h264_vaapi / hevc_vaapi available. |
+| `video-encoder-rkmpp` | `video-encoder-rkmpp` + probe | h264_rkmpp / hevc_rkmpp available (Rockchip RK3568 / RK3588). |
 | `video-decoder-nvdec` | `video-decoder-nvdec` + probe | NVDEC available (transcode + display). |
 | `video-decoder-qsv` | `video-decoder-qsv` + probe | QSV decode available. |
 | `video-decoder-vaapi` | `video-decoder-vaapi` + probe | VAAPI decode available. |
+| `video-decoder-rkmpp` | `video-decoder-rkmpp` + probe | RKMPP decode available (Rockchip RK3568 / RK3588). |
 | `display` | `display` + ≥ 1 KMS connector enumerated | Local-display output usable. |
 | `fdk-aac` | `fdk-aac` | In-process AAC family. |
 | `media-codecs` | `media-codecs` (default on) | libavcodec video decode + Opus / MP2 / AC-3. |

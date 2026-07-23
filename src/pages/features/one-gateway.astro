@@ -15,8 +15,8 @@ const transcoding = [
   },
   {
     track: 'Video — hardware',
-    encoders: 'NVIDIA NVENC (H.264 / HEVC), Intel QSV (H.264 / HEVC, x86_64 only)',
-    note: 'LGPL-clean dispatcher; runs against the device driver at runtime',
+    encoders: 'NVIDIA NVENC, Intel QSV (x86_64), VAAPI (AMD / Intel), Rockchip RKMPP (aarch64) — H.264 / HEVC',
+    note: 'LGPL-clean dispatcher; the startup probe auto-detects which backend the host can open',
   },
   {
     track: 'Audio — compressed',
@@ -44,7 +44,7 @@ const standards = [
 
 <Landing
   title="Bilbycast — One gateway, every format"
-  description="Twelve protocols ingressed and egressed in one Rust binary. SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF-LL, WebRTC, SMPTE ST 2110-20/-23/-30/-31/-40. In-process video transcoding (H.264/HEVC/NVENC/QSV) and audio transcoding (AAC/Opus/MP2/AC-3). NMOS IS-04/05/08, FEC, hitless 2022-7. No ffmpeg subprocess."
+  description="Twelve protocols in one Rust binary. SRT, RIST, RTP, UDP, RTMP, RTSP, WebRTC and SMPTE ST 2110-20/-23/-30/-31/-40 ingressed and egressed; HLS, CMAF-LL and WHEP on egress. In-process video transcoding (H.264/HEVC/NVENC/QSV) and audio transcoding (AAC/Opus/MP2/AC-3). NMOS IS-04/05/08, FEC, hitless 2022-7. No ffmpeg subprocess."
 >
   <!-- Hero -->
   <section class="relative overflow-hidden pt-32 pb-16 lg:pt-40 lg:pb-20">
@@ -65,8 +65,9 @@ const standards = [
         </span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-400 sm:text-xl">
-        Twelve protocols ingressed and egressed in a single Rust binary. In-process video and audio transcoding —
-        no ffmpeg subprocess, no separate transcode box, no extra hardware. NMOS-friendly out of the box.
+        Twelve protocols in a single Rust binary — ingressed and egressed, with HLS, CMAF-LL and WHEP delivered
+        on egress. In-process video and audio transcoding — no ffmpeg subprocess, no separate transcode box, no
+        extra hardware. NMOS-friendly out of the box.
       </p>
     </div>
   </section>
@@ -81,9 +82,11 @@ const standards = [
             Add an input. Pick from the list.
           </h2>
           <p class="mt-4 text-base leading-relaxed text-slate-400">
-            SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, CMAF-LL, WebRTC, the entire SMPTE ST 2110 family, the local
-            Media Player, NDI — every protocol is a first-class entry in the same Add Input modal. The dropdown is
-            the entire transport stack, not a curated subset.
+            SRT, RIST, RTP, UDP, RTMP, RTSP, WebRTC/WHIP, the entire SMPTE ST 2110 family (uncompressed
+            -20/-23 video, -30/-31 audio, -40 ANC), MXL, SDI capture over Blackmagic DeckLink, multi-path bonded
+            links, the local Media Player, and replay clips — every ingest is a first-class entry in the same
+            Add Input modal. The dropdown is the entire ingest transport stack, not a curated subset. (HLS,
+            CMAF-LL and WHEP are egress-only, and live in the Output modal.)
           </p>
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
@@ -183,7 +186,7 @@ const standards = [
           </p>
           <ul class="mt-6 list-none space-y-2.5">
             {[
-              'Format-agnostic: H.264, HEVC, JPEG XS, uncompressed ST 2110',
+              'Format-agnostic: H.264, HEVC, MPEG-2, uncompressed ST 2110-20/-23 video',
               'Zero-gap PMT version bump (mod 32, PAT only when program set changes)',
               'Pair with SMPTE 2022-7 for sequence-aware hitless merge',
               'Drives the bilbycast-manager Switcher (PGM/PVW director console)',

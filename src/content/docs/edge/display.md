@@ -84,7 +84,7 @@ Outputs are JSON top-level entities in `config.json`. The minimum:
 | `resolution` | string | `null` | `"auto"` (use the connector's preferred mode) or `"WIDTHxHEIGHT"` (e.g. `"1920x1080"`). |
 | `refresh_hz` | u32 | `null` | Refresh rate in Hz. Range 1–240. `null` uses the connector's preferred mode. |
 | `sync_mode` | string | `"vsync_to_display"` | `"vsync_to_display"` (default, audio-master) or `"genlock"` (locks the display's audio to the flow master clock so the panel stays rate-coherent with the flow's wire outputs; video still follows the audio playout, so lip-sync is identical either way). |
-| `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, or `"vaapi"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ cpu` against the host's probed capabilities. See [Codec matrix](/edge/codec-matrix/). |
+| `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, `"vaapi"`, or `"rkmpp"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ rkmpp ≻ cpu` against the host's probed capabilities. `"rkmpp"` is the Rockchip RK3568 / RK3588 hardware decode path (shipped in the `aarch64-linux-rockchip` release). See [Codec matrix](/edge/codec-matrix/). |
 | `show_audio_bars` | bool | `false` | Render translucent audio level bars as an ARGB8888 overlay plane composed at vblank. Stays on the zero-copy path — no CPU-blit demotion. |
 
 ## How A/V sync works
@@ -99,7 +99,7 @@ The video-vs-audio offset is published as a signed EMA on the per-output `displa
 
 ## Supported codecs
 
-- **Video**: H.264 + H.265. Decode resolves through the [codec matrix](/edge/codec-matrix/) — `hw_decode: "auto"` (default) picks `VAAPI ≻ NVDEC ≻ QSV ≻ CPU` against the host's probed capabilities. VAAPI and NVDEC support **zero-copy scanout** (see below); QSV decodes to a GPU surface and downloads to sysmem before scanout. CPU decode via libavcodec is the always-available baseline.
+- **Video**: H.264 + H.265. Decode resolves through the [codec matrix](/edge/codec-matrix/) — `hw_decode: "auto"` (default) picks `VAAPI ≻ NVDEC ≻ QSV ≻ RKMPP ≻ CPU` against the host's probed capabilities. VAAPI, NVDEC, and RKMPP (Rockchip) support **zero-copy scanout** (see below); QSV decodes to a GPU surface and downloads to sysmem before scanout. CPU decode via libavcodec is the always-available baseline.
 - **Audio**: AAC family via fdk-aac, plus MP2 / AC-3 / E-AC-3 / Opus via libavcodec. **No re-encode** — every codec decodes to LPCM for ALSA.
 
 Multichannel audio (5.1 / 7.1) is downmixed to the configured stereo pair (`audio_channel_pair`) — passthrough of compressed audio over HDMI is not supported.
@@ -110,6 +110,7 @@ The display task drives the connector through Linux DRM/KMS **atomic-commit page
 
 - **VAAPI decode → DMA-BUF → KMS scanout** is the fastest path. The decoded frame stays in GPU memory; the display task maps it to a DRM PRIME descriptor via `av_hwframe_map`, attaches it to a framebuffer with `drmModeAddFB2`, and the atomic commit composes it at vblank with no CPU blit. Cross-modifier flips (linear XRGB8888 dumb buffer ↔ tiled NV12 / P010) work without a full-plane reconfigure.
 - **NVDEC decode → CUDA surface → KMS scanout** is also zero-copy on hosts with the NVIDIA proprietary driver.
+- **RKMPP decode → DRM PRIME dma-buf → KMS scanout** is the zero-copy path on Rockchip RK3568 / RK3588 (the `aarch64-linux-rockchip` release, `video-decoder-rkmpp` + `rga-transfer`). The RGA 2D accelerator handles the DRM_PRIME → sysmem NV12 transfer in hardware when a copy is unavoidable.
 - **CPU decode** allocates an XRGB8888 dumb buffer, blits the decoded frame in, and atomic-commits the dumb buffer — one CPU copy per frame.
 
 Hosts that reject atomic ioctls (`EOPNOTSUPP` from the kernel, or `EINVAL` on the first commit) **fall back to legacy `set_crtc` per-frame** and emit a single `display_atomic_unavailable` Warning event so the operator can spot the degradation.
@@ -178,8 +179,8 @@ Save-time errors that surface as `command_ack.error_code` on `add_output` / `upd
 | `av_sync_offset_ms` | Signed EMA of the video-vs-audio offset (positive = video late). |
 | `current_resolution` | Negotiated KMS resolution (e.g. `"1920x1080"`). |
 | `current_refresh_hz` | Negotiated refresh rate. |
-| `pixel_format` | Pixel format on the wire — `"XRGB8888"` on the CPU / dumb-buffer path, `"NV12"` / `"P010"` on the VAAPI / NVDEC zero-copy path. |
-| `decoder_kind` | `"vaapi"`, `"nvdec"`, `"qsv"`, or `"sw"` — what the runtime decoder resolver actually opened on this host. |
+| `pixel_format` | Pixel format on the wire — `"XRGB8888"` on the CPU / dumb-buffer path, `"NV12"` / `"P010"` on the VAAPI / NVDEC / RKMPP zero-copy path. |
+| `decoder_kind` | `"cpu"`, `"cpu (hw unavailable)"` (operator requested a HW backend the host can't open), `"nvdec"`, `"qsv"`, `"vaapi-zerocopy"`, or `"rkmpp-zerocopy"` — what the runtime decoder resolver actually opened on this host. |
 | `video_codec` | `"h264"` / `"hevc"`. |
 | `audio_codec` | `"aac"` / `"mp2"` / `"ac3"` / `"eac3"` / `"opus"` / `"none"`. |
 

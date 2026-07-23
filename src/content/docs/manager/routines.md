@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-**Routines** are bilbycast-manager's automation surface. A routine is a named bundle of actions (start a flow, stop a flow, restart a flow, or activate a [Switcher](/manager/switcher/) preset) plus zero or more **schedules** that fire it on a recurring or one-shot cadence.
+**Routines** are bilbycast-manager's automation surface. A routine is a named bundle of actions (start / stop / restart a flow, activate a [Switcher](/manager/switcher/) preset, play a [Replay](/manager/replay/) clip, or arm / disarm recording — see the full list below) plus zero or more **schedules** that fire it on a recurring or one-shot cadence.
 
 If the Live Switcher is the director's manual console, Routines are the programme schedule — sponsor blocks, prime-time switches, weekday news cuts, weekend feeds, and "set up the rig at 6am every weekday" maintenance windows.
 
@@ -25,6 +25,9 @@ A routine has one or more actions. Each action is one of:
 | `flow_stop` | Stop a flow on a target edge node. |
 | `flow_restart` | Restart a flow on a target edge node. |
 | `activate_switcher_preset` | Run the same logic the [Switcher's](/manager/switcher/) Activate button does — including per-node Operate permission checks. |
+| `play_clip` | Play a recorded [Replay](/manager/replay/) clip back through a flow's active replay input. Target is `(node, flow, clip)`; cross-tenant clips are refused at both create time and fire time. |
+| `start_recording` | Arm continuous recording on a flow — the scheduled equivalent of the Start button on the `/replay` page. Useful for "record every Saturday match" compliance workflows. |
+| `stop_recording` | Disarm continuous recording on a flow. Companion to `start_recording` — schedule the stop a few hours after the show ends to bound disk consumption. |
 
 A routine with multiple actions fans them out concurrently. The aggregated outcome is `success` (all actions ACK'd OK), `partial` (some failed), or `failed` (all failed). Partial and failed outcomes raise real-time alarms; success is silent (recorded in activation history but not in the events feed) so a busy schedule doesn't drown the alarm panel.
 

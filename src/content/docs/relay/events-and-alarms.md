@@ -52,28 +52,35 @@ Events are queued in an unbounded in-memory channel. When the relay is not conne
 
 ### Edge Connections (`edge`)
 
-| Severity | Message | Trigger |
-|----------|---------|---------|
-| info | Edge connected from {addr} | New QUIC connection accepted from an edge node |
-| info | Edge disconnected from {addr} | Edge QUIC connection closed |
-| warning | Edge connection failed: control stream error from {addr} | Failed to accept bidirectional control stream |
-| warning | Protocol version mismatch (edge={v}, relay={v}) | Edge Hello message version differs from relay |
+| Severity | Message | Trigger | Details |
+|----------|---------|---------|---------|
+| info | Edge connected from {addr} | New QUIC connection accepted from an edge node | `{ remote_addr }` |
+| info | Edge disconnected from {addr} | Edge QUIC connection closed | `{ remote_addr }` |
+| warning | Edge connection failed: control stream error from {addr} | Failed to accept bidirectional control stream | `{ remote_addr }` |
+| warning | Connection rejected: per-IP cap exceeded ({n} active from {ip}) | New QUIC connection dropped at handshake — per-IP connection cap (`max_connections_per_ip`, default 64) reached. DoS mitigation | `{ error_code: "relay_dos_suspect", remote_addr, remote_ip, active_connections, cap }` |
+| warning | Protocol version mismatch (edge={v}, relay={v}) | Edge Hello message version differs from relay | `{ edge_version, relay_version }` |
+| warning | QUIC connection accept failed: {error} | QUIC/TLS handshake failure at the server level | `{ error }` |
 
-**Source**: `src/session.rs`
+**Source**: `src/session.rs`, `src/server.rs`
 
 ---
 
 ### Tunnels (`tunnel`)
 
-| Severity | Message | Trigger |
-|----------|---------|---------|
-| info | Tunnel active (both sides bound) | Both ingress and egress edges have bound |
-| warning | Tunnel bind rejected: invalid token | HMAC-SHA256 bind token verification failed |
-| warning | Tunnel down: edge disconnected | Edge QUIC connection lost, affecting bound tunnel |
+| Severity | Message | Trigger | Details |
+|----------|---------|---------|---------|
+| info | Tunnel active (both sides bound) | Both ingress and egress edges have bound | `{ direction }` |
+| info | Tunnel waiting: {direction} side bound | Only one side has bound, waiting for peer | `{ direction }` |
+| info | Tunnel unbound by edge | Edge sent TunnelUnbind | |
+| warning | Tunnel bind rejected: invalid token | HMAC-SHA256 bind token verification failed | `{ remote_addr }` |
+| warning | Tunnel bind rejected: per-connection cap exceeded | `TunnelBind` rejected — per-connection tunnel-bind cap (`max_tunnels_per_connection`, default 100) reached on this connection. DoS mitigation; relay replies `TunnelDown { reason: "per-connection tunnel limit exceeded" }` | `{ error_code: "relay_dos_suspect", remote_addr, active_binds, cap }` |
+| warning | Tunnel down: edge disconnected | Edge QUIC connection lost, affecting bound tunnel | |
+| warning | Native-UDP register rejected: invalid token | `Register` on the native plain-UDP plane (`:4434`) failed bind-token verification | `{ remote_addr, transport: "udp" }` |
+| warning | Native-UDP register rejected: per-IP session cap exceeded | `Register` on the native plain-UDP plane dropped — per-IP session cap reached. DoS mitigation | `{ error_code: "relay_dos_suspect", remote_addr, remote_ip, transport: "udp" }` |
 
 The `flow_id` field contains the tunnel UUID for all tunnel events.
 
-**Source**: `src/session.rs`
+**Source**: `src/session.rs`, `src/udp_relay.rs`
 
 ---
 
@@ -101,6 +108,21 @@ The `flow_id` field contains the tunnel UUID for all tunnel events.
 
 ---
 
+### Viewer Distribution (`distribution`)
+
+Emitted only by a relay built with the optional `viewer-distribution` role (default-off Cargo feature; the shipped distribution artefacts use `viewer-distribution-vendored`). A plain opaque-forwarder relay never emits these; they appear only on a distribution-role build that runs the WHEP SFU + LL-HLS/CMAF origin.
+
+| Severity | Message | Trigger | Details |
+|----------|---------|---------|---------|
+| info | WHIP ingest opened for stream '{stream}' | A WHIP-in ingest began feeding a stream's hub | `{ stream }` |
+| info | distribution ingest opened for stream '{stream}' | A QUIC ES ingest began feeding a stream's hub | `{ stream, has_audio }` |
+| info | distribution ingest closed for stream '{stream}' | A QUIC ES ingest stopped; the stream tears down | `{ stream }` |
+| warning | per-IP viewer cap ({cap}) reached from {ip} | A WHEP viewer request was rejected — per-source-IP concurrent-viewer cap (`max_viewers_per_ip`) reached | `{ ip, cap }` |
+
+**Source**: `src/distribution/`
+
+---
+
 ## Manager-Generated Events
 
 In addition to events sent by the relay, the manager itself generates these events:
@@ -119,15 +141,22 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| `edge` | 4 | Edge QUIC connection lifecycle |
-| `tunnel` | 3 | Tunnel state changes and authentication |
+| `edge` | 6 | Edge QUIC connection lifecycle (with structured details), incl. per-IP DoS cap and QUIC accept failures |
+| `tunnel` | 8 | Tunnel state changes, authentication, lifecycle (waiting, unbound), per-connection DoS cap, and native plain-UDP register rejections (invalid token + per-IP session cap) |
 | `manager` | 6 | Manager connection and credential management |
-| **Total** | **13** | |
+| `distribution` | 4 | Viewer-distribution ingest lifecycle + per-IP viewer cap (only on `viewer-distribution` builds) |
+| **Total** | **24** | |
+
+The always-compiled `edge`, `tunnel`, and `manager` categories account for 20 events. The `distribution` category (4 events) is present only when the relay is built with the optional `viewer-distribution` role.
+
+Three of these — the per-IP connection cap (`edge`), the per-connection tunnel-bind cap (`tunnel`), and the native-UDP per-IP session cap (`tunnel`) — carry the structured `error_code: "relay_dos_suspect"` in their `details`. This is the identifier the security-hardening guidance tells operators to monitor for DoS-cap rejections.
 
 ### By Severity
 
 | Severity | Count | Description |
 |----------|-------|-------------|
 | critical | 1 | Manager authentication failure |
-| warning | 6 | Disconnects, bind rejections, protocol mismatches, persistence failures |
-| info | 6 | Connections, tunnel activation, secret rotation |
+| warning | 13 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, per-IP viewer cap |
+| info | 10 | Connections, tunnel activation/waiting/unbound, secret rotation, distribution ingest lifecycle |
+
+The always-compiled event surface (excluding the optional `distribution` category) tallies 20: critical=1, warning=12, info=7.

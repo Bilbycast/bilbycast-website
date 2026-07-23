@@ -41,13 +41,11 @@ The bilbycast-appear-x-api-gateway acts as a protocol bridge between two systems
 
 1. User clicks an action button in the AI assistant (or sends a command via API)
 2. Manager sends a `command` message via WebSocket to the gateway
-3. WS client receives the command, creates a oneshot channel for the ack
-4. Command forwarded to the command handler via mpsc channel
-5. Command handler translates the action type to an Appear X JSON-RPC method
-6. JSON-RPC call made to the Appear X unit
-7. Response wrapped in a `command_ack` and sent back through the oneshot channel
-8. WS client sends the ack to the manager
-9. Manager forwards the result to the UI
+3. The SDK read loop invokes `CommandHandler::handle_command` directly on the received command (no local mpsc + oneshot hop, no separate handler task)
+4. The handler translates the action type to an Appear X JSON-RPC method
+5. JSON-RPC call made to the Appear X unit
+6. The SDK packs the handler's return value into a `command_ack` and sends it to the manager
+7. Manager forwards the result to the UI
 
 ### Health Derivation
 
@@ -82,18 +80,17 @@ The gateway implements the exact same security model as bilbycast-edge and bilby
 
 ## Concurrency Model
 
-All three main tasks run concurrently via `tokio::spawn`:
+Two top-level tasks run concurrently:
 
 ```
 main()
   ├── spawn: polling engine (multiple sub-tasks per board/poll type)
-  ├── spawn: command handler (receives from mpsc channel)
-  └── await: WS client (blocks until cancellation)
+  └── await: SDK GatewayClient (blocks until cancellation; its read loop dispatches commands inline)
 ```
 
-Communication between tasks uses the SDK's channels:
-- An `Emitter` (backed by a single bounded `OutboundFrame` channel) — polling → WS client (stats/health/event messages)
-- A `CommandHandler` trait — the WS client invokes `handle_command` and automatically packs the return value into a `command_ack`
+There is no separate spawned command-handler task — the SDK's `GatewayClient` read loop dispatches each command inline. Communication uses the SDK's channels:
+- An `Emitter` (backed by a single bounded `OutboundFrame` channel) — polling → SDK client (stats/health/event messages)
+- A `CommandHandler` trait — the SDK read loop invokes `handle_command` directly and automatically packs the return value into a `command_ack`
 
 Graceful shutdown uses `tokio_util::CancellationToken` tree — cancelling the root token propagates to all child tokens.
 

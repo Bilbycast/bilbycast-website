@@ -28,17 +28,26 @@ The probe **never blocks flow start** — the cost model uses the static support
     "units_total": 7400,
     "units_used": 480,
     "hw_session_usage": {
-      "nvenc": { "in_use": 2, "limit": 4 },
-      "qsv":   { "in_use": 0, "limit": null }
+      "nvenc_in_use": 2,
+      "qsv_in_use": 0,
+      "videotoolbox_in_use": 0,
+      "amf_in_use": 0,
+      "nvenc_in_use_4k": 1,
+      "nvdec_in_use": 1
     },
     "hw_encoder_session_limits": {
       "nvenc_max_sessions": 4,
       "qsv_max_sessions": null,
       "vaapi_max_sessions": null,
       "amf_max_sessions": null,
-      "videotoolbox_max_sessions": null,
+      "nvenc_max_sessions_4k": 2,
+      "rkmpp_max_sessions": null
+    },
+    "hw_decoder_session_limits": {
       "nvdec_max_sessions": 4,
-      "qsv_dec_max_sessions": null
+      "qsv_max_sessions": null,
+      "vaapi_max_sessions": null,
+      "nvdec_max_sessions_4k": 2
     },
     "hw_encoder_chroma": {
       "hevc_nvenc_yuv420_8bit": true,
@@ -49,9 +58,14 @@ The probe **never blocks flow start** — the cost model uses the static support
     },
     "cpu": {
       "brand": "AMD EPYC 7543P 32-Core",
-      "cores": 32,
-      "avx": "avx2",
-      "x264_720p30_capacity_estimate": 64
+      "physical_cores": 32,
+      "logical_cores": 64,
+      "avx_class": "avx2"
+    },
+    "sw_capacity": {
+      "x264_720p30_streams": 64,
+      "x265_720p30_streams": 24,
+      "aac_encode_streams": 128
     }
   }
 }
@@ -61,10 +75,12 @@ The probe **never blocks flow start** — the cost model uses the static support
 |---|---|
 | `units_total` | Per-host budget. `1000 + 200 × physical_cores`. |
 | `units_used` | Live sum across all running flows. |
-| `hw_session_usage` | Per-family live session count plus the probed cap. `null` cap means probe was disabled or yielded an unbounded result. |
-| `hw_encoder_session_limits` | Probed cap per family. The manager UI compares `in_use + flow's planned sessions` against the cap before save. |
+| `hw_session_usage` | Flat map of live session counts — one `*_in_use` counter per HW family (`nvenc_in_use`, `qsv_in_use`, `vaapi_in_use`, `amf_in_use`, `rkmpp_in_use`) plus the decoder counters (`nvdec_in_use`, `qsv_decode_in_use`, `vaapi_decode_in_use`, `rkmpp_decode_in_use`). Each also carries a `*_in_use_4k` sub-count for the 4K-resolution subset. The four base encoder counters (`nvenc_in_use`, `qsv_in_use`, `videotoolbox_in_use`, `amf_in_use`) always serialize — even at zero; the additive counters (`vaapi_in_use`, every `*_in_use_4k`, `rkmpp_in_use`, and the decoder counters) are omitted from the wire when zero. There is no per-family object and no embedded limit — the caps live in the separate `*_session_limits` blocks below. |
+| `hw_encoder_session_limits` | Probed **encoder** cap per family — `nvenc` / `qsv` / `amf` / `vaapi` / `rkmpp` `_max_sessions` plus a matching `_max_sessions_4k`. Only families that were actually probed appear; a missing or `null` field means "not probed" (family not compiled in, probe disabled, or the 4K tier was skipped). The manager UI compares `*_in_use + flow's planned sessions` against the cap before save. |
+| `hw_decoder_session_limits` | Probed **decoder** cap per family — `nvdec` / `qsv` / `vaapi` / `rkmpp` `_max_sessions` (+ `_max_sessions_4k`). Same "only-when-probed" rule; emitted as its own object alongside the encoder limits, not nested inside them. |
 | `hw_encoder_chroma` | Per-(codec, chroma, bit-depth) cell — `true` if the backend opened that combination at probe time. The codec dropdown in the manager UI keys off these. |
-| `cpu` | CPU brand + core count + AVX class. `x264_720p30_capacity_estimate` is the rough "this many concurrent 720p30 software encodes before saturating" heuristic. |
+| `cpu` | CPU brand + `physical_cores` + `logical_cores` + `avx_class`. |
+| `sw_capacity` | Software-encode capacity estimates (rough, ±50 %): `x264_720p30_streams` / `x265_720p30_streams` = concurrent 720p30 software encodes before saturating; `aac_encode_streams` = concurrent AAC encodes. |
 
 ## Cost units — how flows are priced
 
@@ -147,15 +163,15 @@ With the probe disabled, `hw_encoder_session_limits.*` reports `null` and the ma
 When the edge is built with the `hardware-monitor-nvml` Cargo feature **and** an NVIDIA GPU is present (Linux + Windows only), the budget block carries live GPU stats updated every 5 s:
 
 ```jsonc
-"nvml": {
-  "gpu_name": "NVIDIA L4",
-  "encoder_utilisation_pct": 42,
-  "decoder_utilisation_pct": 7,
-  "active_encoder_sessions": 2
+"live": {
+  "nvenc_encoder_percent": 42,
+  "nvdec_decoder_percent": 7,
+  "nvenc_session_count": 2,
+  "last_poll_unix": 1737600000
 }
 ```
 
-The manager UI uses this for the live activity tile next to the static HW session chips. macOS builds (VideoToolbox) and non-NVIDIA hosts have no equivalent today.
+The block rides under the `live` key on the budget (not `nvml`), carries no GPU name, and populates only on NVIDIA hosts with the feature compiled in. The manager UI uses this for the live activity tile next to the static HW session chips. macOS builds (VideoToolbox) and non-NVIDIA hosts have no equivalent today.
 
 ## See also
 

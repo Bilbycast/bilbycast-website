@@ -1,0 +1,112 @@
+name: Resolve lockfile
+
+# Helper for dependency upgrades that cannot be hand-edited into
+# package-lock.json.
+#
+# A patch bump of a single transitive package is safe to hand-edit: the
+# resolved tree does not move, so swapping version + integrity is equivalent to
+# what npm would write. A range change in package.json is not — the whole tree
+# has to be re-resolved, and 470+ entries cannot be hand-authored.
+#
+# npm is deliberately not installed on the dev host and nothing in this repo's
+# build needs it locally; it is a CI-only tool here. This job borrows it,
+# regenerates the lockfile, PROVES the site still builds, and pushes the result
+# back to the branch it ran on. It never runs on main and never deploys.
+
+# Runs on any `deps/**` branch. Branch-scoped `push` rather than
+# `workflow_dispatch` because a dispatchable workflow has to exist on the
+# default branch AND be dispatched against a ref, which is fiddlier than just
+# pushing the branch. `paths-ignore` is the loop guard — the only thing this
+# job pushes back is package-lock.json, so its own commit cannot re-trigger it.
+#
+# To use: branch as `deps/<something>`, edit package.json, push. The job
+# resolves, builds, and pushes the lockfile back, or fails with the reason.
+on:
+  push:
+    branches:
+      - 'deps/**'
+    paths-ignore:
+      - 'package-lock.json'
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Refuse to run on main
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "::error::This job rewrites the lockfile and must run on a branch, not main."
+            exit 1
+          fi
+
+      # Discard the old lockfile and resolve from package.json alone.
+      #
+      # An incremental `npm install` against a lockfile pinning a previous
+      # major fails ERESOLVE: it keeps the old dependency in the tree while
+      # the root asks for the new range, and reports a peer conflict even
+      # when the new range plainly admits the new version (seen on
+      # @astrojs/starlight 0.38 -> 0.41). Re-resolving from scratch is the
+      # correct operation for a major upgrade, and the build step below is
+      # what makes it safe.
+      - name: Resolve dependencies
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+
+      - name: Report what moved
+        run: |
+          echo "### Resolved versions" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm ls astro @astrojs/starlight sharp --depth=0 2>&1 | tail -20 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "### Remaining advisories" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev 2>&1 | tail -40 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # The gate that matters. A lockfile that resolves but does not build is
+      # worse than no change at all, because main auto-deploys to Pages.
+      - name: Build the site
+        run: npm run build
+
+      - name: Prove the build produced a real site
+        run: |
+          test -d dist || { echo "::error::no dist/"; exit 1; }
+          pages=$(find dist -name '*.html' | wc -l)
+          echo "built $pages HTML pages"
+          echo "- **$pages** HTML pages built" >> "$GITHUB_STEP_SUMMARY"
+          # A Starlight docs site that silently loses its content collection
+          # still emits a valid-but-empty dist; fail loudly instead.
+          if [ "$pages" -lt 20 ]; then
+            echo "::error::only $pages pages — content collection likely broke"
+            exit 1
+          fi
+          for must in index.html; do
+            test -f "dist/$must" || { echo "::error::missing dist/$must"; exit 1; }
+          done
+          find dist -name '*.html' | sed 's|^dist/||' | sort | head -60 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit the resolved lockfile
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- package-lock.json; then
+            echo "lockfile unchanged"
+            exit 0
+          fi
+          git add package-lock.json
+          git commit \
+            -m "chore(deps): regenerate package-lock.json via npm install" \
+            -m "Generated on CI because npm is not installed on the dev host. The build step in this same job is the proof that the resolved tree works."
+          git push origin HEAD:${{ github.ref_name }}

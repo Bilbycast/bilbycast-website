@@ -124,13 +124,16 @@ export default defineConfig({
 						{ label: 'Adding New Device Gateways', slug: 'appear-x-gateway/adding-new-device-gateways' },
 					],
 				},
+				// Starlight 0.39 removed support for an `autogenerate` object
+				// carrying its own `label`; a labelled group now has to wrap
+				// the autogenerate config in `items`. Same rendered sidebar.
 				{
 					label: 'Security',
-					autogenerate: { directory: 'security' },
+					items: [{ autogenerate: { directory: 'security' } }],
 				},
 				{
 					label: 'Reference',
-					autogenerate: { directory: 'reference' },
+					items: [{ autogenerate: { directory: 'reference' } }],
 				},
 			],
 		}),

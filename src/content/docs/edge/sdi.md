@@ -16,13 +16,17 @@ SDI lives behind the **`sdi-decklink`** build feature, which is **off** in a
 plain `cargo build`. This page is about turning it on.
 
 :::caution[The published release binaries do not currently include SDI]
-The `*-linux-full` and `*-linux-rockchip` release artefacts request the
+The two `*-linux-full` artefacts (x86_64 and aarch64) request the
 `sdi-decklink` feature, but the release pipeline drops it whenever the DeckLink
 SDK is not available to CI — which has been the case since v0.99.2. Every
 published binary up to and including **v0.102.0** therefore has no SDI, and the
 release notes for v0.100.0–v0.102.0 originally said otherwise (they have since
 been corrected). Until a release ships with it, use **Checklist A** below to
 build your own.
+
+The **`*-linux-rockchip`** artefact does not include SDI at all, by design —
+those boards are the embedded deployment rather than a rack host with a PCIe
+DeckLink fitted. Build from source if you need SDI on Rockchip.
 :::
 
 ## Why there is a build step at all

@@ -36,6 +36,9 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [SDI Input (Blackmagic DeckLink)](#sdi-input-blackmagic-decklink)
 - [Output Types](#output-types)
   - [RTP Output](#rtp-output)
+  - [UDP Output](#udp-output)
+  - [Egress pacing](#egress-pacing)
+  - [Epoch lock (cross-node alignment)](#epoch-lock-cross-node-alignment)
   - [SRT Output](#srt-output)
   - [RIST Output](#rist-output)
   - [RTMP Output](#rtmp-output)
@@ -178,8 +181,17 @@ If neither file exists at startup, an empty default configuration is used. Both 
 | `server` | object | Yes | - | API server configuration. |
 | `monitor` | object | No | `null` | Web monitoring dashboard configuration. |
 | `manager` | object | No | `null` | Manager WebSocket connection configuration. See [Manager Configuration](#manager-configuration). |
-| `flows` | array | No | `[]` | List of flow configurations. See [Flow Configuration](#flow-configuration). |
+| `inputs` | array | No | `[]` | Top-level input definitions. Each has a stable `id` and `name` plus the type-tagged fields. See [Input Types](#input-types). |
+| `outputs` | array | No | `[]` | Top-level output definitions. Same shape. See [Output Types](#output-types). |
+| `flows` | array | No | `[]` | Flows, which reference inputs and outputs **by ID**. See [Flow Configuration](#flow-configuration). |
 | `tunnels` | array | No | `[]` | List of IP tunnel configurations. See [Tunnel Configuration](#tunnel-configuration). |
+| `resource_limits` | object | No | `null` | Host CPU / RAM thresholds that raise events when exceeded. See [Resource Limits](#resource-limits). |
+
+:::note[Inputs and outputs are first-class, not nested in flows]
+An input or output is a top-level entity with its own stable ID, and it can exist without being attached to any flow. Flows reference them via `input_ids` / `output_ids`.
+
+Assignment is exclusive: an input or output can belong to **one** flow at a time. This is what makes an input reusable across configurations, editable without touching the flow that carries it, and hot-attachable to a running flow.
+:::
 
 ---
 
@@ -438,15 +450,15 @@ Tunnel-level failover is not *hitless* — expect a ~30 s gap on the tunneled fl
 
 ## Flow Configuration
 
-Each flow defines one input source fanning out to one or more output destinations.
+A flow connects one or more inputs to any number of outputs, **by reference**. The inputs and outputs themselves are defined once at the top level.
 
 ```json
 {
   "id": "main-feed",
   "name": "Main Program Feed",
   "enabled": true,
-  "input": { ... },
-  "outputs": [ ... ]
+  "input_ids": ["srt-in-1", "srt-in-backup"],
+  "output_ids": ["udp-out-1", "rtmp-out-1"]
 }
 ```
 
@@ -455,13 +467,26 @@ Each flow defines one input source fanning out to one or more output destination
 | `id` | string | Yes | - | Unique identifier. Cannot be empty. Must be unique across all flows. |
 | `name` | string | Yes | - | Human-readable display name. Cannot be empty. |
 | `enabled` | boolean | No | `true` | Whether to auto-start this flow on startup or creation. |
+| `input_ids` | array | Yes | - | IDs of the inputs this flow uses. In a passthrough flow **at most one is active at a time**; the rest are standby, switched with a Take. In an assembled flow every member runs concurrently. |
+| `output_ids` | array | Yes | - | IDs of the outputs this flow feeds. May be empty — an empty list makes this an *input-host* flow that owns its inputs and publishes them for sibling flows to consume. |
 | `media_analysis` | boolean | No | `true` | Enable media content analysis (codec, resolution, frame rate detection). |
-| `thumbnail` | boolean | No | `true` | Enable thumbnail generation (requires ffmpeg). |
-| `thumbnail_program_number` | integer | No | `null` | When the input is an MPTS, render the thumbnail from this MPEG-TS program only. `null` lets ffmpeg pick the first program it finds. Must be `> 0` if set. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
+| `thumbnail` | boolean | No | `true` | Enable thumbnail generation. |
+| `thumbnail_program_number` | integer | No | `null` | When the input is an MPTS, render the thumbnail from this program only. Must be `> 0` if set. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
+| `thumbnail_interval_secs` | integer | No | `5` | Capture cadence, 1–60 s. Freeze detection samples on its own fixed floor, decoupled from this, so a fast preview does not false-trip "frozen". |
 | `bandwidth_limit` | object | No | `null` | Per-flow bandwidth monitoring (RP 2129). See [Bandwidth Limit](#bandwidth-limit). |
-| `input` | object | Yes | - | Input source configuration (RTP, UDP, SRT, RTMP, RTSP, WebRTC, or WHEP). |
-| `outputs` | array | Yes | - | Output destination configurations. Can be empty. Output IDs must be unique within the flow. |
-| `assembly` | object | No | `null` | Optional PID-bus assembly block. `null` (or `"kind": "passthrough"`) = forward the active input verbatim (default). Set `"kind": "spts"` / `"mpts"` to build a fresh MPEG-TS from elementary streams pulled off any of the flow's inputs. See [Flow Assembly (PID Bus)](/edge/flow-assembly/). |
+| `bandwidth_profile` | string | No | auto | Broadcast-channel sizing: `"standard"` (TS contribution to ~500 Mbps), `"high_bitrate"` (0.5–3 Gbps compressed), `"uncompressed"` (ST 2110-20/-23, MXL). Auto-derived from the input set; set this only to override. |
+| `assembly` | object | No | `null` | PID-bus assembly block. `null` (or `"kind": "passthrough"`) forwards the active input verbatim. `"spts"` / `"mpts"` builds a fresh MPEG-TS from elementary streams pulled off any of the flow's inputs. See [Flow Assembly (PID Bus)](/edge/flow-assembly/). |
+| `content_analysis` | object | No | `null` | In-depth content analysis tier — `lite`, `audio_full` or `video_full`. Each tier is an independent subscriber that drops rather than backpressuring the media path. |
+| `recording` | object | No | `null` | Continuous recording to disk for replay. See [Recording (Flow Attribute)](#recording-flow-attribute). |
+| `master_clock` | object | No | `null` | Override the per-flow master clock. Auto-selected by flow role when unset — see [Master Clock & A/V Sync](/edge/clocking/). |
+| `flow_group_id` | string | No | `null` | ST 2110 flow-group membership. |
+| `clock_domain` | integer | No | `null` | PTP clock domain for ST 2110 flows. Advertised on NMOS IS-04. |
+
+:::caution[Changing some fields restarts the flow]
+Most edits are applied surgically — adding or removing an input, editing a standby input's definition, or adding an output does not interrupt what is on air.
+
+Five flow-level fields are read once when the flow starts and therefore **force a full restart** when changed: `bandwidth_limit`, `content_analysis`, `recording`, `master_clock` and `assembly`. Changing a hitless leg list does the same.
+:::
 
 ### Bandwidth Limit
 
@@ -495,7 +520,21 @@ This is distinct from `max_bitrate_mbps` on RTP input, which is a hard token-buc
 
 ## Input Types
 
-The `input` object uses a `type` discriminator field to determine which input variant is used: `rtp`, `udp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `media_player`, `test_pattern`, `bonded`, `replay`, or `sdi`.
+Each entry in the top-level `inputs` array carries an `id`, a `name`, and a `type` discriminator selecting the variant: `rtp`, `udp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `media_player`, `test_pattern`, `bonded`, `replay`, or `sdi`.
+
+### Fields shared across input types
+
+| Field | Type | Default | Applies to | Description |
+|-------|------|---------|-----------|-------------|
+| `passthrough_clock` | boolean | `false` | TS-carrying inputs | Forward the source's PCR and PES timestamps **unchanged**. By default the edge regenerates them against its own master clock (encoder-style), which is what you want for a jittery or free-running source. Set `true` for relay / transparent-forwarder behaviour — and note it is **required** for [epoch lock](#epoch-lock-cross-node-alignment). |
+| `ingress_dejitter_ms` | integer | `60` | RTP, UDP | De-jitter buffer depth, 20–2000 ms. Recovers the source rate from inter-PCR observations and releases packets paced at that rate, so analysers, the PCR PLL, the PID bus and every output see a smooth cadence regardless of network jitter. Cooperates with SMPTE 2022-7 — it runs after the merge. |
+| `interface_binding` | object | `null` | Most inputs and outputs | Pin this endpoint to a specific NIC by name. Also honoured per-leg inside 2022-7 redundancy and per-endpoint inside SRT bonding. |
+
+:::note[passthrough_clock and clock regeneration are opposites]
+Leave `passthrough_clock` unset (regeneration on) for ordinary contribution — it re-anchors output timing to a clean local reference.
+
+Set it to `true` when the source timing must reach the wire untouched: transparent forwarding, and any output participating in cross-node alignment. You cannot have both on the same input.
+:::
 
 ### RTP Input
 
@@ -879,6 +918,10 @@ Sends RTP-wrapped MPEG-TS packets to a unicast or multicast destination. Support
 | `dscp` | integer | No | `46` | DSCP value for QoS marking (RP 2129 C10). Range 0-63. Default 46 = Expedited Forwarding (RFC 4594). |
 | `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Applied before FEC, so the receiver's FEC protects the filtered SPTS. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
 
+| `egress_pacing` | string | No | auto | Wire-emission pacing model. See [Egress pacing](#egress-pacing). |
+| `egress_buffer_ms` | integer | No | `null` | Servo de-jitter cushion. Only valid with `egress_pacing: "servo"`. See [Egress pacing](#egress-pacing). |
+| `epoch_lock` | object | No | `null` | Cross-node egress alignment. See [Epoch lock](#epoch-lock-cross-node-alignment). |
+
 **Validation rules:**
 - `id` cannot be empty.
 - `dest_addr`, `bind_addr`, and `interface_addr` must all use the same address family.
@@ -909,12 +952,81 @@ Sends raw MPEG-TS over UDP without RTP headers. Datagrams are TS-aligned (7×188
 | `interface_addr` | string | No | `null` | Network interface IP for multicast send. |
 | `dscp` | integer | No | `46` | DSCP value for QoS marking. Range 0-63. |
 | `program_number` | integer | No | `null` | MPTS → SPTS program filter. `null` = full MPTS passthrough; `Some(N)` = forward only program N as a rewritten single-program TS. Must be `> 0`. See [MPTS → SPTS filtering](#mpts--spts-filtering). |
+| `egress_pacing` | string | No | auto | Wire-emission pacing model. See [Egress pacing](#egress-pacing). |
+| `egress_buffer_ms` | integer | No | `null` | Servo de-jitter cushion. Only valid with `egress_pacing: "servo"`. See [Egress pacing](#egress-pacing). |
+| `epoch_lock` | object | No | `null` | Cross-node egress alignment. See [Epoch lock](#epoch-lock-cross-node-alignment). |
 
 **Validation rules:**
 - `id` cannot be empty.
 - `dest_addr` must be a valid socket address.
 - `dscp` must be 0-63.
 - `program_number` must be `> 0` if set.
+
+### Egress pacing
+
+UDP and RTP outputs choose **when** each datagram leaves the wire. Both accept the same two fields.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `egress_pacing` | string | auto | `"forward"`, `"pcr"` or `"servo"` — see below. |
+| `egress_buffer_ms` | integer | `null` | De-jitter cushion in milliseconds of content, 20–2000. **Only valid with `"servo"`** and rejected otherwise. Holds roughly this much content in the egress queue, absorbing arrival jitter at the cost of that much latency. |
+
+| Mode | What it does | When to use it |
+|---|---|---|
+| `forward` | Emit at the input's own cadence, no re-pacing. Lowest latency. | A clean upstream — the common case. |
+| `pcr` | Re-pace at the instants the stream's own PCR implies. | SMPTE 2022-7 dual-leg coherence, strict receivers, or smoothing a bond-reassembled cadence. **Required for [epoch lock](#epoch-lock-cross-node-alignment).** |
+| `servo` | Closed-loop release-rate servo. | A genuinely bursty, unpaced ingress. |
+
+**Unset is auto**, resolved when the output starts: `"pcr"` when the flow has a `bonded` input — the bond releases recovered packets in bursts, and forwarding at that cadence puts the burst structure straight onto the wire — and `"forward"` otherwise. A bounded residence cap guards against latency runaway in every mode.
+
+:::caution[Upgrade note for bonded flows]
+An existing bonded flow whose UDP/RTP outputs never set `egress_pacing` changes from `forward` to `pcr` on the release that introduced auto-resolution. Pin `"forward"` explicitly before upgrading if you need the old wire behaviour.
+
+Because resolution happens when the output starts, adding or removing a bonded input on a **running** flow does not re-pace outputs already running. The edge raises `egress_pacing_auto_stale` naming them; restart those outputs (or the flow) to re-resolve.
+:::
+
+### Epoch lock (cross-node alignment)
+
+Puts this output on a **shared timeline** with the same output on other nodes, so independent nodes forwarding the same feed emit the same content at the same instant and a downstream switcher can cut between them cleanly. Available on **UDP and RTP outputs only**.
+
+Arming a group is a manager operation — a single node cannot mint its own shared timeline. Configure the fields here, then create the group under **Alignment** in the manager. Full operator guide: [Aligned Output](/manager/aligned-output/).
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `egress_offset_ms` | integer | Yes | - | Hold time before release, 150–800. **Must be identical on every member of the group** — a mismatch misaligns the group by exactly the difference while every node reports healthy. |
+| `group_label` | string | No | `null` | Operator label surfaced on telemetry so the manager can group members visually. No behaviour. Max 64 chars. |
+| `pcr_pid` | integer | No | `null` | PCR PID to anchor on, for a source carrying more than one program. Must be `< 0x1FFF`. Required unless the source is single-program. |
+| `source_anchor` | object | No | `null` | The shared timeline itself. **Written by the manager, not by hand.** |
+
+```json
+{
+  "type": "udp",
+  "id": "udp-out-1",
+  "name": "Aligned Playout",
+  "dest_addr": "239.1.2.3:5004",
+  "egress_pacing": "pcr",
+  "epoch_lock": { "egress_offset_ms": 300, "group_label": "MCR-A" }
+}
+```
+
+**`egress_offset_ms` budgets the difference between your nodes, not total latency.** The manager derives the timeline from the slowest member's arrival, so each node's required hold is its lead over the slowest, plus this margin — absolute path latency cancels out. Sizing it against end-to-end latency instead pushes the output past the edge's residence cap, at which point it sheds most of the stream.
+
+**Requirements — validation enforces every one:**
+
+- Explicit `egress_pacing: "pcr"` on this output (never auto, `forward` or `servo`).
+- Exactly **one input** on the flow, and the flow is **not** assembled (no PID bus).
+- **No transcoding** on this output, and an unambiguous PCR PID.
+- Every input on the flow is `bonded`, or sets `passthrough_clock: true`.
+
+:::caution[Alignment and clock regeneration are mutually exclusive]
+Alignment reads the timing already in the stream, which only works if the node forwards it untouched. In default muxer mode the edge re-anchors output timing to *its own* clock, so the result carries that node's ingest latency — exactly the quantity alignment must cancel.
+
+Setting `passthrough_clock: true` keeps the rewriter out of the path. Turning alignment on therefore means giving up PCR/PTS regeneration on those inputs.
+:::
+
+If a flow-level requirement is violated the edge does **not** fail the config — it strips `epoch_lock` from the flow's outputs and keeps running, logging why. The absent alignment telemetry is what tells the manager the group never armed.
+
+Nodes that do not support alignment ignore the block **silently**, which looks exactly like success — so the manager hides the controls for them rather than letting you configure something that will not happen.
 
 ### SRT Output
 

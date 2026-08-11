@@ -6,9 +6,11 @@ sidebar:
 ---
 
 **Date:** 2026-03-27
-**Last updated:** 2026-03-28 (after SRT FEC, advanced config params, expanded stats — full v1.5.5 feature parity)
+**Last updated:** 2026-08-11
 
-**Note:** libsrt v1.5.5 is not yet a stable release — only release candidates (rc.0a, rc.1) exist as of March 2026. bilbycast-srt already advertises wire compatibility with v1.5.5 (`0x010505`).
+**Note on versions:** bilbycast-srt advertises wire compatibility with libsrt **v1.5.5** (`0x010505`), and this comparison is written against that release. Upstream has since published **v1.5.6**, a security release fixing two high-severity CVEs that affect every version up to and including 1.5.5.
+
+The `bilbycast-libsrt-rs` wrapper — which is what bilbycast-edge actually builds against — vendors **v1.5.6**, so shipped edge binaries are not exposed to those CVEs. If you build against a *system* libsrt, use 1.5.6 or later.
 
 ## Overview
 

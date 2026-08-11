@@ -32,7 +32,13 @@ bilbycast-srt/
 |-------|----------|
 | `srt-protocol` | Building a custom transport or embedding SRT logic |
 | `srt-transport` | Building Rust applications that need SRT |
-| `srt-ffi` | Drop-in replacement for the C++ SRT library |
+| `srt-ffi` | C ABI compatibility layer, for calling this implementation from non-Rust code. **Work in progress** — not yet a complete stand-in for the C++ library. |
+
+:::note[Which SRT implementation does bilbycast-edge use?]
+bilbycast-edge builds against **`bilbycast-libsrt-rs`**, the wrapper over Haivision's C libsrt — not this pure-Rust crate. The two deliberately mirror each other's API, but the edge uses socket-group types that only the wrapper provides (native SRT bonding), so it is not currently a drop-in swap for the edge.
+
+This crate is the right choice for your own Rust applications, and for anywhere a zero-C-dependency build matters. See the [libsrt comparison](/srt/libsrt-comparison/) for the trade-offs.
+:::
 
 ## Quick Start
 

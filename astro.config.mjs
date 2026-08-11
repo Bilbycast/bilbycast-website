@@ -53,6 +53,7 @@ export default defineConfig({
 						{ label: 'Events & Alarms', slug: 'edge/events-and-alarms' },
 						{ label: 'SMPTE ST 2110', slug: 'edge/st2110' },
 						{ label: 'MXL (Media eXchange Layer)', slug: 'edge/mxl' },
+						{ label: 'SDI (Blackmagic DeckLink)', slug: 'edge/sdi' },
 						{ label: 'NMOS', slug: 'edge/nmos' },
 						{ label: 'Audio Gateway', slug: 'edge/audio-gateway' },
 						{ label: 'Time (PTP)', slug: 'edge/ptp' },

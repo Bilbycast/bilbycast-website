@@ -773,6 +773,8 @@ Replays one or more local files (MPEG-TS, MP4 / MOV / MKV, or still images) as a
 | `paced_bitrate_bps` | integer | No | `null` | TS-only override for the egress pacer when the source has no usable PCR. Range 100 000 – 200 000 000. Leave `null` to pace from PCR. |
 | `program_number` | integer | No | `null` | MPTS program filter. Must be `> 0` if set. |
 | `ts_packets_per_datagram` | integer | No | `7` | 188-byte TS packets bundled into each broadcast-channel / tunnel datagram. Range 1–348. |
+| `operator_control` | boolean | No | node default (on) | Run this player through the transition state machine — the path the manager's **Next** button drives. `false` pins this input to the legacy sequential loop, and a `Next` issued against it is answered `media_player_control_unavailable`. Unset falls back to [`tuning.media_player_controller`](#node-tuning). |
+| `pcr_deadlines` | boolean | No | node default (on) | Pace this input's TS playout on deadlines anchored to the asset's own PCR. `false` selects the legacy byte-rate estimate, whose error integrates without bound on variable-bitrate assets. Per-input because the failure it guards against is *asset*-dependent — a spliced file whose PCR steps mid-asset — so one playlist can be moved without changing the node. Unset falls back to [`tuning.media_player_pcr_deadlines`](#node-tuning). |
 
 **Source fields:** `kind` (`"ts"` / `"mp4"` / `"image"`) and `name` are required on every entry. Image sources also take `fps` (1–60, default 5), `bitrate_kbps` (50–50 000, default 250), and `audio_silence` (default `true`). `mp4` sources must be **plain (unfragmented)** H.264 + AAC — fragmented MP4 is rejected with a Critical `media_player_source_unsupported` event.
 
@@ -1473,7 +1475,7 @@ Omit the block to disable system-resource alarms entirely. The edge's resource-b
 
 Optional top-level `tuning` block carrying node-wide defaults. Every field is optional, and an absent field means the built-in default — an absent block therefore changes nothing.
 
-These four knobs were environment variables until 2026-08, which meant the manager could neither show them nor set them: tuning a node meant editing a systemd unit and restarting, per node, with no audit trail and no way to tell one node's tuning from another's. They are ordinary config fields now and arrive over the same validated `UpdateConfig` path as everything else.
+These knobs were environment variables until 2026-08, which meant the manager could neither show them nor set them: tuning a node meant editing a systemd unit and restarting, per node, with no audit trail and no way to tell one node's tuning from another's. They are ordinary config fields now and arrive over the same validated `UpdateConfig` path as everything else.
 
 ```json
 {
@@ -1482,7 +1484,9 @@ These four knobs were environment variables until 2026-08, which meant the manag
     "ingress_dejitter_ms": 80,
     "ingress_residence_ms": 400,
     "probe_session_limits": true,
-    "probe_4k": true
+    "probe_4k": true,
+    "media_player_controller": true,
+    "media_player_pcr_deadlines": true
   }
 }
 ```
@@ -1493,14 +1497,18 @@ These four knobs were environment variables until 2026-08, which meant the manag
 | `ingress_residence_ms` | integer | `setpoint + 40` – 5000, where `setpoint` is `tuning.ingress_dejitter_ms` or the built-in 60 ms when that is unset | `max(4 × setpoint, 250)` | Default hard-shed residence cap for that buffer. A packet older than the cap is shed rather than released late, which is what bounds ingress latency when a burst or a source-rate offset outruns the servo's ±5 % authority. A per-input `ingress_residence_ms` overrides it. |
 | `probe_session_limits` | boolean | - | `true` | Run the startup hardware encoder / decoder session-capacity probe. `false` trades the manager's "sessions used **of** max" denominator for a faster boot, and disables **both** probe tiers. |
 | `probe_4k` | boolean | - | `true` | Run the second-tier 4K session-capacity probe. Ignored when `probe_session_limits` is `false`. |
+| `media_player_controller` | boolean | - | `true` | Node-wide default for media-player operator transport control. `false` selects the legacy sequential playout loop **and** withdraws the `media-player-control-v1` capability, so the manager's **Next** button disappears from every media-player flow on this node rather than being offered and refused. A per-input `operator_control` overrides it. |
+| `media_player_pcr_deadlines` | boolean | - | `true` | Node-wide default for PCR-anchored TS playout pacing. `false` selects the legacy byte-rate estimate. Use this layer when the *host* is the problem — a stalling disk, a clock step; use the per-input `pcr_deadlines` when one asset is. A per-input value overrides it. |
 
 **`ingress_dejitter_ms` reaches raw UDP and RTP inputs only.** SRT already de-jitters at the transport layer (TSBPD), RTMP and RTSP synthesise their own clock, and a bonded input's reordering buffer would shed the bond's own bursts — those transports deliberately run ingress passthrough and the node-wide setpoint does not enrol them.
 
-**The two probe switches are read once at node start.** Pushing a change to either takes effect at the node's next restart; the two ingress knobs apply on the push.
+**The two probe switches are read once at node start.** Pushing a change to either takes effect at the node's next restart, and the edge says so with a Warning `tuning_requires_restart` event rather than leaving you to infer it from an unchanged Resources card. The two ingress knobs and the two media-player knobs apply on the push and are read when an input next starts, so **restarting the flow** is enough — no node restart.
 
 Each field replaces an environment variable. The config field always wins — a legacy variable that is still read at all sits *below* this block, never above it, because an environment variable that outranked the UI would recreate the silent no-op the migration exists to close. A node that still sets one raises a Warning `deprecated_env_var` event naming the field that replaces it, so a stale unit file shows up on the manager's Events page instead of quietly doing nothing.
 
 **UI:** Manager → node → **Configure** → **Tuning**. The tab is gated on the `node_tuning` capability advertised on `HealthPayload.capabilities`, so an edge too old to honour the block does not offer it.
+
+The **Media Player** section of that tab is gated separately, on `media_player_tuning`. Those two fields landed after `node_tuning` shipped, so an edge from that release advertises `node_tuning`, accepts them on a push and ignores them — precisely the accept-and-ignore failure `node_tuning` exists to prevent, which reusing the bit would have recreated. The rest of the tab still renders on such an edge.
 
 ---
 

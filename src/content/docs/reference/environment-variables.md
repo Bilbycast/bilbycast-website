@@ -144,16 +144,33 @@ applying is worse than one that says nothing.
 | `BILBYCAST_EGRESS_BUFFER_MS` | The per-output `egress_buffer_ms` config field. |
 | `BILBYCAST_EGRESS_RESIDENCE_MS` | The per-output `egress_buffer_ms` config field, which the residence is derived from. No field carries a residence directly — the egress servo derives it from the cushion it is asked to hold. |
 | `BILBYCAST_BOND_FWMARK_BASE` | `BILBYCAST_BOND_RT_TABLE_BASE` / `BILBYCAST_BOND_RT_PRIO_BASE`. Nothing ever read the fwmark variable. |
+| `BILBYCAST_MEDIA_PLAYER_INCREMENTAL_MP4` | Nothing — the bounded incremental MP4/MOV reader is now unconditional in release builds. This selected the whole-file demux, which holds an entire asset resident: a 4 GiB file is a 4 GiB spike, and that out-of-memory is exactly what the bounded reader was written to fix. A control whose "off" position is a known OOM does not belong on an operator's screen, so unlike its two siblings it was **not** given a config field. It survives in debug builds only, for diagnostics. |
 
-### Media-player rollback levers (edge)
+### Media-player rollback levers (edge) — now config fields
 
-Each of these is **on by default** and exists so one node can be reverted without rolling back a release. They are diagnostic controls, not tuning knobs — leave them alone unless you are working a specific fault.
+These are still **on by default** and still exist so one node can be reverted
+without rolling back a release. Two of them have moved into the node's
+configuration, at **Manager → node → Configure → Tuning → Media Player**, so
+they are visible per node, audited in Config History, and settable without SSH.
+The third was withdrawn rather than moved.
 
-| Variable | Description |
-|----------|-------------|
-| `BILBYCAST_MEDIA_PLAYER_CONTROLLER` | Set to `0`/`false`/`off` to fall back to the legacy sequential playout loop. This also withdraws the media-player control capability, so the manager's **Next** button disappears. The per-input `operator_control: false` setting is the targeted alternative and takes precedence. |
-| `BILBYCAST_MEDIA_PLAYER_PCR_DEADLINES` | Set to `0`/`false`/`off` to pace TS playout from the legacy byte-rate estimate instead of deadlines anchored on the source's own PCR. The PCR-anchored mode fixes an unbounded overshoot on variable-bitrate assets; its own failure modes are asset- and host-dependent, which is why the lever exists. |
-| `BILBYCAST_MEDIA_PLAYER_INCREMENTAL_MP4` | Set to `0`/`false`/`off` to fall back to the whole-file MP4/MOV demux, which holds an entire asset in RAM — a 4 GiB file is a 4 GiB resident spike. Diagnostic use only. |
+Both surviving levers apply on save and are read when a media-player input next
+starts, so **restart the flow** to apply — no node restart. A per-input setting
+always overrides the node-wide default.
+
+| Variable | Status | What to use instead |
+|----------|--------|---------------------|
+| `BILBYCAST_MEDIA_PLAYER_CONTROLLER` | **Deprecated** — still read for one release, *below* the config field | `tuning.media_player_controller`, or the targeted per-input `operator_control`. Turning it off falls back to the legacy sequential playout loop and withdraws the media-player control capability, so the manager's **Next** button disappears node-wide. |
+| `BILBYCAST_MEDIA_PLAYER_PCR_DEADLINES` | **Deprecated** — still read for one release, *below* the config field | `tuning.media_player_pcr_deadlines`, or the new per-input `pcr_deadlines` on a `media_player` input. Turning it off paces TS playout from the legacy byte-rate estimate instead of deadlines anchored on the asset's own PCR. Failure modes are both host-dependent (a stalling disk, a clock step) and asset-dependent (a spliced file), which is why both layers exist. |
+
+A node that still sets either raises a Warning `deprecated_env_var` event
+carrying `status: "deprecated"`, visible on the manager's Events page. **The
+config field wins and the variable is only the fallback beneath it** — see the
+precedence rule at the top of this page.
+
+Requires edge capability `media_player_tuning`. An edge without it hides the
+Media Player section of the Tuning tab, because such an edge accepts these
+fields on a config push and ignores them, which looks exactly like success.
 
 ## Gateway SDK Variables
 

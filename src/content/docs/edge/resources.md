@@ -15,7 +15,7 @@ This page covers what the probe measures, how cost units scale, and how to read 
 
 1. **Detects the CPU** — brand string + physical core count + AVX class via `sysinfo` + `is_x86_feature_detected!`. Maps `(cores × avx_mult)` to a heuristic "720p30 x264 streams" baseline.
 2. **Opens a real encoder + decoder against each compiled-in HW backend** — NVENC, NVDEC, QSV (encode + decode), VAAPI (encode + decode), and VideoToolbox on macOS. Distinguishes "compiled in but no driver / no GPU / no permissions" from "actually usable". NVENC retries once on `EAGAIN`; QSV warns loud on `EACCES` (operator's running user isn't in the `video` / `render` group).
-3. **Probes per-family HW session capacity** — opens encoder sessions in a loop against each backend until one fails, capped at 8. Exposes `hw_encoder_session_limits` on the budget. Disable with `BILBYCAST_PROBE_SESSION_LIMITS=0` if startup latency matters more than knowing the limit (the cap then falls back to the documented vendor minimums).
+3. **Probes per-family HW session capacity** — opens encoder sessions in a loop against each backend until one fails, capped at 8. Exposes `hw_encoder_session_limits` on the budget. Disable with `tuning.probe_session_limits=false` if startup latency matters more than knowing the limit (the cap then falls back to the documented vendor minimums).
 4. **Polls NVML for live GPU utilisation** when the `hardware-monitor-nvml` Cargo feature is on and an NVIDIA GPU is present (Linux + Windows only). Live NVENC / NVDEC utilisation % and active session count update every 5 s.
 
 The probe **never blocks flow start** — the cost model uses the static support shape, and live oversubscription warnings ride alongside.
@@ -152,7 +152,7 @@ Edges without the capability bit (older releases, builds with no encoders) show 
 The probe walks each HW backend opening throwaway sessions in a loop. On most hosts it adds < 1 second to boot; on some (heavily-loaded NVENC hosts, particularly), it can spike to several seconds. Disable for tight startup-latency budgets:
 
 ```bash
-export BILBYCAST_PROBE_SESSION_LIMITS=0
+export tuning.probe_session_limits=false
 ./bilbycast-edge --config config.json
 ```
 

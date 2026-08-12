@@ -5,6 +5,37 @@ sidebar:
   order: 1
 ---
 
+## What belongs in the environment, and what doesn't
+
+Environment variables are for **host- and deployment-level** facts: how this
+machine is wired, where its files live, which secrets it holds, and the OS
+tuning it needs. Everything else — anything that changes how media is
+handled, per input, per output, per flow or per node — belongs in
+configuration, where the manager can show it, set it, validate it and audit
+it. An environment variable is invisible to the manager UI, undiscoverable
+across a fleet, and impossible to attribute to a person or a time.
+
+That gives three groups:
+
+| Group | Lives in | Examples |
+|-------|----------|----------|
+| Secrets and bootstrap | Environment | `BILBYCAST_JWT_SECRET`, `BILBYCAST_MASTER_KEY`, `BILBYCAST_DATABASE_URL` |
+| Host / OS tuning | Environment | CPU pinning, `BILBYCAST_MLOCKALL`, `BILBYCAST_ENABLE_TXTIME`, the bond routing-table bases |
+| Behaviour | Configuration | Node **Tuning** tab, per-input and per-output fields, manager **Settings** page |
+
+Manager file settings can also be written in the config TOML instead of the
+environment; where both are present the environment wins, in **both**
+directions — setting a variable to `false` disables the thing, it does not
+fall through to a stored value.
+
+Variables marked **deprecated** below still work but have moved into
+configuration. They are read for one more release, they take precedence over
+the configuration field so an upgrade does not change a host's behaviour, and
+using one is reported: the edge raises a `deprecated_env_var` event that
+appears on the manager's Events page, and the manager logs a warning at
+startup. Variables marked **removed** do nothing at all — a host that still
+sets one is warned, because a unit file that lies is worse than no unit file.
+
 ## Manager Variables
 
 | Variable | Required | Description |
@@ -17,7 +48,7 @@ sidebar:
 | `BILBYCAST_TLS_MODE` | No | `"direct"` (default) or `"behind_proxy"` |
 | `BILBYCAST_TRUST_PROXY_HEADER` | No | Set to `"1"`/`"true"` to honour `X-Forwarded-For` for client-IP resolution (login rate-limit bucket key + audit IP). **Off by default.** Required in `behind_proxy` mode — without it the rate limiter buckets on the load balancer's IP. Only enable behind a trusted LB that strips inbound XFF before adding its own, or a client can forge its own bucket key. |
 | `BILBYCAST_TRUSTED_PROXIES` | No | Comma-separated CIDR allowlist of proxies whose `X-Forwarded-For` is trusted (only when `BILBYCAST_TRUST_PROXY_HEADER` is on). Default: `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`. |
-| `BILBYCAST_SESSION_CACHE_FRESHNESS_SECS` | No | Session-cache freshness floor in seconds (default: 60) |
+| `BILBYCAST_SESSION_CACHE_FRESHNESS_SECS` | No | **Deprecated** — moved to the `session_cache_freshness_secs` setting (Settings → Advanced), which applies cluster-wide without a restart. Still read for one release and still takes precedence; using it logs a warning at startup. Session-cache freshness floor in seconds (default: 60). |
 | `BILBYCAST_ACME_ENABLED` | No | Enable automatic Let's Encrypt certificates (`true`/`false`) |
 | `BILBYCAST_ACME_DOMAIN` | Conditional | Domain for ACME certificate (required if ACME enabled) |
 | `BILBYCAST_ACME_EMAIL` | No | Contact email for Let's Encrypt |
@@ -32,7 +63,7 @@ sidebar:
 | `BILBYCAST_INSTANCE_ID` | No | Explicit instance UUID for HA / multi-instance deployments. Unset → load/generate `<data_dir>/instance_id` |
 | `BILBYCAST_REGION` | No | Freeform region tag for multi-region / HA deployments. Empty/unset → `"unknown"` (solo install) |
 | `BILBYCAST_VISUAL_HISTORY_DIR` | No | Where the [Visual Flow Editor](/manager/visual-flow-editor/) writes its redacted, **disposable** Git mirror of deployments. Postgres remains the authoritative record — this directory can be deleted and rebuilt. |
-| `BILBYCAST_VISUAL_DEPLOY_SETTLE_SECS` | No | How long after a visual deployment the manager watches the node's alarms before deciding it settled. Default 20. A critical alarm naming a resource the deployment changed moves it to `degraded`. |
+| `BILBYCAST_VISUAL_DEPLOY_SETTLE_SECS` | No | **Deprecated** — moved to the `visual_deploy_settle_secs` setting (Settings → Advanced), which applies cluster-wide without a restart. Still read for one release and still takes precedence; using it logs a warning at startup. How long after a visual deployment the manager watches the node's alarms before deciding it settled. Default 20. |
 | `BILBYCAST_VISUAL_EDITOR_ASSET_DIR` | No | Absolute path overriding the embedded graph-editor bundle, so a tested build can be deployed without rebuilding or restarting the manager. |
 
 ### Prometheus /metrics auth
@@ -69,15 +100,15 @@ Single sign-on is a licensed feature. Setting `BILBYCAST_OIDC_ENABLED=true` **wi
 | `BILBYCAST_MEDIA_DIR` | Edge: override the media-player library directory. Defaults to XDG → `$HOME/.bilbycast/media/` → `./media/`. 4 GiB per file, 16 GiB total cap. |
 | `BILBYCAST_REPLAY_DIR` | Edge: override the replay-server storage root. Defaults to XDG → `$HOME/.bilbycast/replay/` → `./replay/`. |
 | `BILBYCAST_MLOCKALL` | Edge: set to `"1"` to `mlockall()` the process at startup, locking pages to prevent paging-induced jitter. Off by default; recommended for low-latency production hosts. |
-| `BILBYCAST_PROBE_SESSION_LIMITS` | Edge: set to `"0"` to disable the startup HW-encoder/decoder session-capacity probe. Default on. |
-| `BILBYCAST_INGRESS_BUFFER_MS` | Edge: default ingress de-jitter buffer depth when a per-input `ingress_dejitter_ms` is unset. Overrides the 60 ms default. |
-| `BILBYCAST_INGRESS_RESIDENCE_MS` | Edge: ingress de-jitter hard-shed residence cap. Defaults to `max(4 × setpoint, 250)` ms so a larger buffer gets proportionally more burst headroom. |
-| `BILBYCAST_ENABLE_TXTIME` | Edge: set to `"1"` (alias `BILBYCAST_ENABLE_SO_TXTIME=1`) to opt in to the `SO_TXTIME` + ETF-qdisc wire-emit releaser tier. **Off by default** — the default release path is `clock_nanosleep` on a `SCHED_FIFO` thread. Configure the ETF qdisc + PTP discipline first, else `SO_TXTIME` silently degrades. See [Wire-Time Precision](/edge/wire-pacing/). |
+| `BILBYCAST_PROBE_SESSION_LIMITS` | Edge: **deprecated** — use `tuning.probe_session_limits` in the node's config (Manager → node → Configure → Tuning). Still read for one release, below the config field; a node that still sets it raises a `deprecated_env_var` event. Set to `"0"` to disable the startup HW-encoder/decoder session-capacity probe. Default on. |
+| `BILBYCAST_INGRESS_BUFFER_MS` | Edge: **deprecated** — use `tuning.ingress_dejitter_ms` (Manager → node → Configure → Tuning). Still read for one release, below the config field; a node that still sets it raises a `deprecated_env_var` event. Default ingress de-jitter buffer depth when a per-input `ingress_dejitter_ms` is unset. Overrides the 60 ms default. |
+| `BILBYCAST_INGRESS_RESIDENCE_MS` | Edge: **deprecated** — use `tuning.ingress_residence_ms` for the node default, or the per-input `ingress_residence_ms` field on a UDP/RTP input. Still read for one release, below both; a node that still sets it raises a `deprecated_env_var` event. Ingress de-jitter hard-shed residence cap. Defaults to `max(4 × setpoint, 250)` ms so a larger buffer gets proportionally more burst headroom. |
+| `BILBYCAST_ENABLE_TXTIME` | Edge: set to `"1"` to opt in to the `SO_TXTIME` + ETF-qdisc wire-emit releaser tier. (The former alias `BILBYCAST_ENABLE_SO_TXTIME` has been **removed** — one name for one knob. A host that still sets it is warned at startup.) **Off by default** — the default release path is `clock_nanosleep` on a `SCHED_FIFO` thread. Configure the ETF qdisc + PTP discipline first, else `SO_TXTIME` silently degrades. See [Wire-Time Precision](/edge/wire-pacing/). |
 | `BILBYCAST_FORCE_NANOSLEEP` | Edge: back-compat no-op — the `clock_nanosleep` tier is already the default. Only meaningful once `BILBYCAST_ENABLE_TXTIME=1` is set, where it forces the `clock_nanosleep` fallback for diagnostics. |
 | `BILBYCAST_ETF_SO_PRIORITY` | Edge: override the `SO_PRIORITY` value mapped onto the ETF qdisc class for `SO_TXTIME` outputs. Default follows the standard TC map. |
 | `BILBYCAST_LOSSLESS_SO_PRIORITY` | Edge: `SO_PRIORITY` for compressed ("lossless"-class) outputs, pinning them to a **non-ETF** qdisc class so their userspace-paced sends are queued rather than late-dropped. Default 4. Applied **only** when `BILBYCAST_ENABLE_TXTIME=1`. The on-wire DSCP byte is unaffected. |
 | `BILBYCAST_WIRE_EMIT_CPUS` | Edge: comma/range CPU-affinity set for wire-emit releaser threads. Empty/unset → no pinning. Sibling knobs (same parser): `BILBYCAST_CODEC_CPUS` (codec threads), `BILBYCAST_PID_BUS_CPUS` (PID-bus / TS-assembler), `BILBYCAST_PLL_CPUS` (PCR-ingress / PLL sampler). |
-| `BILBYCAST_PROBE_4K` | Edge: set to `"0"` to skip the **second-tier 4K** HW session-capacity probe at startup (the 1080p tier still runs) — a faster boot on 1080p-only deployments. `BILBYCAST_PROBE_SESSION_LIMITS=0` disables both tiers. |
+| `BILBYCAST_PROBE_4K` | Edge: **deprecated** — use `tuning.probe_4k` (Manager → node → Configure → Tuning). Still read for one release, below the config field. Set to `"0"` to skip the **second-tier 4K** HW session-capacity probe at startup (the 1080p tier still runs) — a faster boot on 1080p-only deployments. `tuning.probe_session_limits = false` disables both tiers. |
 | `BILBYCAST_PTP_CONF_PATH` | Edge: override the path to the `ptp4l` config file the PTP reporter reads. For non-standard linuxptp layouts. |
 | `BILBYCAST_LIBMXL_SO` | Edge: override the `libmxl.so` search path for the boot probe. On a miss, the MXL capabilities are not advertised. (`mxl` builds only.) |
 | `BILBYCAST_BOND_RT_TABLE_BASE` | Edge: base for the reserved policy-routing tables used by gateway-mode bond legs. Default `48128`. Override where existing host routing tables collide. |

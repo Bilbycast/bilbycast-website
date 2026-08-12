@@ -86,6 +86,17 @@ set -a; . ./manager.env; set +a
 
 Both files must exist and be readable by the manager process. The manager validates them at startup and refuses to start if they're missing or unreadable.
 
+:::caution[`BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY` travel together]
+Set both or neither. With only one present the manager bails at startup:
+
+```text
+BILBYCAST_TLS_CERT and BILBYCAST_TLS_KEY must be set together — set both,
+or neither and use the [tls] block in the config file.
+```
+
+The half-override is what this refuses: an env cert paired with the key from the config file's `[tls]` block is two different certificate pairs mixed into one listener, and the failure surfaces as a TLS handshake error rather than as the config mistake it is.
+:::
+
 ### Renewal
 
 bilbycast-manager **does not** watch the cert file for changes in this mode (yet). When you renew the cert, restart the manager process — for example, via your certbot deploy hook:
@@ -127,6 +138,36 @@ The manager listens on plain HTTP. Your proxy is responsible for:
 2. Forwarding `wss://` upgrades correctly (the `Upgrade` and `Connection` headers must be passed through).
 3. Setting `X-Forwarded-Proto: https` so the manager knows the original request was HTTPS (used for cookie `Secure` flag enforcement).
 4. **Not** modifying the auth payload on the WebSocket upgrade.
+5. Stripping any inbound `X-Forwarded-For` before adding its own — see below.
+
+### Client IP behind the proxy
+
+**The manager does not believe `X-Forwarded-For` by default.** Behind a proxy that means every request looks like it came from the load balancer: the audit log records the LB's address for every login, and per-IP login rate limiting puts every operator in one bucket, where one attacker's failed attempts lock out everybody else.
+
+Turn it on with the trust switch, and name the proxies whose header you're trusting:
+
+```bash
+cat >> manager.env <<'EOF'
+BILBYCAST_TRUST_PROXY_HEADER=1
+BILBYCAST_TRUSTED_PROXIES=10.0.0.0/8
+EOF
+```
+
+`BILBYCAST_TRUSTED_PROXIES` is a comma-separated CIDR allowlist of hops the manager treats as its own infrastructure. Client-IP resolution walks the `X-Forwarded-For` chain **right to left** and returns the first address that falls outside every listed range; if the whole chain is trusted (or the header is absent) it falls back to the socket peer. Default when unset: `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` — narrow it to your LB's subnet.
+
+:::caution[Only enable this behind a proxy that strips inbound XFF]
+`X-Forwarded-For` is a client-supplied header. If your proxy appends to whatever the client sent instead of replacing it, a client can prepend an address of its choosing and pick its own rate-limit bucket and audit-log identity. The nginx example below is safe because `$proxy_add_x_forwarded_for` appends the real peer as the rightmost entry, which is where the walk starts — but the manager must also be unreachable except through the LB, or a direct connection sets the header unopposed.
+:::
+
+Both settings have a TOML home for deployments that provision config files rather than environment:
+
+```toml
+[security]
+trust_proxy_header = true
+trusted_proxies = "10.0.0.0/8"
+```
+
+Environment wins over the file when both are set. `[security]` is deliberately **file-only** — it is not a row in the settings table and not editable from **Settings → Advanced** like the operational tunables there. These two fields decide whose `X-Forwarded-For` this instance believes, and therefore whose IP drives the login rate-limit bucket and the audit log; a write to the database must not be able to widen that.
 
 ### nginx example
 

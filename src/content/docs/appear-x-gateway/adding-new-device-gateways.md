@@ -99,12 +99,15 @@ Define device-specific config sections in `config.rs`:
 
 ```toml
 [manager]
-# Same for all gateways — manager URL, auth, TLS settings
-url = "wss://manager.example.com"
+# Same for all gateways — this section builds the SDK's GatewayConfig.
+# `urls` is a required list of 1–16 wss:// entries. There is no scalar
+# `url` field and no default: the SDK rotates through the list on WS
+# close, so a single-instance manager is a one-element list.
+urls = ["wss://manager.example.com:8443/ws/node"]
 registration_token = "..."
 credentials_file = "credentials.json"
 accept_self_signed_cert = false
-# cert_fingerprint = "sha256:..."
+# cert_fingerprint = "ab:cd:ef:01:23:..."   # colon-separated lowercase hex
 
 [<device>]
 # Device-specific connection settings
@@ -113,16 +116,18 @@ api_key = "..."
 accept_self_signed_cert = true   # Independent of manager TLS
 
 [polling]
-# Device-specific polling intervals (seconds)
-alarms = 5
-inputs = 10
-outputs = 10
-chassis = 30
-
-[[polling.boards]]
-slot = 1
-interface_version = "1.15"
+# Device-specific — you define this section's shape in your own config.rs.
+# The Appear X gateway's keys, as a worked example:
+alarms_interval_secs = 10
+chassis_interval_secs = 30
+inputs_interval_secs = 15
+outputs_interval_secs = 15
+cards_interval_secs = 30
 ```
+
+Only `[manager]` is fixed — it is what the SDK's `GatewayConfig` is built from, and both shipped gateways spell it the same way. Everything below it is yours.
+
+Resist the urge to make per-slot / per-board layout a config section. The Appear X gateway has none: it runs a capability-discovery pass against the chassis at startup, reads the populated slots and their card software, then spawns polling tasks only for the interface families that firmware actually exposes. Hand-written slot tables go stale against a firmware upgrade and turn into "Method not found" spam; discovery does not.
 
 ## Step 2 — Create the manager driver
 

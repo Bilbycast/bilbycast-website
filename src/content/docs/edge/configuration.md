@@ -50,6 +50,7 @@ Complete reference for the bilbycast-edge JSON configuration file. This guide co
   - [Bonded Output](#bonded-output)
 - [Recording (Flow Attribute)](#recording-flow-attribute)
 - [Resource Limits](#resource-limits)
+- [Node Tuning](#node-tuning)
 - [Flow Assembly (PID Bus — SPTS / MPTS from N inputs)](#flow-assembly-pid-bus--spts--mpts-from-n-inputs)
 - [MPTS → SPTS filtering](#mpts--spts-filtering)
 - [SMPTE 2022-1 FEC Configuration](#smpte-2022-1-fec-configuration)
@@ -186,6 +187,7 @@ If neither file exists at startup, an empty default configuration is used. Both 
 | `flows` | array | No | `[]` | Flows, which reference inputs and outputs **by ID**. See [Flow Configuration](#flow-configuration). |
 | `tunnels` | array | No | `[]` | List of IP tunnel configurations. See [Tunnel Configuration](#tunnel-configuration). |
 | `resource_limits` | object | No | `null` | Host CPU / RAM thresholds that raise events when exceeded. See [Resource Limits](#resource-limits). |
+| `tuning` | object | No | `null` | Node-wide defaults for ingress de-jitter and the startup hardware probes. See [Node Tuning](#node-tuning). |
 
 :::note[Inputs and outputs are first-class, not nested in flows]
 An input or output is a top-level entity with its own stable ID, and it can exist without being attached to any flow. Flows reference them via `input_ids` / `output_ids`.
@@ -527,7 +529,8 @@ Each entry in the top-level `inputs` array carries an `id`, a `name`, and a `typ
 | Field | Type | Default | Applies to | Description |
 |-------|------|---------|-----------|-------------|
 | `passthrough_clock` | boolean | `false` | TS-carrying inputs | Forward the source's PCR and PES timestamps **unchanged**. By default the edge regenerates them against its own master clock (encoder-style), which is what you want for a jittery or free-running source. Set `true` for relay / transparent-forwarder behaviour — and note it is **required** for [epoch lock](#epoch-lock-cross-node-alignment). |
-| `ingress_dejitter_ms` | integer | `60` | RTP, UDP | De-jitter buffer depth, 20–2000 ms. Recovers the source rate from inter-PCR observations and releases packets paced at that rate, so analysers, the PCR PLL, the PID bus and every output see a smooth cadence regardless of network jitter. Cooperates with SMPTE 2022-7 — it runs after the merge. |
+| `ingress_dejitter_ms` | integer | `null` | RTP, UDP | De-jitter buffer depth, 20–2000 ms. Recovers the source rate from inter-PCR observations and releases packets paced at that rate, so analysers, the PCR PLL, the PID bus and every output see a smooth cadence regardless of network jitter. Cooperates with SMPTE 2022-7 — it runs after the merge. Unset falls back to the node-wide [`tuning.ingress_dejitter_ms`](#node-tuning); with that unset too, this input runs ingress passthrough. |
+| `ingress_residence_ms` | integer | `max(4 × setpoint, 250)` | RTP, UDP | Hard-shed residence cap for this input's de-jitter buffer, `ingress_dejitter_ms + 40` – 5000 ms. A packet older than the cap is shed rather than released late, which is what bounds ingress latency when a burst or a source-rate offset outruns the servo's ±5 % authority. Unset falls back to the node-wide [`tuning.ingress_residence_ms`](#node-tuning). **Rejected at config load without `ingress_dejitter_ms` on the same input** — there is no buffer to cap, so accepting it would be a silent no-op. |
 | `interface_binding` | object | `null` | Most inputs and outputs | Pin this endpoint to a specific NIC by name. Also honoured per-leg inside 2022-7 redundancy and per-endpoint inside SRT bonding. |
 
 :::note[passthrough_clock and clock regeneration are opposites]
@@ -1463,6 +1466,41 @@ Optional top-level `resource_limits` block. When set, the edge samples CPU and R
 | `grace_period_secs` | integer | `10` | Seconds the metric must continuously exceed the threshold before the event fires (debounce). |
 
 Omit the block to disable system-resource alarms entirely. The edge's resource-budget probe (advertised on `HealthPayload.resource_budget`) is independent — that's a one-shot hardware-capability snapshot at startup, not a runtime metric.
+
+---
+
+## Node Tuning
+
+Optional top-level `tuning` block carrying node-wide defaults. Every field is optional, and an absent field means the built-in default — an absent block therefore changes nothing.
+
+These four knobs were environment variables until 2026-08, which meant the manager could neither show them nor set them: tuning a node meant editing a systemd unit and restarting, per node, with no audit trail and no way to tell one node's tuning from another's. They are ordinary config fields now and arrive over the same validated `UpdateConfig` path as everything else.
+
+```json
+{
+  "version": 2,
+  "tuning": {
+    "ingress_dejitter_ms": 80,
+    "ingress_residence_ms": 400,
+    "probe_session_limits": true,
+    "probe_4k": true
+  }
+}
+```
+
+| Field | Type | Range | Default | Description |
+|-------|------|-------|---------|-------------|
+| `ingress_dejitter_ms` | integer | 20–2000 | `null` — no node-wide de-jitter | Default ingress de-jitter setpoint. Setting it both **switches the buffer on** and sizes it, for every raw UDP and RTP input that does not carry its own `ingress_dejitter_ms`. A per-input value overrides it. |
+| `ingress_residence_ms` | integer | `setpoint + 40` – 5000, where `setpoint` is `tuning.ingress_dejitter_ms` or the built-in 60 ms when that is unset | `max(4 × setpoint, 250)` | Default hard-shed residence cap for that buffer. A packet older than the cap is shed rather than released late, which is what bounds ingress latency when a burst or a source-rate offset outruns the servo's ±5 % authority. A per-input `ingress_residence_ms` overrides it. |
+| `probe_session_limits` | boolean | - | `true` | Run the startup hardware encoder / decoder session-capacity probe. `false` trades the manager's "sessions used **of** max" denominator for a faster boot, and disables **both** probe tiers. |
+| `probe_4k` | boolean | - | `true` | Run the second-tier 4K session-capacity probe. Ignored when `probe_session_limits` is `false`. |
+
+**`ingress_dejitter_ms` reaches raw UDP and RTP inputs only.** SRT already de-jitters at the transport layer (TSBPD), RTMP and RTSP synthesise their own clock, and a bonded input's reordering buffer would shed the bond's own bursts — those transports deliberately run ingress passthrough and the node-wide setpoint does not enrol them.
+
+**The two probe switches are read once at node start.** Pushing a change to either takes effect at the node's next restart; the two ingress knobs apply on the push.
+
+Each field replaces an environment variable. The config field always wins — a legacy variable that is still read at all sits *below* this block, never above it, because an environment variable that outranked the UI would recreate the silent no-op the migration exists to close. A node that still sets one raises a Warning `deprecated_env_var` event naming the field that replaces it, so a stale unit file shows up on the manager's Events page instead of quietly doing nothing.
+
+**UI:** Manager → node → **Configure** → **Tuning**. The tab is gated on the `node_tuning` capability advertised on `HealthPayload.capabilities`, so an edge too old to honour the block does not offer it.
 
 ---
 

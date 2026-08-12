@@ -195,12 +195,13 @@ sudo MEDIA_IFACE=enp1s0 bash /opt/bilbycast/edge/current/packaging/provision-edg
 
 ## Enabling the SO_TXTIME tier on the edge
 
-After the qdisc is in place + PTP is running, opt in to the SO_TXTIME release path by setting **one** of these env vars on the edge process:
+After the qdisc is in place + PTP is running, opt in to the SO_TXTIME release path by setting this env var on the edge process:
 
 ```
-BILBYCAST_ENABLE_TXTIME=1       # short form (preferred)
-BILBYCAST_ENABLE_SO_TXTIME=1    # long form (accepted alias)
+BILBYCAST_ENABLE_TXTIME=1
 ```
+
+`BILBYCAST_ENABLE_SO_TXTIME` was an accepted alias for the same switch and has been **removed**. A host that still sets it opts in to nothing — every output stays on the `clock_nanosleep` tier — so the edge reports the stale variable at startup as a Warning `deprecated_env_var` event rather than letting a unit file state an intent that is not being applied.
 
 The installer's default `/etc/bilbycast/edge.env` ships with the variable commented out — uncomment it after the qdisc + PTP prerequisites are confirmed:
 

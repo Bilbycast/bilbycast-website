@@ -15,7 +15,7 @@ This page covers what the probe measures, how cost units scale, and how to read 
 
 1. **Detects the CPU** — brand string + physical core count + AVX class via `sysinfo` + `is_x86_feature_detected!`. Maps `(cores × avx_mult)` to a heuristic "720p30 x264 streams" baseline.
 2. **Opens a real encoder + decoder against each compiled-in HW backend** — NVENC, NVDEC, QSV (encode + decode), VAAPI (encode + decode), and VideoToolbox on macOS. Distinguishes "compiled in but no driver / no GPU / no permissions" from "actually usable". NVENC retries once on `EAGAIN`; QSV warns loud on `EACCES` (operator's running user isn't in the `video` / `render` group).
-3. **Probes per-family HW session capacity** — opens encoder sessions in a loop against each backend until one fails, capped at 8. Exposes `hw_encoder_session_limits` on the budget. Disable with `tuning.probe_session_limits=false` if startup latency matters more than knowing the limit (the cap then falls back to the documented vendor minimums).
+3. **Probes per-family HW session capacity** — opens encoder sessions in a loop against each backend until one fails, capped at 8. Exposes `hw_encoder_session_limits` on the budget. Disable by setting `tuning.probe_session_limits` to `false` in the node's config (Manager → node → Configure → Tuning) if startup latency matters more than knowing the limit (the cap then falls back to the documented vendor minimums).
 4. **Polls NVML for live GPU utilisation** when the `hardware-monitor-nvml` Cargo feature is on and an NVIDIA GPU is present (Linux + Windows only). Live NVENC / NVDEC utilisation % and active session count update every 5 s.
 
 The probe **never blocks flow start** — the cost model uses the static support shape, and live oversubscription warnings ride alongside.
@@ -149,14 +149,21 @@ Edges without the capability bit (older releases, builds with no encoders) show 
 
 ## Disabling the session-capacity probe
 
-The probe walks each HW backend opening throwaway sessions in a loop. On most hosts it adds < 1 second to boot; on some (heavily-loaded NVENC hosts, particularly), it can spike to several seconds. Disable for tight startup-latency budgets:
+The probe walks each HW backend opening throwaway sessions in a loop. On most hosts it adds < 1 second to boot; on some (heavily-loaded NVENC hosts, particularly), it can spike to several seconds. Disable for tight startup-latency budgets from Manager → node → Configure → **Tuning**, or in the node's `config.json` directly:
 
-```bash
-export tuning.probe_session_limits=false
-./bilbycast-edge --config config.json
+```jsonc
+{
+  "tuning": {
+    "probe_session_limits": false
+  }
+}
 ```
 
+Setting `tuning.probe_4k` to `false` instead is the narrower version — it skips only the second-tier 4K pass and keeps the 1080p tier, where `probe_session_limits` disables both. Either is read once at node start, so a pushed change takes effect at the node's next restart.
+
 With the probe disabled, `hw_encoder_session_limits.*` reports `null` and the manager UI falls back to the documented vendor minimums (3 NVENC sessions on consumer cards; unbounded for QSV / VAAPI / AMF). Operators trade probe time for slightly weaker oversubscription detection.
+
+This was `BILBYCAST_PROBE_SESSION_LIMITS` (and `BILBYCAST_PROBE_4K`) before the tuning block existed. Both environment variables are still read as a fallback **below** the config field, and a node that sets one raises a Warning `deprecated_env_var` event naming the replacement — see [Environment Variables](/reference/environment-variables/).
 
 ## NVML live polling
 

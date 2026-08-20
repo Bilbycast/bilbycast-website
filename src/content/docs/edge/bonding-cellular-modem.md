@@ -166,6 +166,11 @@ to have the host's installer run `install-cellular-modem.sh --enable` once.
 > executes the request. All privileged work stays in the opt-in daemon, and
 > cellular *telemetry* remains strictly read-only.
 
+What that read-only telemetry actually reports — signal, operator, access
+technology, registration and SIM state, where it appears, and the events it
+raises — is covered in [Cellular Uplink Telemetry](/edge/cellular/). This page
+is about making the modem carry traffic; that one is about watching it.
+
 ## Wire it into bonding
 
 The modem is now one interface (`wwan0`, or whatever auto-detected — check

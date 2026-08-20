@@ -353,8 +353,8 @@ The local-display output (Linux-only, `display` Cargo feature) emits events unde
 | `display_device_unavailable` | critical | KMS connector vanished mid-flow (cable unplug). |
 | `display_mode_set_failed` | critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
 | `display_audio_open_failed` | critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
-| `display_decoder_overload` | warning | `frames_dropped_late` > 5 % over a 5-s rolling window. |
-| `display_av_drift` | warning | `|av_sync_offset_ms|` > 100 ms sustained ≥ 3 s. |
+| `display_decoder_overload` | — | **Never implemented.** Described historically as `frames_dropped_late` above 5 % over a 5-second window, but no emitter exists — it cannot fire, so do not alarm on it. Read `frames_dropped_late` and the frame-loss events below instead. |
+| `display_av_drift` | — | **Never implemented.** No emitter exists for it. Live A/V offset is reported continuously as `av_sync_offset_ms`, which the manager polls rather than waiting to be told about. |
 | `display_subscriber_lagged` | warning | broadcast `Lagged(n)`; rate-limited to one event / second. |
 | `display_deinterlace_engaged` | info | An interlaced source was detected; bob deinterlacing engaged, fields presented at 2× frame rate. Details carry `width`, `height`, `top_field_first`. |
 | `display_frame_loss_sustained` | warning | The output presented materially fewer frames than the panel could have shown over the measurement window. Details carry `panel_refresh_hz`, `frames_displayed`, `frames_presentable`, `present_shortfall_pct`, `frames_dropped_mpsc_full` and `window_seconds` — the evidence needed to tell decode-side shedding from present-side stutter. |
@@ -464,7 +464,7 @@ Read-only cellular-uplink telemetry events for a USB/PCIe modem (via ModemManage
 | info | cellular uplink '{iface}' reachable again | `cellular_uplink_recovered` |
 | warning | cellular uplink '{iface}' is {state} with no keep-alive daemon | `cellular_keeper_missing` |
 
-**Source**: `src/util/cellular`. Cellular uplink telemetry is read-only: modems are discovered through ModemManager and RutOS routers are polled, with radio state surfaced on each interface and on any bond leg riding it.
+**Source**: `src/util/cellular`. Full reference: [Cellular Uplink Telemetry](/edge/cellular/).
 
 ---
 
@@ -481,7 +481,7 @@ Read-only Starlink dish telemetry events for an interface that egresses over a S
 | warning | starlink uplink '{iface}' unreachable | `starlink_uplink_unreachable` |
 | info | starlink uplink '{iface}' reachable again | `starlink_uplink_recovered` |
 
-**Source**: `src/util/starlink`. Starlink telemetry is read-only: the dish's own status endpoint is polled and link state is surfaced on the interface and on any bond leg riding it.
+**Source**: `src/util/starlink`. Full reference: [Starlink Dish Telemetry](/edge/starlink/).
 
 ---
 

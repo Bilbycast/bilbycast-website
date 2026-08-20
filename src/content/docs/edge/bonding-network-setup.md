@@ -356,7 +356,7 @@ wired modem: pin the path to its interface (`"interface": "wlo5"`, which uses
 
 - **The Starlink dish telemetry sits on its own subnet — but the edge routes to
   it for you.** The dish's gRPC status endpoint (`192.168.100.1:9200`, polled for
-  the [Starlink telemetry](/edge/bonding/) card) lives on its own `/24`, reachable
+  the [Starlink telemetry](/edge/starlink/) card) lives on its own `/24`, reachable
   only over the Starlink Wi-Fi gateway. Once a Starlink uplink is configured, the
   edge re-asserts `192.168.100.0/24` via the leg's gateway (main table, `replace`
   semantics) on every poll cycle, so it survives a re-associate or new lease with

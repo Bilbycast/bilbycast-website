@@ -49,6 +49,8 @@ export default defineConfig({
 						{ label: 'Multi-Path Bonding', slug: 'edge/bonding' },
 						{ label: 'Bonding Network Setup', slug: 'edge/bonding-network-setup' },
 						{ label: 'Cellular Modem Bonding Path', slug: 'edge/bonding-cellular-modem' },
+						{ label: 'Cellular Uplink Telemetry', slug: 'edge/cellular' },
+						{ label: 'Starlink Dish Telemetry', slug: 'edge/starlink' },
 						{ label: 'API Reference', slug: 'edge/api-reference' },
 						{ label: 'Architecture', slug: 'edge/architecture' },
 						{ label: 'Events & Alarms', slug: 'edge/events-and-alarms' },

@@ -157,12 +157,10 @@ Most of these are filed under the `display` event category with `details.output_
 | `display_device_unavailable` | Critical | KMS connector vanished mid-flow (cable unplug observed via udev or `drmModeGetConnector`). |
 | `display_mode_set_failed` | Critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
 | `display_audio_open_failed` | Critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
-| `display_decoder_overload` | Warning | `frames_dropped_late` > 5 % over a 5-s rolling window. |
-| `display_av_drift` | Warning | `|av_sync_offset_ms|` > 100 ms sustained ≥ 3 s. |
 | `display_subscriber_lagged` | Warning | broadcast `Lagged(n)`; rate-limited to one event / second. The decoders flush and resync on the next IDR. |
 | `display_hdr_tonemap_active` | Warning | HDR source landed on an SDR panel. The decode falls back to sysmem download + CPU LUT tonemap. Fires once per flow start. |
 | `display_atomic_unavailable` | Warning | Kernel rejected the atomic-commit ioctl. The output falls back to legacy `set_crtc` per-frame. Fires once per output start. |
-| `display_hw_decode_unavailable` | Warning | The requested HW backend could not be opened on this host after 3 attempts; the output ran on CPU decode instead. `decoder_kind` then reports `"cpu (hw unavailable)"`. |
+| `display_hw_decode_unavailable` | Warning | The requested HW backend could not be opened on this host — four attempts (immediate, then 50 ms, 100 ms, 200 ms) — so the output ran on CPU decode instead, for the rest of the run. `decoder_kind` then reports `"cpu (hw unavailable)"`. This one is **not** retried by `display_hw_decode_repromote`: the backend never opened, so there is no working session to re-arm. |
 | `display_hw_decode_runtime_failed` | Warning | A HW decoder that had opened successfully failed mid-stream, and the output demoted to CPU. |
 | `display_hw_decode_no_frames` | Warning | The HW decoder accepted packets but produced no frame inside the watchdog window, so the output demoted to CPU. |
 | `display_hw_decode_repromote` | Info | A previously demoted output is retrying the hardware decoder after a spell on CPU. |
@@ -170,6 +168,10 @@ Most of these are filed under the `display` event category with `details.output_
 | `display_frame_loss_recovered` | Info | The shortfall cleared. |
 | `display_deinterlace_engaged` | Info | An interlaced source was detected; bob deinterlacing engaged and fields are presented at 2× frame rate. |
 | `display_input_switch_acquiring` | Info | A Take was detected on the flow and the output is waiting for the new source's first IDR. |
+
+:::note[Two events you may have seen referenced do not exist]
+`display_decoder_overload` and `display_av_drift` have been described in older material, but the edge has **no emitter for either** — they cannot fire, so do not build an alarm rule on them. Read the underlying condition directly instead: late frames are on `frames_dropped_late` and the frame-loss events above, and live A/V offset is on `av_sync_offset_ms`, which the manager polls continuously rather than waiting to be told about.
+:::
 | `display_input_switch_acquired` | Info | The new source is on the panel; details carry `elapsed_ms`. |
 
 Save-time errors that surface as `command_ack.error_code` on `add_output` / `update_config`:

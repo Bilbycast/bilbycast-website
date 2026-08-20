@@ -97,7 +97,7 @@ Then put `wall-1` in a flow's `input_ids` and give that flow whatever outputs yo
 | `tiles` | array | — | 1–64 tiles. Required. |
 
 :::note[`codec` is accepted but does not choose the encoder]
-The compositor resolves `codec` against this host's probed encoders and takes the best one it can open, falling back through the chain to libx264. The field is still read by the node's **resource-budget estimate**, so naming a hardware encoder here makes the manager's "Resource impact" preview count a hardware session the wall will never open. Leave it at `h264_auto` unless you have a reason not to — that is what lets it pick your hardware.
+The compositor resolves `codec` against this host's probed encoders and takes the best one it can open, falling back through the chain to libx264. The node's **resource-budget estimate** resolves the same way, so the manager's "Resource impact" preview counts the session the wall will actually open — naming a hardware encoder no longer mis-bills it in either direction. Leave it at `h264_auto` unless you have a reason not to: it already picks the best backend this host can open, whereas naming one pins the wall to it, and a unit that cannot open that backend refuses to start the wall rather than quietly falling back.
 :::
 
 ### Tile fields

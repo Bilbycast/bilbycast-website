@@ -301,7 +301,14 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | info | Configuration updated | Config applied via manager command |
 | warning | Failed to persist configuration: {error} | Config write to disk failed after update |
 
-**Source**: `src/manager/client.rs`
+Two codes in this category carry a structured `details` payload:
+
+| Error code | Severity | Trigger | Details payload |
+|---|---|---|---|
+| `deprecated_env_var` | warning | The node's environment (usually its systemd unit) sets a `BILBYCAST_*` variable that has moved into configuration. One event per stale variable, raised at startup — the queue flushes on the first manager auth, so it reaches the Events page even though it is raised before the WebSocket connects. This is the only signal an operator gets that a unit-file variable is doing nothing. | `{ error_code, env_var, replacement, status, value }`. `status` is `"deprecated"` (still honoured, but *below* the config field that replaced it), `"removed"` (does nothing at all) or `"unparseable"` (still read, but this host's value could not be parsed, so it was discarded and the layer below answered). |
+| `tuning_requires_restart` | warning | A pushed `tuning` field was accepted but is read once at node start, so it takes effect at the node's next restart rather than on the push. | `{ error_code, fields }`, where `fields` is `["tuning.probe_session_limits", "tuning.probe_4k"]` — the only two knobs affected. The other four `tuning` knobs — the two ingress de-jitter defaults and the two media-player defaults — are re-installed on the push without a node restart, but they are read when an input spawns: an input that is already running keeps its current behaviour until it respawns, so a **flow** restart is what applies them. |
+
+**Source**: `src/manager/client.rs`, `src/main.rs`, `src/config/env_compat.rs`
 
 ---
 
@@ -323,13 +330,21 @@ Errors generated while bringing up or hot-swapping an assembled flow (`assembly.
 | `pid_bus_mpts_pcr_source_required` | MPTS program has no effective PCR (neither program-level `pcr_source` nor flow-level fallback). | `{ program_number }` | Config validation also catches this — runtime check is a belt-and-braces guard. |
 | `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
 
-**Source**: `src/engine/flow.rs`, `src/engine/ts_assembler.rs`, `src/engine/ts_es_hitless.rs`, `src/engine/input_pcm_encode.rs`.
+The multiviewer compositor emits under the same `flow` category. It is gated on the `multiviewer` Cargo feature, which every published release artefact carries — see [Multiviewer](/edge/multiviewer/).
+
+| Error code | Severity | Trigger | Details payload |
+|---|---|---|---|
+| `mosaic_failed` | critical | The wall's compositor task exited with an error; the mosaic input has stopped. | `{ error_code, input_id }` |
+| `mosaic_tile_source_missing` | warning | A tile names a node-local input that is not running yet. The tile is **not** abandoned — the task owns subscription and retries, so the tile lights up when the source appears. Starting a wall alongside the feeds it watches is the common case, so this event on wall start is usually benign. | `{ error_code, input_id, tile_id, source_input_id }` |
+| `mosaic_tile_self_reference` | warning | A tile names the wall's own input id. The tile is left unassigned (rendering it would be an infinite feedback loop); the rest of the wall runs. | `{ error_code, input_id, tile_id }` |
+
+**Source**: `src/engine/flow.rs`, `src/engine/ts_assembler.rs`, `src/engine/ts_es_hitless.rs`, `src/engine/input_pcm_encode.rs`, `src/engine/input_mosaic.rs`.
 
 ---
 
 ### Display (`display`)
 
-The local-display output (Linux-only, `display` Cargo feature) emits events under category `display`. Every failure event sets `details.error_code` for `command_ack` correlation, plus `details.output_id` so the manager UI attributes the failure to the offending output row on a multi-output flow.
+The local-display output (Linux-only, `display` Cargo feature) emits events under category `display`. Every failure event sets `details.error_code` for `command_ack` correlation, plus `details.output_id` so the manager UI attributes the failure to the offending output row on a multi-output flow. Two sub-families are filed under other categories — the hardware-decode lifecycle under `system_resources` and the input-switch pair under `flow` — so filter the Events page by `error_code` rather than by category when chasing a display fault.
 
 | Event | Severity | Trigger |
 |---|---|---|
@@ -341,6 +356,15 @@ The local-display output (Linux-only, `display` Cargo feature) emits events unde
 | `display_decoder_overload` | warning | `frames_dropped_late` > 5 % over a 5-s rolling window. |
 | `display_av_drift` | warning | `|av_sync_offset_ms|` > 100 ms sustained ≥ 3 s. |
 | `display_subscriber_lagged` | warning | broadcast `Lagged(n)`; rate-limited to one event / second. |
+| `display_deinterlace_engaged` | info | An interlaced source was detected; bob deinterlacing engaged, fields presented at 2× frame rate. Details carry `width`, `height`, `top_field_first`. |
+| `display_frame_loss_sustained` | warning | The output presented materially fewer frames than the panel could have shown over the measurement window. Details carry `panel_refresh_hz`, `frames_displayed`, `frames_presentable`, `present_shortfall_pct`, `frames_dropped_mpsc_full` and `window_seconds` — the evidence needed to tell decode-side shedding from present-side stutter. |
+| `display_frame_loss_recovered` | info | The shortfall cleared. |
+| `display_input_switch_acquiring` | info | *(category `flow`)* A Take was detected on the flow; the output is waiting for the new source's first IDR. |
+| `display_input_switch_acquired` | info | *(category `flow`)* The new source is on the panel. Details carry `elapsed_ms`. |
+| `display_hw_decode_unavailable` | warning | *(category `system_resources`)* The requested HW backend could not be opened on this host after 3 attempts; the output ran on CPU decode instead, and `decoder_kind` reports `"cpu (hw unavailable)"`. Details carry `requested_backend`, `fell_back_to`, `attempts`, `last_error`. |
+| `display_hw_decode_runtime_failed` | warning | *(category `system_resources`)* A HW decoder that had opened successfully failed mid-stream; the output demoted to CPU. Details carry `trigger` and `last_error`. |
+| `display_hw_decode_no_frames` | warning | *(category `system_resources`)* The HW decoder accepted packets but produced no frame inside the watchdog window; the output demoted to CPU. Details carry `backend` and `ms_since_first_send`. |
+| `display_hw_decode_repromote` | info | *(category `system_resources`)* A previously demoted output is retrying the hardware decoder after a spell on CPU. Details carry `backend`, `attempt`, `cpu_seconds`. |
 
 Save-time `command_ack.error_code` values: `display_device_invalid`, `display_audio_device_invalid`, `display_resolution_unsupported`, `display_program_not_found`, `display_audio_track_not_found`, `display_device_busy`, `display_decoder_overload_predicted`.
 
@@ -440,7 +464,7 @@ Read-only cellular-uplink telemetry events for a USB/PCIe modem (via ModemManage
 | info | cellular uplink '{iface}' reachable again | `cellular_uplink_recovered` |
 | warning | cellular uplink '{iface}' is {state} with no keep-alive daemon | `cellular_keeper_missing` |
 
-**Source**: `src/util/cellular`. Full reference: [Cellular](/edge/cellular/).
+**Source**: `src/util/cellular`. Cellular uplink telemetry is read-only: modems are discovered through ModemManager and RutOS routers are polled, with radio state surfaced on each interface and on any bond leg riding it.
 
 ---
 
@@ -457,7 +481,7 @@ Read-only Starlink dish telemetry events for an interface that egresses over a S
 | warning | starlink uplink '{iface}' unreachable | `starlink_uplink_unreachable` |
 | info | starlink uplink '{iface}' reachable again | `starlink_uplink_recovered` |
 
-**Source**: `src/util/starlink`. Full reference: [Starlink](/edge/starlink/).
+**Source**: `src/util/starlink`. Starlink telemetry is read-only: the dish's own status endpoint is polled and link state is surfaced on the interface and on any bond leg riding it.
 
 ---
 
@@ -478,7 +502,7 @@ Lifecycle events for the `upgrade_binary` command. Manager UI gates the per-node
 | warning | `upgrade_url_invalid` / `upgrade_checksum_mismatch` / `upgrade_network_error` / `upgrade_arch_mismatch` | Download / verification guard failures (retryable). |
 | warning | `upgrade_disabled` / `upgrade_channel_not_allowed` / `upgrade_version_too_old` / `upgrade_sequence_too_old` | Policy rejections (audit only). |
 
-**Source**: `src/upgrade/`. Full reference: [Upgrade](/edge/upgrade/).
+**Source**: `src/upgrade/`. Full reference: [Remote Upgrade](/manager/remote-upgrade/).
 
 ---
 
@@ -578,7 +602,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 
 | Category | Description |
 |----------|-------------|
-| `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, MXL) |
+| `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, MXL, multiviewer compositor) |
 | `bandwidth` | Per-flow bandwidth monitoring (alarm, block, recovery) |
 | `srt` | SRT input and output connection state |
 | `redundancy` | SMPTE 2022-7 dual-leg status |
@@ -594,7 +618,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
 | `tunnel` | Tunnel connection state |
 | `manager` | Manager WebSocket connection |
-| `config` | Configuration changes |
+| `config` | Configuration changes, deprecated environment variables, restart-required `tuning` pushes |
 | `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW-encoder oversubscription |
 | `bond` | Bonded input/output — per-path alive/dead, bond-aggregate degraded/down/recovered, session reset, socket rebuild, interface lost, MTU-budget, gateway route lost |
 | `sdi` | Native SDI (DeckLink) capture **and** playout lifecycle (`sdi-decklink` feature) |

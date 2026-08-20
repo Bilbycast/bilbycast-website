@@ -1,11 +1,13 @@
 ---
 title: Replay (Operator UI)
-description: Use the manager /replay page to scrub recordings, mark clips, and push them to air.
+description: Use the manager /replay page to scrub recordings, mark clips and push them to air, browse what is on disk, and run multi-cam recording sync.
 sidebar:
   order: 4
 ---
 
 The manager's `/replay` page is the operator surface on top of the [edge replay server](/edge/replay/). It gives you a JKL-style scrub timeline, a clip library, sport-tagging profiles, and a one-click push-to-air. This page is for the people in the chair during a live event — what each button does, every keyboard shortcut, and how the custom tag profiles work.
+
+The page has three tabs — **Live** (the JKL scrub workspace, which is most of this page), **Recordings**, and **Sync Groups**. The active tab is carried in the URL, so `/replay?node=…&flow=…&tab=recordings` and `/replay?tab=sync-groups` are both linkable.
 
 ## Prerequisites
 
@@ -126,6 +128,32 @@ The flow card on the dashboard shows one of three chips:
 - **No chip** — the writer is idle. `recording_status.mode = "idle"`.
 
 Older edges (Phase 1.0) only report a boolean `armed` — the manager falls back to a two-state `Recording / Idle` chip in that case.
+
+## Recordings
+
+The **Recordings** tab is the disk-side view: every on-disk recording across the replay-capable nodes you can see, grouped one section per node. Open a row to list its clips.
+
+The difference from the Live tab is what it can reach. The Live tab works against the flow that is recording *now*; the Recordings tab lists recordings whose flow no longer has recording armed, and recordings whose flow has been deleted entirely — tick **Orphans only** to see just those. That is the tab to use when you need to get a clip off a node after the event has finished, or to reclaim disk.
+
+Per row you can:
+
+- **Export** — the whole recording, or one clip, as MPEG-TS.
+- **Download** a clip directly.
+- **Delete** a recording. Select several and the bulk bar at the bottom shows how many you have picked and how many bytes they hold before you commit.
+
+There is a search box that matches on recording id, flow and node.
+
+## Sync Groups (multi-cam)
+
+A **sync group** is a named set of `(node, flow)` members — typically one **main** and several **iso** cameras — that record and mark together. Each edge still records its own flow independently; the manager is what makes one operator action land on all of them at once.
+
+- **Start / Stop recording** fan to every member in parallel. Each member gets a 10-second budget to acknowledge; the result panel reports per member, so one node that has gone quiet is named rather than silently skipped, and the rest still run.
+- **Mark in / Mark out** fan the same way and produce one synchronised clip set instead of N unrelated clips.
+- **Play** fires every member against a *shared future start anchor* — roughly 250 ms ahead of now — rather than telling each one "start now" as its command arrives. That is what keeps the members within about a frame of each other regardless of how much the WebSocket round-trip to each node varies, including across manager instances in an HA pair.
+
+A sync group is tenant-owned, like a switcher preset: it belongs to one group and is only visible to that group's members. Creating or editing one requires membership of the owning group **plus Operate on every member node** — authority over one camera is not authority over the set.
+
+The old `/sync-groups` URL still works; it redirects to `/replay?tab=sync-groups`.
 
 ## Where to read next
 

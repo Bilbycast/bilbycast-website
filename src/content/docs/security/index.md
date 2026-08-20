@@ -223,8 +223,11 @@ Each user can optionally have an `allowed_node_ids` list restricting access to s
 |--------|-------|--------|-----|----------|
 | Login attempts | 5 failures | 60 seconds | IP address | HTTP 429 |
 | Node auth attempts | 5 failures | 60 seconds | node_id or token prefix | WebSocket auth error + lockout message |
+| MFA (TOTP) verification | 5 failures | 60 seconds | user ID | HTTP 429 |
 
-Rate limiters use in-memory sliding windows (DashMap). Windows expire automatically after the cooldown period.
+The login and node-auth limiters use in-memory sliding windows (DashMap); their windows expire automatically after the cooldown period.
+
+The MFA limiter is different in kind. It is persisted per user in the database rather than held in memory, so it survives a restart and applies across every instance sharing that database, and it **fails closed** — if the lookup errors the attempt is refused, rather than being treated as zero recent failures. It is the only brute-force brake on the second factor: `/api/v1/auth/mfa/verify` is the step that completes a login and so is reachable without a session, where the per-IP login limiter does not cover it, and a wrong TOTP code does not increment the account's failed-login count.
 
 ## Security Headers
 
@@ -234,7 +237,8 @@ All manager HTTP responses include:
 |--------|-------|---------|
 | `X-Content-Type-Options` | `nosniff` | Prevents MIME-type sniffing |
 | `X-Frame-Options` | `DENY` | Prevents clickjacking (iframe embedding) |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Forces HTTPS (direct TLS mode only) |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | Forces HTTPS for 2 years, and is eligible for the browser preload list (direct TLS mode only — behind a proxy the load balancer sends it) |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; report-uri /api/v1/csp-report` | **Enforcing**, not report-only. `script-src 'self'` with no `unsafe-inline` blocks inline script and inline event handlers; `connect-src 'self'` blocks cross-origin fetch and WebSocket. Violations are still posted to the built-in collector |
 
 Session cookies use `HttpOnly` (no JavaScript access), `Secure` (HTTPS only, in direct mode), and `SameSite=Lax`.
 
@@ -296,7 +300,7 @@ Each entry records: timestamp, user ID, action, target type, target ID, optional
 - [ ] Use `direct` TLS mode unless behind a trusted load balancer
 - [ ] Rotate node secrets periodically via `POST /api/v1/nodes/{id}/rotate-secret`
 - [ ] Set node expiry times (`expires_at`) for temporary deployments
-- [ ] Review audit logs regularly (`GET /api/v1/audit`)
+- [ ] Review audit logs regularly (`GET /api/v1/audit-log`, or the Audit Log page at `/admin/audit-log`)
 - [ ] Restrict user permissions with appropriate RBAC roles
 - [ ] Use `allowed_node_ids` to limit operator access to relevant nodes only
 

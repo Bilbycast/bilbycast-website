@@ -51,12 +51,14 @@ cargo build --release --no-default-features --features tls,webrtc   # explicit o
 
 1. Open **Admin → Nodes**, click the edge, **Configure**, then the **Outputs** tab.
 2. **+ Add Output**, pick **Display (HDMI / DisplayPort)** as the type.
-3. Pick a connector from the **Device** dropdown — the manager populates it from the `HealthPayload.display_devices` enumeration the edge advertised at startup.
+3. Pick a connector from the **Device** dropdown — the manager populates it from the `HealthPayload.display_devices` list the edge advertises on every health tick.
 4. Pick an **Audio device** (an ALSA id like `hw:0,3`, `plughw:0,3`, or `default`). Leave blank for video-only.
-5. Optional: set **Program** (for MPTS sources), **Audio track**, **Audio channel pair**, **Resolution**, **Refresh Hz**.
+5. Optional: set **Program** (for MPTS sources), **Audio track**, **Audio channel pair**, and **Scaling mode**. (The older **Resolution** / **Refresh Hz** fields are deprecated and ignored at runtime — see the note under [Config fields](#config-fields).)
 6. **Save**, then attach the output to a flow on the **Flows** tab.
 
-If the dropdown is empty, the host has no display advertised — either the edge was built without the `display` feature, or it's running on a headless box with no connectors plugged in. HDMI hotplug is **discovered at startup only** in v1 — adding a cable later requires restarting the edge.
+If the dropdown is empty, the host has no display advertised — either the edge was built without the `display` feature, or it's running on a headless box with no connectors plugged in.
+
+A background poller re-enumerates the host's KMS connectors every **10 s** and republishes the list when it changes, so a monitor plugged in after boot reaches the dropdown (and re-arms the `display` capability) without an edge restart. It is a poll, not a udev event, so allow up to ~10 s plus one ~15 s health tick before the new connector appears.
 
 ## Config fields
 
@@ -81,11 +83,16 @@ Outputs are JSON top-level entities in `config.json`. The minimum:
 | `program_number` | u16 | `null` | MPTS program filter (1-based; `0` is reserved). `null` selects the lowest program in the active input's PAT. |
 | `audio_track_index` | u8 | `null` | Audio elementary-stream index within the chosen program. `null` selects the first audio track. Must be < 16. |
 | `audio_channel_pair` | `[u8; 2]` | `[0, 1]` | Stereo pair to render from decoded multichannel audio. Both indices must be < 8 and not equal. |
-| `resolution` | string | `null` | `"auto"` (use the connector's preferred mode) or `"WIDTHxHEIGHT"` (e.g. `"1920x1080"`). |
-| `refresh_hz` | u32 | `null` | Refresh rate in Hz. Range 1–240. `null` uses the connector's preferred mode. |
+| `scaling_mode` | string | `"match_source"` | How the panel's KMS mode is chosen. `match_source` (default) re-modesets to the smallest mode that covers the source's `(width, height)`, on every source-shape change — best A/V sync, no scaling. `monitor_native` picks the connector's preferred (panel-native) mode once at task startup and holds it, letting libswscale upscale the source to fill it; pick it for fixed-mode panels (HDCP-locked, signage) and desktop monitors that handle their native mode best. |
 | `sync_mode` | string | `"vsync_to_display"` | `"vsync_to_display"` (default, audio-master) or `"genlock"` (locks the display's audio to the flow master clock so the panel stays rate-coherent with the flow's wire outputs; video still follows the audio playout, so lip-sync is identical either way). |
 | `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, `"vaapi"`, or `"rkmpp"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ rkmpp ≻ cpu` against the host's probed capabilities. `"rkmpp"` is the Rockchip RK3568 / RK3588 hardware decode path (shipped in the `aarch64-linux-rockchip` release). See [Codec matrix](/edge/codec-matrix/). |
 | `show_audio_bars` | bool | `false` | Render translucent audio level bars as an ARGB8888 overlay plane composed at vblank. Stays on the zero-copy path — no CPU-blit demotion. |
+| `present_lead_ms` | u32 | `null` (decoder-dependent) | How far ahead of its present instant a frame is queued, 0–1000 ms, so a delivery burst is served from a backlog instead of stalling the present. It costs exactly that much added display latency. **Unset is not the same as `0`**: with the field absent the lead is picked from the decoder that is actually running — the RKMPP zero-copy path gets **200 ms** (where its dose-response saturates; the elbow is ~120 ms), every other backend gets **0** and is bit-for-bit unchanged. Set `0` to disable it explicitly where the latency matters more than the stutter. Clamped at run time to what the decode queue can hold (a third of its depth) — a deeper lead spills onto `frames_dropped_mpsc_full` instead of buffering. **Applies only to outputs with no `audio_device`**: an audio-enabled output paces against the measured ALSA playout position and ignores this entirely. |
+| `present_vblank_cadence` | bool | `false` | Assign each frame to whole vblanks on the panel's real raster instead of computing a wall-clock present instant and hoping it lands on the right one. At 25p on a 50 Hz panel it holds every frame for 2 vblanks; at 24p on 60 Hz it generates true 2:3 pulldown (3,2,3,2); crystal drift is absorbed as one longer or shorter hold per beat instead of a continuous sub-frame slide. It engages only where the flip clock has earned trust, the measured rates give a schedulable ratio, and the source rate has stabilised — anything else silently keeps the wall-clock path, and a source faster than the panel (60p on 50 Hz) is declined outright because that needs frame *dropping*, a different algorithm that is not implemented. **Video-only outputs**: an output with an `audio_device` paces against ALSA, so the resolver declines to engage. **Off by default pending fleet validation.** |
+
+:::caution[`resolution` and `refresh_hz` are deprecated and ignored at runtime]
+Both fields are still accepted in `config.json` so existing configs round-trip unchanged, and the edge logs a warning naming `scaling_mode` whenever it loads an output that sets either. Nothing else happens — setting `resolution: "1920x1080"` today changes no behaviour at all. Re-save the output from the manager UI to drop them now; they are expected to be dropped from the schema in a future major version, but no removal release is committed.
+:::
 
 ## How A/V sync works
 
@@ -141,6 +148,8 @@ The edge also enforces **per-connector uniqueness** — only one active display 
 
 ## Events and error codes
 
+Most of these are filed under the `display` event category with `details.output_id` set. Two sub-families are not: the hardware-decode lifecycle goes under `system_resources`, and the input-switch pair under `flow`. Filter the manager's Events page by `error_code` rather than by category when chasing a display fault.
+
 | Event | Severity | Trigger |
 |---|---|---|
 | `display_started` | Info | Modeset succeeded, ALSA opened (or muted), first frame queued. |
@@ -153,6 +162,15 @@ The edge also enforces **per-connector uniqueness** — only one active display 
 | `display_subscriber_lagged` | Warning | broadcast `Lagged(n)`; rate-limited to one event / second. The decoders flush and resync on the next IDR. |
 | `display_hdr_tonemap_active` | Warning | HDR source landed on an SDR panel. The decode falls back to sysmem download + CPU LUT tonemap. Fires once per flow start. |
 | `display_atomic_unavailable` | Warning | Kernel rejected the atomic-commit ioctl. The output falls back to legacy `set_crtc` per-frame. Fires once per output start. |
+| `display_hw_decode_unavailable` | Warning | The requested HW backend could not be opened on this host after 3 attempts; the output ran on CPU decode instead. `decoder_kind` then reports `"cpu (hw unavailable)"`. |
+| `display_hw_decode_runtime_failed` | Warning | A HW decoder that had opened successfully failed mid-stream, and the output demoted to CPU. |
+| `display_hw_decode_no_frames` | Warning | The HW decoder accepted packets but produced no frame inside the watchdog window, so the output demoted to CPU. |
+| `display_hw_decode_repromote` | Info | A previously demoted output is retrying the hardware decoder after a spell on CPU. |
+| `display_frame_loss_sustained` | Warning | The output showed materially fewer frames than the panel could have presented over the measurement window. Details carry `panel_refresh_hz`, `frames_displayed`, `frames_presentable`, `present_shortfall_pct` and `frames_dropped_mpsc_full` — read those alongside `upstream_frame_period_us` and the `cadence_*` counters to tell decode-side shedding from present-side stutter. |
+| `display_frame_loss_recovered` | Info | The shortfall cleared. |
+| `display_deinterlace_engaged` | Info | An interlaced source was detected; bob deinterlacing engaged and fields are presented at 2× frame rate. |
+| `display_input_switch_acquiring` | Info | A Take was detected on the flow and the output is waiting for the new source's first IDR. |
+| `display_input_switch_acquired` | Info | The new source is on the panel; details carry `elapsed_ms`. |
 
 Save-time errors that surface as `command_ack.error_code` on `add_output` / `update_config`:
 
@@ -160,7 +178,7 @@ Save-time errors that surface as `command_ack.error_code` on `add_output` / `upd
 |---|---|
 | `display_device_invalid` | `device` regex failed at config-load OR connector not present in `enumerate_displays()` at runtime OR build was compiled without the `display` Cargo feature. |
 | `display_audio_device_invalid` | `audio_device` regex failed OR ALSA refused to open it. |
-| `display_resolution_unsupported` | Configured `resolution` / `refresh_hz` does not match any mode the connector advertises. |
+| `display_resolution_unsupported` | The connector advertises no usable mode for the source, or KMS refused the chosen mode. Not driven by the deprecated `resolution` / `refresh_hz` fields. |
 | `display_program_not_found` | After 5 s, the demuxer hasn't seen the configured `program_number` in the PAT. |
 | `display_audio_track_not_found` | Configured `audio_track_index` exceeds the PMT's audio-stream count. |
 | `display_device_busy` | Another active output already claimed this `(device, audio_device)` pair. |
@@ -183,13 +201,19 @@ Save-time errors that surface as `command_ack.error_code` on `add_output` / `upd
 | `decoder_kind` | `"cpu"`, `"cpu (hw unavailable)"` (operator requested a HW backend the host can't open), `"nvdec"`, `"qsv"`, `"vaapi-zerocopy"`, or `"rkmpp-zerocopy"` — what the runtime decoder resolver actually opened on this host. |
 | `video_codec` | `"h264"` / `"hevc"`. |
 | `audio_codec` | `"aac"` / `"mp2"` / `"ac3"` / `"eac3"` / `"opus"` / `"none"`. |
+| `upstream_frame_period_us` | Source frame period measured in the decode task, *before* the display queue. A large divergence from the presented rate means frames are being shed between decode and panel. |
+| `cadence_drift_absorbed` | Vblank holds that departed from the cadence's nominal length. Expected and periodic — it is the source-vs-panel crystal difference being paid off a whole vblank at a time (a 33 ppm difference at 25 fps absorbs roughly once every ten minutes). The diagnostic signal is the *rate*, not the presence. |
+| `cadence_hold_aborted` | Holds abandoned because the driver stopped posting vblanks mid-hold. Non-zero means the panel is not receiving the computed cadence at all. |
+| `cadence_disengaged` | The runaway guard disengaged the cadence. Any non-zero value means the feature failed closed on this output. |
+| `cadence_disengaged_stale` | The cadence was disengaged because the measured rates stopped matching the running scheduler — a panel mode change or a source rate change. An ordinary lifecycle event, expected non-zero on any output that switches sources. |
 
 The manager renders the resolution annotation as `display (1920x1080@60Hz)` in the per-output table on the flow detail page, plus a green `DISPLAY` badge in the name column.
 
 ## Limitations
 
 - Linux only.
-- HDMI hotplug is discovered at startup only — adding a cable later requires restarting the edge before it shows up in `display_devices`.
+- Connector hotplug is picked up by a 10-second background poll rather than a udev event, so a newly plugged monitor can take ~10 s (plus one ~15 s health tick) to reach the manager's `display_devices` list.
+- `present_vblank_cadence` is off by default pending fleet validation, and never engages on an output that has an `audio_device` — locking video to the panel raster is only sound once audio is resampled to the same clock, which the edge does not do yet.
 - Multichannel passthrough over HDMI is not supported — multichannel sources are downmixed to stereo on the configured `audio_channel_pair`.
 - One active display output per connector — cross-output uniqueness is enforced via `display_device_busy`.
 - Closed captions and SCTE-104 cue display are not rendered. The decoded raw video is what reaches the screen.

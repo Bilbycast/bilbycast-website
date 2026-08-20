@@ -125,7 +125,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   inner protocol — see [Multi-Path Bonding](/edge/bonding/) for the
   full reference.
 
-### Synthetic / local inputs (`test_pattern`, `media_player`, `replay`)
+### Synthetic / local inputs (`test_pattern`, `media_player`, `replay`, `mosaic`)
 - **Direction:** Input
 - **`test_pattern`** — a synthetic colour-bar / test-raster generator (optional
   screen-ID text, tone/beep ident, A/V-sync sweep) muxed as a paced MPEG-TS.
@@ -137,6 +137,15 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **`replay`** (default-on `replay` feature) — plays a recorded clip or
   recording back into a flow as a fresh input, driven by the replay
   command channel (cue / play / scrub). See [Replay](/edge/replay/).
+- **`mosaic`** (`multiviewer` feature — off in a plain `cargo build`, on in all
+  three release artefacts) — the one input type that *consumes other
+  node-local inputs*. It composites their video onto a single canvas
+  (`width` / `height` / `fps` / `video_bitrate_kbps` / `codec` plus a `tiles`
+  list) and republishes the result as a paced MPEG-TS, so a multiviewer wall
+  is an ordinary flow source and reaches any output the edge already has.
+  Because the flow bus carries TS, the canvas has to be encoded — a build
+  without a `video-encoder-*` feature does not advertise `mv-compositor` and
+  the manager hides the surface. See [Multiviewer](/edge/multiviewer/).
 
 ## Output Protocols
 
@@ -479,6 +488,14 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `video-decoder-qsv` | Intel QSV hardware decode (display output + transcode decode path). Shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only | No |
 | `video-decoder-vaapi` | VAAPI hardware decode (display output + transcode decode path). Shares `libva-dev` with `video-encoder-vaapi`; Linux | No |
 | `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV + VAAPI) **and** HW decoders (NVDEC + QSV-decode + VAAPI-decode). Used by the release build | No |
+| `video-encoder-rkmpp` | Rockchip RK3568 / RK3588 hardware H.264 / HEVC encode via RKMPP (8-bit 4:2:0 only; x264 / x265 cover 10-bit and 4:2:2). Links dynamically against `librockchip_mpp` | No (on in `aarch64-linux-rockchip`) |
+| `video-decoder-rkmpp` | Rockchip RKMPP hardware decode — shared by the local-display output and the transcode decode path | No (on in `aarch64-linux-rockchip`) |
+| `rga-transfer` | Rockchip RGA-accelerated DRM_PRIME→sysmem frame transfer on the local-display path, replacing FFmpeg's CPU `mmap`+`memcpy` (~3 ms/frame vs ~106 ms spikes at 1080p on RK3588). Implies `video-decoder-rkmpp`; needs `/dev/rga` at run time | No (on in `aarch64-linux-rockchip`) |
+| `multiviewer` | Mosaic compositor + stream head — composites N node-local inputs onto one canvas and republishes it as MPEG-TS, so a multiviewer wall is an ordinary flow source (`type: "mosaic"`). Implies `media-codecs`, and **needs a `video-encoder-*` feature to be usable**: the flow bus carries TS, so a canvas reaches an output only by being encoded and muxed. The `mv-compositor` capability is advertised only when both halves are present. See [Multiviewer](/edge/multiviewer/) | No (on in all three release artefacts) |
+| `mxl` | MXL (Media eXchange Layer) — EBU / Linux Foundation same-host shared-memory composition. Heavy build prerequisites, `dlopen`s `libmxl.so` at run time. See [MXL](/edge/mxl/) | No (on in all three release artefacts) |
+| `sdi-decklink` | SDI capture + playout on Blackmagic DeckLink cards (`type: "sdi"`). Build needs the EULA-gated DeckLink SDK headers, which is why it is not folded into `video-encoders-full`. See [SDI](/edge/sdi/) | No (on in both `*-linux-full` artefacts from v0.103.0; never in `*-rockchip`) |
+
+The **Default** column above says what a plain `cargo build` does; the parenthetical says what the *published* release artefacts carry, which is the answer that matters if you are running a downloaded binary rather than one you built. Confirm either with `bilbycast-edge --print-capabilities`, which prints one `feature <name>` line per compiled-in feature.
 
 The release tarball bundles GPL / NVENC encoders — see `bilbycast-edge/docs/transcoding.md` in the repo for the full licence breakdown.
 

@@ -114,8 +114,28 @@ WorkingDirectory=/var/lib/bilbycast/edge
 # ExecStart resolves through the `current` symlink, so a successful
 # manager-driven upgrade lands automatically when the old binary exits.
 ExecStart=/opt/bilbycast/edge/current/bilbycast-edge --config /opt/bilbycast/edge/config.json
-Restart=on-failure
-RestartSec=2s
+
+# Restart=always, NOT on-failure. A manager-driven upgrade stages the new
+# binary, drains flows for 5 s and then exits ZERO, so systemd respawns
+# through the `current` symlink. systemd does not restart an on-failure
+# service that exits 0, so on-failure leaves the node down after every
+# successful upgrade. Restarting on any exit also lets the boot watchdog
+# drive the rollback handshake, which exits 1 to force the respawn.
+Restart=always
+RestartSec=3
+# Bounds the respawn rate; pairs with the boot watchdog's
+# `max_boot_attempts` so a bad upgrade cannot crash-loop before the
+# symlink revert kicks in.
+StartLimitInterval=300
+StartLimitBurst=10
+
+# Send SIGTERM and give the edge time to drain flows + close sockets.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# /dev/dri/* and /dev/snd/* are group-gated. Needed for the `display`
+# output and for VAAPI; harmless on a headless box.
+SupplementaryGroups=video render audio
 
 # File-descriptor headroom for SRT / RIST / RTP listeners
 LimitNOFILE=65536
@@ -373,6 +393,17 @@ Once the edge has registered with the manager and shows up in `/admin/nodes`, ev
 1. Go to **Managed Nodes**, click **Upgrade…** on the row.
 2. Pick a `(version, channel)` and click **Stage upgrade**.
 3. The edge fetches the Sigstore-signed manifest, verifies it against its compiled-in allowlist, downloads the tarball, atomically swaps a `current` symlink, and respawns under systemd. A boot watchdog automatically rolls back if the new binary fails to come up healthy.
+
+:::caution[Your unit must say `Restart=always`]
+The edge completes a staged upgrade by draining flows and exiting with status **0**, then relying on systemd to respawn it through the `current` symlink. systemd does not restart an `on-failure` service that exits 0 — so a node running a hand-written unit with `Restart=on-failure` stages the upgrade, exits cleanly, and never comes back until somebody starts it by hand. Earlier revisions of this page carried `Restart=on-failure`; if you copied it, fix it now:
+
+```bash
+grep -n '^Restart=' /etc/systemd/system/bilbycast-edge.service
+# expect: Restart=always
+```
+
+The `install-edge.sh` bundle has always installed the correct unit, so script-installed nodes are unaffected. Rollback is unaffected either way — the boot watchdog exits 1, which `on-failure` does respawn.
+:::
 
 See [Remote Upgrade](/manager/remote-upgrade/) for the full operator runbook (per-node, group bulk rollout, automatic rollback, troubleshooting).
 

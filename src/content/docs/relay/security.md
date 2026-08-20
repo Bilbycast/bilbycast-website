@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-bilbycast-relay is **stateless and zero-knowledge** — it forwards encrypted bytes between edges without ever being able to read them — but it still has security-relevant surfaces that operators need to configure correctly. This page covers all of them.
+bilbycast-relay is **stateless and zero-knowledge** — it forwards encrypted bytes between edges without ever being able to read them — but it still has security-relevant surfaces that operators need to configure correctly. Layers 1–5 below cover the forwarding planes; Layer 6 covers the optional viewer-distribution role, which is a different surface with a different threat model and only exists on `-distribution` builds.
 
 ## Threat model in one paragraph
 
@@ -56,9 +56,24 @@ The end-to-end encryption protects the **payload**, but it doesn't on its own pr
 
 To revoke an authorisation, the manager sends `revoke_tunnel` — subsequent binds with the old token are rejected.
 
-### Backwards compatibility
+### The permissive default, and what it costs
 
-If no authorisation has been registered for a tunnel UUID, the relay falls back to **unauthenticated bind** (any edge that knows the UUID can bind). This is for backwards compatibility with older managers that don't yet send `authorize_tunnel`. To enforce bind authentication everywhere, make sure the manager is configured to call `authorize_tunnel` for every tunnel it creates.
+`require_bind_auth` defaults to **false**. In that mode a tunnel UUID for which no `authorize_tunnel` has been pushed accepts an **unauthenticated bind** — originally for backwards compatibility with older managers, and still the posture of a relay run without a manager, a tunnel whose authorize push failed, or the window after a relay restart before the manager re-pushes (the authorisation table is in memory, and edges re-register every ~5 s). Tunnels that *do* carry a pushed `authorize_tunnel` still require the exact HMAC even in permissive mode.
+
+**The consequence differs per plane, and this is the part worth reading twice.**
+
+- On the **QUIC carrier**, an unauthenticated `TunnelBind` lets a stranger *join* a tunnel.
+- On the **native plain-UDP carrier**, the rendezvous latch turns a source address into a *send* target — so an unauthenticated `Register` can *move* a slot and redirect live media to the sender. That is media hijack, not merely eavesdropping on ciphertext. Both halves of the shipped defaults put a zero-config relay in this posture: `require_bind_auth` is false and `udp_relay_enabled` is true, so a config that simply omits `udp_relay_enabled` is still exposed.
+
+Two mitigations ship, and neither is a substitute for bind auth:
+
+- **A live slot is held down.** A `Register` from a *different* source IP is refused for 12 seconds after that slot's last forwarded media datagram, so a flowing session cannot be stolen. Same-IP moves are always allowed — a NAT port rebind, a socket rotation and an edge restart on the same host are all legitimate and all keep the IP — and a slot that has never carried media stays last-writer-wins.
+- **The relay says so out loud.** A relay in this posture emits a Warning `relay_native_plane_unauthenticated` event at startup, which lands on the manager's Events page. A relay is headless; journald is not where an operator looks.
+
+To close it, either:
+
+- **Set `require_bind_auth: true`** — but only on a relay driven by a manager that pushes bind secrets. Strict mode fails **closed on both planes** for every tunnel with no pushed authorisation, so on a manager-less relay it refuses every bind and takes the relay off air.
+- **Or disable the native plane** with `udp_relay_enabled: false` (`--no-udp-relay` on the command line), if you do not carry native SRT/RIST or bond legs over this relay.
 
 ## Layer 4 — REST API Bearer token
 
@@ -98,13 +113,30 @@ The relay can optionally connect outbound to a bilbycast-manager via the same We
 
 This connection is the channel the manager uses to call `authorize_tunnel`, `revoke_tunnel`, `disconnect_edge`, and `close_tunnel`.
 
+## Layer 6 — Viewer distribution (`-distribution` builds only)
+
+The optional `viewer-distribution` role adds a **browser-facing HTTP listener** (default `:4485`). It is a separate surface from the REST API on `:4480` and from the QUIC and native-UDP data planes, it is **not** covered by `api_token`, and it carries `/whep/{stream}`, `/whip/{stream}`, `/watch/{stream}`, `/origin/{stream}/{file}` and `/distribution/health`. A plain forwarder build does not have it at all.
+
+Two independent gates, and they do not cover the same thing:
+
+| Gate | Default | Covers |
+|---|---|---|
+| `require_ingest_token` | **true** | The write surfaces — the WHIP offer and the edge's `PUT /origin/{stream}/{file}` |
+| `require_viewer_token` | false | **WHEP only** — `GET /origin/{stream}/{file}` is unauthenticated in every mode |
+
+The ungated origin `GET` is deliberate: it is the CDN-facing half, and a CDN pulls it with no credential of the relay's. It also means that for any stream also running the LL-HLS tier, the viewer gate is bypassable by fetching `/origin/{stream}/index.m3u8`. Restrict the listener at the network or reverse-proxy layer if that matters. See [Viewer Distribution — Access control](/relay/viewer-distribution/#access-control).
+
+Tokens are minted by the manager, scoped (`viewer` or `ingest`) to a single stream, and expiring; the relay validates them statelessly with no database and no revocation path. **Front the listener with TLS.** Browsers require a secure context anyway, and without a TLS terminator the `?token=` form of a viewer credential crosses the wire in clear and lands in the proxy's default access log.
+
+One mitigation worth knowing about: the WHEP endpoint is ICE-Lite and does not implement RFC 7675 consent freshness, so media is **pinned to the address that completed the DTLS handshake** and datagrams from any other address are dropped on ingress before the WebRTC stack sees them. A spoofed STUN nomination therefore mints no peer-reflexive candidate and — decisively — draws no reply, which closes a UDP-reflector amplification path. The same pin fires on a legitimate viewer whose public IP changes mid-session (Wi-Fi to cellular, a CGNAT rotation), who sees the player go black until they reload; that case raises a Warning event once per session so it is diagnosable rather than invisible.
+
 ## Hardening checklist
 
 For production deployments:
 
 - [ ] Provide a real TLS cert for the relay (`tls_cert_path` / `tls_key_path` in the relay config). Don't rely on the self-signed fallback.
 - [ ] Set `api_token` in the relay config to a long random value.
-- [ ] Configure the manager to issue `authorize_tunnel` for every tunnel — never rely on the unauthenticated-bind fallback.
+- [ ] Configure the manager to issue `authorize_tunnel` for every tunnel, then set `require_bind_auth: true` in the relay config so an un-authorised tunnel is refused rather than admitted. Do this only on a manager-driven relay — strict mode fails closed on both planes. If you do not carry native SRT/RIST or bond legs over this relay, `udp_relay_enabled: false` removes the plane where an unauthenticated bind can move live media.
 - [ ] Distribute `tunnel_encryption_key` only via the manager, never out-of-band by hand.
 - [ ] On edge configs, prefer `cert_fingerprint` over `accept_self_signed_cert`.
 - [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433), the native-UDP carrier port (default 4434, if you use native SRT/RIST or bond legs over relay), and the REST API port to the systems that need them.

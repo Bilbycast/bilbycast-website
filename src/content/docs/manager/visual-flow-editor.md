@@ -83,9 +83,21 @@ You can tell the manager which units are physically cabled together. This is rec
 
 Restore never rewrites history. Loading an earlier deployment brings it back as a **draft**, which you then validate and deploy like any other change — so a rollback passes through the same checks as the change that caused it.
 
+## Addresses
+
+Type an address into a connection and it is used exactly as you typed it — the manager never reinterprets an address you supplied. Type `auto` in the listen-address field instead, or use the allocate control, and the manager hands one out of an [address pool](/manager/address-pools/).
+
+- **The pool is resolved from the *receiving* unit**, not from whichever group you happen to be browsing in — the address belongs to the machine that will listen. Pools are declared installation-wide, per group, or per network zone, and the most specific one that applies wins. An exhausted zone pool falls through to the group's and then to the installation's, rather than refusing while a wider range sits empty.
+- **A port is checked against the same port-conflict preflight** that would otherwise refuse the connection a moment later, so the manager will not hand out a port it is about to reject. A **multicast** group has no such second opinion: the preflight only knows about an output's optional source bind, never its destination, so the pool's own allocation table is the only authority on which groups are in use. Keep multicast ranges out of anything else's hands.
+- **Every allocation is a row** naming the wire that holds it, so a connection can say which pool its address came from instead of showing a bare number nobody recognises.
+- **Preview names the pool and the value it would likely use, and holds nothing.** Preview runs on every debounced edit; an allocating preview would drain a pool one keystroke at a time.
+- **A value handed out for a connection that is then refused is released again.** It is committed only when the connection is actually written, and a reservation left abandoned on a closed canvas expires on its own.
+- **With no applicable pool, nothing is invented.** The wire is refused with *"No address pool is configured for this unit and transport, so there is nothing to allocate from."* A multicast allocation is refused on anything but UDP, since SRT and RIST negotiate a session with a single peer.
+
+Allocation sits *above* the graph compiler, which still refuses to invent an address of its own. That rule was never about addresses being unknowable — it was about a guessed address being indistinguishable from a chosen one. An allocated address is distinguishable: it has a row naming who holds it.
+
 ## Current limitations
 
-- **Addresses are supplied by you, never invented.** There are no address pools; every endpoint address is one you entered.
 - **No graph templates yet.**
 - An input has one listener, so a second graph naming a *different* address for the same input is refused, and the refusal names the other graph and both addresses. Naming the *same* address is not a conflict. You can override, and the override is audited with what it contradicted.
 
@@ -94,3 +106,4 @@ Restore never rewrites history. Loading an earlier deployment brings it back as 
 - [Config Reconciliation](/manager/config-reconciliation/) — how the manager and a node agree on what is configured
 - [Topology Visualization](/manager/topology/) — the read-only live map, as distinct from this authoring surface
 - [Node Bus Matrix](/manager/node-bus/) — crosspoint authoring for the node-wide elementary-stream bus
+- [Address Pools](/manager/address-pools/) — declaring the ranges of ports and multicast groups the manager may hand out

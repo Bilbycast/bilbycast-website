@@ -1029,7 +1029,7 @@ Alignment reads the timing already in the stream, which only works if the node f
 Setting `passthrough_clock: true` keeps the rewriter out of the path. Turning alignment on therefore means giving up PCR/PTS regeneration on those inputs.
 :::
 
-If a flow-level requirement is violated the edge does **not** fail the config — it strips `epoch_lock` from the flow's outputs and keeps running, logging why. The absent alignment telemetry is what tells the manager the group never armed.
+A violated flow-level requirement is handled two different ways, and only one of them is harmless. When a flow is **started, restarted or hot-edited**, the edge strips `epoch_lock` from that flow's outputs and keeps running, logging why — a live flow must not be taken off air by a mis-specified alignment knob, and the absent alignment telemetry is what tells the manager the group never armed. But **whole-config validation rejects the same block outright**, and that is what runs at node startup: an `epoch_lock` block that violates a flow-level requirement and has been saved into `config.json` will stop the edge from booting on its next restart, not merely disarm alignment. The same validation guards a whole-config push from the manager, the REST flow endpoints (HTTP 400) and the setup wizard, so the usual way you meet a bad block is an error message rather than a silent strip. Fix a rejected block — do not leave it in place on the strength of the runtime strip.
 
 Nodes that do not support alignment ignore the block **silently**, which looks exactly like success — so the manager hides the controls for them rather than letting you configure something that will not happen.
 

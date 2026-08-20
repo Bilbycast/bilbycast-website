@@ -15,6 +15,10 @@ const capabilities = [
     body: 'Live visual map of every edge, relay, and third-party device. Connections light up as data flows. Click any node for a deep-dive: live video preview, TR-101290 transport analysis, codec detection, fan-out topology.',
   },
   {
+    title: 'Visual Flow Editor — draw the config',
+    body: 'Lay a unit out on a canvas — inputs, outputs, flows — and wire it by hand. Master graphs put several units on one canvas with the cross-unit transport drawn between them, so a multi-node contribution path is one picture instead of one form per box. Drafts are durable, validated before anything is pushed, previewed without side effects, and deployed per unit with a history you can restore from. Listen addresses can come from an address pool you declare installation-wide, per group, or per network zone. On by default on every install — access is per node and per role, not per licence.',
+  },
+  {
     title: 'AI-assisted flow creation',
     body: 'A built-in AI assistant understands your network topology and can create, analyze, and troubleshoot media flows via the driver-aware action system. Bring your own credentials for OpenAI, Anthropic, or Gemini — credentials are stripped before any LLM context.',
   },
@@ -108,7 +112,7 @@ const security = [
     <div class="mx-auto max-w-7xl px-6">
       <div class="mx-auto max-w-2xl text-center">
         <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Capabilities</h2>
-        <p class="mt-4 text-lg text-slate-400">Six things the manager does that vendor-specific dashboards don't.</p>
+        <p class="mt-4 text-lg text-slate-400">Seven things the manager does that vendor-specific dashboards don't.</p>
       </div>
       <div class="mt-16 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {capabilities.map((c) => (

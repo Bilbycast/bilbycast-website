@@ -111,6 +111,10 @@ Per-group permissions are granted in ascending order:
 
 A user can hold different per-group roles in different groups (Admin in one, Viewer in another).
 
+**Per-command roles.** The table above is a floor, not a ceiling. Each device driver declares a minimum role for every command it accepts, and `POST /api/v1/nodes/{id}/command` enforces that on top of the per-node **operator** check every command already has to pass. A declaration of `viewer` or `operator` therefore adds nothing — that baseline check is still the only gate. Any other value, including one the manager does not recognise, is read as **admin on that node**, and a caller without it is refused with HTTP 403, `error_code: "insufficient_role"` and `required_role: "manage"` — the refusal body spells the three levels `view` / `operate` / `manage`, which are the same ladder as `viewer` / `operator` / `admin` above. A command the driver does not list keeps the operator baseline, because those tables are introspection metadata rather than an allowlist.
+
+In practice a group Operator can start and stop flows but cannot invoke the commands a driver marks admin-only — `authorize_tunnel` and `revoke_tunnel` on a relay (which govern bind authentication) or `configure_distribution` (which sets the viewer-token secret) — all three declared `admin` by the relay driver. The declared minimum for every command is published on `GET /api/v1/device-types` as `supported_commands[].requires_role`.
+
 ### Temporary Users
 
 Users can be marked as temporary with an `expires_at` timestamp. Expired accounts are denied access at permission check time.
@@ -236,7 +240,7 @@ Edge and relay nodes can accept self-signed TLS certificates by setting `accept_
 - **Authentication**: All authenticated API endpoints require a valid JWT session cookie. Bearer tokens accepted as an alternative. State-changing requests require a matching CSRF header.
 - **UI page protection**: Unauthenticated requests are redirected to `/login?next=<path>`, with `next` strictly validated to prevent open redirects.
 - **WebSockets**: `/ws/node` uses the two-stage node protocol; `/ws/dashboard` requires a valid session before upgrade.
-- **Security headers**: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and 2-year HSTS are sent on all responses.
+- **Security headers**: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, 2-year HSTS (`max-age=63072000; includeSubDomains; preload`, direct TLS mode only — behind a proxy the load balancer owns it), and an **enforcing** `Content-Security-Policy` — `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; report-uri /api/v1/csp-report` — that trailing directive is what posts violations to the built-in collector. `script-src 'self'` with no `unsafe-inline` is what blocks inline event handlers, the execution vector every known injection path in this UI relies on; it is defence in depth behind correct escaping at the sink, not a substitute for it. `style-src 'unsafe-inline'` is still permitted, because the pages ship inline `<style>` blocks — that migration is separate.
 - **CORS**: same-origin only.
 - **Tunnel confidentiality**: end-to-end authenticated encryption between edge nodes. The relay never sees plaintext.
 - **Registration token protection**: the `registration_token` field is excluded from all node API responses.
@@ -275,7 +279,6 @@ The log is append-only at the data layer — no API path deletes rows. Retention
 - **Hardware Security Module (HSM) support** — master keys are stored in environment variables.
 - **Audit log signing** — events are logged but not cryptographically signed.
 - **IP allowlisting** for node connections.
-- **Content-Security-Policy _enforcement_** — a `Content-Security-Policy-Report-Only` header (with a `report-uri` to the built-in `/api/v1/csp-report` collector) already ships on every response, but the policy is not yet switched to enforcing mode.
 - **API rate limiting** on authenticated endpoints.
 - **SAML SSO** — only OIDC is supported.
 

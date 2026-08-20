@@ -14,6 +14,7 @@ const pillars = [
       'AI flow assistant — OpenAI, Anthropic, or Gemini, credentials stripped before context',
       'Driver-aware action system — Bilbycast and Appear X today, vendor SDK published',
       'Multi-tenant Groups with brand theming, OIDC SSO, MFA, encrypted backup',
+      'Visual Flow Editor — draw a unit on a canvas, or a whole multi-node path on one master graph',
     ],
     href: '/features/manager/',
     image: topologyImg,
@@ -22,11 +23,12 @@ const pillars = [
   {
     eyebrow: 'For OTT, distribution, facilities',
     title: 'One gateway, every format.',
-    body: 'Twelve protocols ingressed and egressed in a single Rust binary. In-process video transcoding (H.264 / HEVC / NVENC) and audio transcoding (AAC / Opus / MP2 / AC-3) — no ffmpeg subprocess, no separate transcode box. NMOS-friendly out of the box.',
+    body: 'Twelve protocols in a single Rust binary — ingressed and egressed, with HLS and CMAF-LL delivered on egress only and RTSP pulled on ingress only. In-process video transcoding (H.264 / HEVC / NVENC) and audio transcoding (AAC / Opus / MP2 / AC-3) — no ffmpeg subprocess, no separate transcode box. NMOS-friendly out of the box.',
     bullets: [
       'SRT (+ multi-path bonding), RIST, RTP, RTMP, HLS, CMAF-LL, WebRTC, ST 2110-20/-23/-30/-31/-40, MXL, and SDI (Blackmagic DeckLink) capture + playout',
       'Node Bus Matrix — one edge as a node-wide ES distribution matrix; PES-aligned splice keeps receivers locked',
       'In-process transcode for both video and audio, end-to-end encrypted on the wire',
+      'Multiviewer walls composited on the edge and published as an ordinary flow — no separate mosaic processor',
     ],
     href: '/features/one-gateway/',
     image: switcherImg,

@@ -44,7 +44,7 @@ const standards = [
 
 <Landing
   title="Bilbycast — One gateway, every format"
-  description="Twelve protocols in one Rust binary. SRT, RIST, RTP, UDP, RTMP, RTSP, WebRTC and SMPTE ST 2110-20/-23/-30/-31/-40 ingressed and egressed; HLS, CMAF-LL and WHEP on egress. In-process video transcoding (H.264/HEVC/NVENC/QSV) and audio transcoding (AAC/Opus/MP2/AC-3). NMOS IS-04/05/08, FEC, hitless 2022-7. No ffmpeg subprocess."
+  description="Twelve protocols in one Rust binary. SRT, RIST, RTP, UDP, RTMP, WebRTC and SMPTE ST 2110-20/-23/-30/-31/-40 ingressed and egressed; HLS and CMAF-LL on egress, RTSP on ingress. In-process video transcoding (H.264/HEVC/NVENC/QSV) and audio transcoding (AAC/Opus/MP2/AC-3). NMOS IS-04/05/08, FEC, hitless 2022-7. No ffmpeg subprocess."
 >
   <!-- Hero -->
   <section class="relative overflow-hidden pt-32 pb-16 lg:pt-40 lg:pb-20">
@@ -65,9 +65,9 @@ const standards = [
         </span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-400 sm:text-xl">
-        Twelve protocols in a single Rust binary — ingressed and egressed, with HLS, CMAF-LL and WHEP delivered
-        on egress. In-process video and audio transcoding — no ffmpeg subprocess, no separate transcode box, no
-        extra hardware. NMOS-friendly out of the box.
+        Twelve protocols in a single Rust binary — ingressed and egressed, with HLS and CMAF-LL delivered on
+        egress and RTSP pulled on ingress. In-process video and audio transcoding — no ffmpeg subprocess, no
+        separate transcode box, no extra hardware. NMOS-friendly out of the box.
       </p>
     </div>
   </section>
@@ -82,11 +82,14 @@ const standards = [
             Add an input. Pick from the list.
           </h2>
           <p class="mt-4 text-base leading-relaxed text-slate-400">
-            SRT, RIST, RTP, UDP, RTMP, RTSP, WebRTC/WHIP, the entire SMPTE ST 2110 family (uncompressed
-            -20/-23 video, -30/-31 audio, -40 ANC), MXL, SDI capture over Blackmagic DeckLink, multi-path bonded
-            links, the local Media Player, and replay clips — every ingest is a first-class entry in the same
-            Add Input modal. The dropdown is the entire ingest transport stack, not a curated subset. (HLS,
-            CMAF-LL and WHEP are egress-only, and live in the Output modal.)
+            SRT, RIST, RTP, UDP, RTMP, RTSP, WebRTC WHIP (receive) and WHEP (pull), the entire SMPTE ST 2110
+            family (uncompressed -20/-23 video, -30/-31 audio, -40 ANC), RTP Audio, SDI capture over Blackmagic
+            DeckLink, multi-path bonded links, the local Media Player, a built-in test pattern, and replay clips
+            — every ingest is a first-class entry in the same Add Input modal, with the ST 2110 and SDI
+            entries appearing once the node reports that hardware. (HLS and CMAF-LL are egress-only
+            and live in the Output modal. WHEP works both ways: pull from an external WHEP server as an input, or
+            serve browser viewers as an output. MXL inputs are drawn on the Visual Flow Editor canvas rather than
+            picked from this dropdown.)
           </p>
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900 shadow-xl shadow-black/30">
@@ -119,9 +122,11 @@ const standards = [
         <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">In-process transcoding</h2>
         <p class="mt-4 text-lg text-slate-400">
           Video and audio transcoders run inside the same Rust process as the protocol stack. No subprocess hop,
-          no shell-out, no extra failure mode. The release binary bundles GPL libx264 / libx265, NVENC, and QSV
-          as an AGPL-3.0-or-later combined work under the GPL portions; the runtime probe auto-detects which
-          hardware backends the host can actually open.
+          no shell-out, no extra failure mode. Every published release binary is a full codec bundle — GPL
+          libx264 / libx265 plus the hardware backends that exist on that architecture (NVENC, QSV and VAAPI on
+          x86_64; NVENC and VAAPI on aarch64; RKMPP on Rockchip) — shipped as an AGPL-3.0-or-later combined work
+          under the GPL portions. The runtime probe auto-detects which of the compiled-in backends the host can
+          actually open.
         </p>
       </div>
 

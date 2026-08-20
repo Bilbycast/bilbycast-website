@@ -77,6 +77,9 @@ Events are queued in an unbounded in-memory channel. When the relay is not conne
 | warning | Tunnel down: edge disconnected | Edge QUIC connection lost, affecting bound tunnel | |
 | warning | Native-UDP register rejected: invalid token | `Register` on the native plain-UDP plane (`:4434`) failed bind-token verification | `{ remote_addr, transport: "udp" }` |
 | warning | Native-UDP register rejected: per-IP session cap exceeded | `Register` on the native plain-UDP plane dropped — per-IP session cap reached. DoS mitigation | `{ error_code: "relay_dos_suspect", remote_addr, remote_ip, transport: "udp" }` |
+| warning | Native-UDP register rejected: implausible source address | `Register` on the native plain-UDP plane arrived from an address that can never be a legitimate slot occupant. `reason: "unroutable_source"` — an address no host can own (unspecified / multicast / broadcast / port 0); `reason: "both_slots_same_address"` — the tunnel's *opposite* slot already holds exactly this address, which would make the session forward to its own source (an unbounded loop if that address routes back to the relay). Not latchable — a slot is a send target | `{ error_code: "relay_invalid_source_addr", reason, remote_addr, remote_ip, transport: "udp" }` |
+| warning | Native-UDP register refused: slot held by a live peer | `Register` tried to move a slot that is currently carrying media from a *different* source IP. Refused for 12 s after that slot's last media datagram, so a flowing contribution feed cannot be redirected by one unauthenticated datagram. A same-IP port rebind is always allowed; a genuine WAN-IP change recovers once the incumbent goes quiet | `{ error_code: "relay_slot_takeover_refused", remote_addr, remote_ip, transport: "udp" }` |
+| warning | Native-UDP plane accepts unauthenticated registers | Emitted **once at startup** when `require_bind_auth: false` *and* `udp_relay_enabled: true`. For any tunnel the manager has not pre-authorised, a `Register` on the native plane can *move* a slot (media hijack), not merely join a tunnel as on QUIC. See [Security — the permissive default](/relay/security/#the-permissive-default-and-what-it-costs) | `{ error_code: "relay_native_plane_unauthenticated", require_bind_auth: false, udp_relay_enabled: true }` |
 
 The `flow_id` field contains the tunnel UUID for all tunnel events.
 
@@ -118,6 +121,7 @@ Emitted only by a relay built with the optional `viewer-distribution` role (defa
 | info | distribution ingest opened for stream '{stream}' | A QUIC ES ingest began feeding a stream's hub | `{ stream, has_audio }` |
 | info | distribution ingest closed for stream '{stream}' | A QUIC ES ingest stopped; the stream tears down | `{ stream }` |
 | warning | per-IP viewer cap ({cap}) reached from {ip} | A WHEP viewer request was rejected — per-source-IP concurrent-viewer cap (`max_viewers_per_ip`) reached | `{ ip, cap }` |
+| warning | WHEP viewer: off-path datagram dropped by the media source pin | A WHEP session received a datagram from an address other than the one that completed the DTLS handshake, and dropped it before the WebRTC stack saw it. Emitted **once per session**. Either a spoofed ICE nomination trying to redirect the SRTP flow at a third party, or — more often — a legitimate viewer whose public IP changed mid-session (Wi-Fi to cellular, CGNAT rotation), who will see the player go black until they reload | `{ error_code: "webrtc_offpath_source", stream, session_id, pinned_ip, source_addr, source_ip }` |
 
 **Source**: `src/distribution/`
 
@@ -142,12 +146,12 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 | Category | Count | Description |
 |----------|-------|-------------|
 | `edge` | 6 | Edge QUIC connection lifecycle (with structured details), incl. per-IP DoS cap and QUIC accept failures |
-| `tunnel` | 8 | Tunnel state changes, authentication, lifecycle (waiting, unbound), per-connection DoS cap, and native plain-UDP register rejections (invalid token + per-IP session cap) |
+| `tunnel` | 11 | Tunnel state changes, authentication, lifecycle (waiting, unbound), per-connection DoS cap, native plain-UDP register rejections (invalid token + per-IP session cap + implausible source address), live-slot takeover refusals, and the startup posture warning |
 | `manager` | 6 | Manager connection and credential management |
-| `distribution` | 4 | Viewer-distribution ingest lifecycle + per-IP viewer cap (only on `viewer-distribution` builds) |
-| **Total** | **24** | |
+| `distribution` | 5 | Viewer-distribution ingest lifecycle, per-IP viewer cap, and the WHEP media source-pin drop (only on `viewer-distribution` builds) |
+| **Total** | **28** | |
 
-The always-compiled `edge`, `tunnel`, and `manager` categories account for 20 events. The `distribution` category (4 events) is present only when the relay is built with the optional `viewer-distribution` role.
+The always-compiled `edge`, `tunnel`, and `manager` categories account for 23 events. The `distribution` category (5 events) is present only when the relay is built with the optional `viewer-distribution` role.
 
 Three of these — the per-IP connection cap (`edge`), the per-connection tunnel-bind cap (`tunnel`), and the native-UDP per-IP session cap (`tunnel`) — carry the structured `error_code: "relay_dos_suspect"` in their `details`. This is the identifier the security-hardening guidance tells operators to monitor for DoS-cap rejections.
 
@@ -156,7 +160,7 @@ Three of these — the per-IP connection cap (`edge`), the per-connection tunnel
 | Severity | Count | Description |
 |----------|-------|-------------|
 | critical | 1 | Manager authentication failure |
-| warning | 13 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, per-IP viewer cap |
+| warning | 17 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, implausible source addresses, live-slot takeover refusals, the unauthenticated-native-plane posture warning, per-IP viewer cap, WHEP source-pin drops |
 | info | 10 | Connections, tunnel activation/waiting/unbound, secret rotation, distribution ingest lifecycle |
 
-The always-compiled event surface (excluding the optional `distribution` category) tallies 20: critical=1, warning=12, info=7.
+The always-compiled event surface (excluding the optional `distribution` category) tallies 23: critical=1, warning=15, info=7.

@@ -116,6 +116,39 @@ them, set `require_viewer_token: true` and have the manager mint short-lived
 viewer links via `POST /api/v1/nodes/{relay}/distribution/streams` — the returned
 `watch_url` carries a signed, expiring token.
 
+:::caution[`require_viewer_token` gates WHEP only]
+`GET /origin/<stream>/<file>` — the LL-HLS / CMAF tier described under
+[Scaling to large audiences](#scaling-to-large-audiences) — performs **no**
+token check in any mode. That is deliberate: it is the CDN-facing half of the
+surface, and a CDN pulls it with no credential of the relay's. So for any
+stream that also runs the LL-HLS tier, the viewer gate is bypassable by
+fetching `https://relay.example.com/origin/<stream>/index.m3u8` directly.
+
+If that matters, restrict the origin listener at the network or reverse-proxy
+layer. Do not read "viewer token required" as "this stream is not readable
+without a credential".
+
+The write surfaces are gated separately, by `require_ingest_token` (default
+**on**), which covers both the WHIP offer and the edge's `PUT` to the origin.
+:::
+
+A viewer token may be presented either as `?token=…` on the URL or as an
+`Authorization: Bearer` header; the header is checked first, so an explicit
+credential always outranks a URL. The built-in `/watch/<stream>` player reads
+the query form off its own URL and forwards it as a header.
+
+:::note[Prefer the header form for anything long-lived]
+The relay's HTTP listener is plain HTTP by design and expects a
+TLS-terminating proxy in front — and every default proxy access-log format
+(nginx `$request`, Apache `%r`, HAProxy, ALB, CloudFront) records the full
+request line, query string included. Viewer tokens are stateless with **no
+revocation path** and the manager's default TTL is **6 hours**, so a token
+lifted from a proxy log or from browser history is replayable against a live
+feed for that long. Mint a short `ttl_secs` for query-form links, use the
+`Authorization: Bearer` form for programmatic clients, and strip `token` from
+the query in your proxy's log format if you can.
+:::
+
 ## Scaling to large audiences
 
 A single relay serves roughly **hundreds to low-thousands** of concurrent WHEP

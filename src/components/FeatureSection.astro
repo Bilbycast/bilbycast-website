@@ -36,6 +36,11 @@ const features = [
     description: 'SRT, RIST, RTP, and UDP outputs accept a delay block so parallel paths with different processing latencies stay aligned. Pick fixed millisecond delay, a self-adjusting target end-to-end latency, or a frame-accurate target using auto-detected frame rate. Keep a clean feed in lockstep with a commentary-processed variant, or compensate for a downstream transcode box.',
   },
   {
+    icon: 'SYNC',
+    title: 'Aligned Output — cut between nodes',
+    description: 'Two edges forwarding the same feed put it on the wire at different moments, because each releases when its own network path delivers. An alignment group cancels that difference: the manager works out one shared timeline, hands it to every member node, and each edge holds its packets until that timeline says release — so a downstream switcher gets a clean cut between boxes instead of a timing jump. Two to eight members, each one UDP or RTP output on a single-input, non-assembled, non-transcoded flow with PCR egress pacing and a passthrough-clock or bonded input. Alignment reads the timing already in the stream, so it and PCR/PTS regeneration are mutually exclusive. Not a 2022-7 merge: the streams stay separate, they simply arrive in step.',
+  },
+  {
     icon: 'IP',
     title: 'Secure IP Tunneling',
     description: 'Forward any TCP or UDP traffic through encrypted QUIC tunnels between edge nodes. Monitor devices, control equipment, or extend your network across NAT — all managed from the bilbycast-manager UI with per-tunnel HMAC bind tokens and ChaCha20-Poly1305 AEAD.',
@@ -49,6 +54,11 @@ const features = [
     icon: '\u2295',
     title: 'End-to-End Encrypted',
     description: 'ChaCha20-Poly1305 AEAD between edge nodes (relay is zero-knowledge), AES-CTR/GCM for SRT, TLS 1.3 via QUIC, optional certificate pinning, and secrets encrypted at rest. Memory-safe core with tight, static binaries for simple deployment.',
+  },
+  {
+    icon: 'SIG',
+    title: 'Signed Fleet Upgrades',
+    description: 'Upgrade one node or a whole Group from the manager. Every release manifest is signed with Sigstore keyless — an ephemeral key, a Fulcio certificate binding the signature to the release workflow run that produced it, and a public Rekor transparency-log entry — so there is no long-lived signing key anywhere to steal. Each node verifies the manifest against a compiled-in allowlist naming its own repository and workflow before it will trust the SHA-256 inside, and a boot watchdog rolls back to the previous version automatically if the new binary crash-loops on startup. A binary that boots but never checks in with the manager is held, flagged, and left for an operator to roll back — that case is surfaced, not reverted for you.',
   },
   {
     icon: 'NMOS',
@@ -69,6 +79,11 @@ const features = [
     icon: 'BUS',
     title: 'Node Bus Matrix',
     description: 'One edge becomes a full distribution matrix. The PID bus is node-wide — any flow’s assembly pulls elementary streams from inputs owned by any sibling flow, with a master-clock-identity preflight that refuses cross-PTP-domain / cross-PCR-PLL mixes before they hit the wire. A three-pane crosspoint authoring surface (Sources / Matrix / Inspector) replaces nested form-pickers entirely. Click-to-wire and drag-and-drop equally first-class. Lawo-style orange marks pending; blue marks committed. Apply (N) commits per-flow atomic. Save salvo captures the routing as a Switcher preset.',
+  },
+  {
+    icon: 'MV',
+    title: 'Multiviewer — the wall is a flow',
+    description: 'Composite node-local inputs onto one 1080p canvas and publish it as ordinary MPEG-TS — so the wall restreams over SRT, RTP, UDP, WebRTC, or CMAF, records, nests inside another wall, and produces thumbnails, with no separate wall processor and no new output code. Every tile carries its own x/y/width/height and paint order, so overlapping them is how a PiP is built. A source that stops keeps its last picture under an amber NO SIGNAL badge; a tile nobody patched reads UNASSIGNED — two badges because "the feed died" and "nobody routed this" send an operator to different places. Layouts, routings and head allocation are authored in the manager and deployed to whichever unit draws the wall. Nothing the wall does can apply backpressure to the feeds it is watching. Compositing is an opt-in build feature and every published release binary carries it — but the wall is CPU work in this first phase: each tile is its own single-threaded software decode and scale, and the canvas encodes on the processor even on a host with a spare GPU. The 64-tile limit is a configuration ceiling, not a sizing guide — size the wall to the host.',
   },
   {
     icon: 'PES',

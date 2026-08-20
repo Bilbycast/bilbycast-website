@@ -15,18 +15,30 @@ live feed.
 SDI lives behind the **`sdi-decklink`** build feature, which is **off** in a
 plain `cargo build`. This page is about turning it on.
 
-:::caution[The published release binaries do not currently include SDI]
-The two `*-linux-full` artefacts (x86_64 and aarch64) request the
-`sdi-decklink` feature, but the release pipeline drops it whenever the DeckLink
-SDK is not available to CI — which has been the case since v0.99.2. Every
-published binary up to and including **v0.102.0** therefore has no SDI, and the
-release notes for v0.100.0–v0.102.0 originally said otherwise (they have since
-been corrected). Until a release ships with it, use **Checklist A** below to
-build your own.
+:::note[SDI ships in the two `*-linux-full` artefacts from v0.103.0 onward]
+Every published binary up to and including **v0.102.0** had the `sdi-decklink`
+feature silently dropped: the release pipeline continues (with a warning) when
+no DeckLink SDK credential reaches CI, so the build stayed green while the
+artefact shipped without SDI. The release notes for v0.100.0–v0.102.0 said
+otherwise and have since been corrected.
 
-The **`*-linux-rockchip`** artefact does not include SDI at all, by design —
-those boards are the embedded deployment rather than a rack host with a PCIe
-DeckLink fitted. Build from source if you need SDI on Rockchip.
+Since **v0.103.0** the release run asserts the shim symbol is actually linked
+into each artefact — `nm | grep dl_read_frame` — whenever SDI was requested
+*and* a credential arrived, so an SDI-less `*-linux-full` artefact now fails
+the release instead of shipping. Trust that assertion rather than a green
+checkmark: the companion `ldd` check (which confirms `libDeckLinkAPI` is
+`dlopen`-only) passes just as happily on a binary built without the feature at
+all. A missing credential still only warns, so verify the binary you actually
+downloaded:
+
+```bash
+./bilbycast-edge --print-capabilities | grep '^feature sdi-decklink'
+```
+
+The **`*-linux-rockchip`** artefact carries no SDI, by design — those boards
+are the embedded deployment rather than a rack host with a PCIe DeckLink
+fitted. Build from source (**Checklist A**) if you need SDI on Rockchip, or on
+a release predating v0.103.0.
 :::
 
 ## Why there is a build step at all
@@ -111,10 +123,13 @@ everything else is correct.
 ## Checklist B — build it in GitHub Actions
 
 For project maintainers, and for anyone running their own fork's CI. The
-release workflow already lists `sdi-decklink` for every artefact — it strips the
-feature at build time when the SDK is unavailable, warns, and continues. So
-this is entirely about making the headers reachable from CI. **No workflow edit
-is required.**
+release workflow already requests `sdi-decklink` for the two `*-linux-full`
+artefacts (the `*-rockchip` row omits it deliberately) — it strips the feature
+at build time when the SDK is unavailable, warns, and continues. So this is
+entirely about making the headers reachable from CI. **No workflow edit is
+required.** Once a credential does reach the run, the `Verify binary` step
+asserts the shim symbol is linked in and fails the release if it is not, so the
+feature cannot silently rot back out.
 
 The SDK is not vendored into the public repository. It lives in a separate
 **private** repository that CI checks out.
@@ -235,7 +250,7 @@ denied by the sandbox.
 | `sdi_no_media_codecs` at flow start | Built with `media-codecs` disabled | Rebuild with default features |
 | Node advertises SDI but lists **zero** devices | systemd sandbox blocking device nodes | Checklist C |
 | Node does not advertise SDI at all | Desktop Video missing, or binary built without the feature | Install Desktop Video; confirm the feature was enabled |
-| Released binary has no SDI | The published artefacts ship without it | Checklist A, or Checklist B then re-release |
+| Released binary has no SDI | A `*-rockchip` artefact (never carries it), or a `*-full` artefact from v0.102.0 or earlier. Confirm with `--print-capabilities \| grep '^feature sdi-decklink'` | Upgrade to v0.103.0+ for `*-full`; otherwise Checklist A, or Checklist B then re-release |
 | CI logs *"SDI compile gate skipped"* | No SDK credential visible to that run | Expected on fork PRs; otherwise recheck the secret name |
 
 ## Related

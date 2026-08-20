@@ -97,7 +97,7 @@ Three verbs share one endpoint.
 
 A deploy creates exactly two things on the unit: one **compositor input** carrying the canvas size, rate, target bitrate and the tile list; and one **flow** with thumbnails on and **no outputs**. The empty output list is on purpose — a wall composites, encodes, muxes and produces thumbnails without one. Send it somewhere by attaching an output to that flow on the unit's own Outputs screen, exactly like any other flow.
 
-The canvas encoder's target, `video_bitrate_kbps`, defaults to **8000** kbit/s and accepts **100 to 200000**. There is no codec choice, and that is not an omission: the unit resolves its own encoder backend and reports which one on the head, so a dropdown would be a control that provably changes nothing.
+The canvas encoder's target, `video_bitrate_kbps`, defaults to **8000** kbit/s and accepts **100 to 200000**. There is no codec choice here, and the wall does not need one: the unit resolves its own encoder backend against the hardware it has and reports the resolved chain on the head, so `h264_auto` lands on the best encoder that host can open. A dropdown would only be useful to *override* that, which is a later phase.
 
 ### Deployment states
 

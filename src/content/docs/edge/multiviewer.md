@@ -43,8 +43,15 @@ cargo build --release --features "multiviewer,video-encoder-x264"
 cargo build --release --features "multiviewer,video-encoder-nvenc"
 ```
 
-:::caution[The wall encodes on the CPU on every published release]
-The compositor uses the **first encoder compiled into the binary**, and in all three published artefacts that is **libx264** — CPU encode, even on a host with NVENC, QSV, VAAPI or Rockchip RKMPP hardware available. Budget the wall as a software H.264 encode at its canvas size and frame rate. The node reports the backend it will actually use in its health payload under `mv_heads[].capabilities.encoder_backends`.
+:::note[The wall uses your hardware encoder]
+The canvas is encoded by whichever backend this host can actually open. The
+wall's `codec` (default `h264_auto`) resolves against the probed hardware —
+QuickSync on Intel, NVENC on NVIDIA, VAAPI on AMD, RKMPP on RK3568/RK3588 — with
+libx264 as the floor where there is no hardware encoder.
+
+Releases up to and including **v0.105.0** encoded every wall on CPU libx264
+whatever the host carried, and silently ignored `codec`. If you are on v0.105.0
+or older, budget CPU for the wall.
 :::
 
 ## Authoring a wall
@@ -90,7 +97,7 @@ Then put `wall-1` in a flow's `input_ids` and give that flow whatever outputs yo
 | `tiles` | array | — | 1–64 tiles. Required. |
 
 :::note[`codec` is accepted but does not choose the encoder]
-In phase 1 the compositor always opens the first encoder compiled into the binary (libx264 on every published artefact) regardless of what `codec` says. The field is still read by the node's **resource-budget estimate**, so naming a hardware encoder here makes the manager's "Resource impact" preview count a hardware session the wall will never open. Leave it at `h264_auto` unless you have a reason not to.
+The compositor resolves `codec` against this host's probed encoders and takes the best one it can open, falling back through the chain to libx264. The field is still read by the node's **resource-budget estimate**, so naming a hardware encoder here makes the manager's "Resource impact" preview count a hardware session the wall will never open. Leave it at `h264_auto` unless you have a reason not to — that is what lets it pick your hardware.
 :::
 
 ### Tile fields

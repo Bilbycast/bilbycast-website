@@ -8,9 +8,9 @@ sidebar:
 **Date:** 2026-03-27
 **Last updated:** 2026-08-11
 
-**Note on versions:** bilbycast-srt advertises wire compatibility with libsrt **v1.5.5** (`0x010505`), and this comparison is written against that release. Upstream has since published **v1.5.6**, a security release fixing two high-severity CVEs that affect every version up to and including 1.5.5.
+**Note on versions:** bilbycast-srt advertises wire compatibility with libsrt **v1.5.5** (`0x010505`), and this comparison is written against that release. Upstream has since published **v1.5.6**, a security release fixing two high-severity CVEs that affect every version up to and including 1.5.5, and **v1.5.7** after it.
 
-The `bilbycast-libsrt-rs` wrapper — which is what bilbycast-edge actually builds against — vendors **v1.5.6**, so shipped edge binaries are not exposed to those CVEs. If you build against a *system* libsrt, use 1.5.6 or later.
+The `bilbycast-libsrt-rs` wrapper — which is what bilbycast-edge actually builds against — vendors **v1.5.7**, so shipped edge binaries are not exposed to those CVEs. If you build against a *system* libsrt, use 1.5.6 or later.
 
 ## Overview
 
@@ -107,7 +107,7 @@ The `bilbycast-libsrt-rs` wrapper — which is what bilbycast-edge actually buil
 
 ## Where libsrt v1.5.5 Is Ahead
 
-1. **Socket Groups / Bonding** — Broadcast and Main/Backup for hitless failover. The only remaining major feature gap. (Balancing mode still WIP even in libsrt.)
+1. **Socket Groups / Bonding** — Broadcast and Main/Backup for hitless failover. The only remaining major feature gap, and not an academic one: bilbycast-edge connects SRT socket groups on both its live input and output paths. (Balancing mode still WIP even in libsrt.)
 2. **Per-connection passphrase override** — libsrt's `srt_listen_callback` can set `SRTO_PASSPHRASE` per connection; bilbycast-srt's access control can accept/reject but not override the passphrase dynamically.
 3. **C FFI maturity** — Used by FFmpeg, OBS, GStreamer, VLC. bilbycast-srt's FFI is scaffolding.
 4. **Platform breadth** — Now includes Windows ARM64 and HarmonyOS. bilbycast-srt is untested on mobile/embedded.
@@ -125,7 +125,7 @@ Since bilbycast-srt advertises version `0x010505`, it should verify:
 
 bilbycast-srt now matches libsrt v1.5.5 on **access control**, **retransmission bandwidth shaping** (token bucket), **Stream ID sending and parsing**, **structured Stream ID format** (`#!::key=value`), and **FEC** (row-only, staircase/2D, ARQ integration, handshake negotiation). The only remaining major feature gap is **bonding/socket groups**. bilbycast-srt leads on AES-GCM maturity, memory safety, architectural cleanliness, and API ergonomics.
 
-For bilbycast's use case (media transport gateway with its own relay infrastructure for redundancy), the bonding gap is mitigated by bilbycast-edge's own hitless redundancy and tunnel failover mechanisms.
+That gap is why bilbycast-edge builds against `bilbycast-libsrt-rs` instead of this crate, and why bilbycast-srt is **not currently a drop-in swap** for it: the edge imports `MemberStatus`, `GroupMode`, `SrtGroup` and `SrtGroupBuilder` unconditionally in `src/srt/connection.rs` and connects a socket group on both its live SRT input and SRT output paths — types bilbycast-srt does not define at all. Restoring the swap would mean feature-gating the edge's entire bonding surface.
 
 ### Feature coverage: ~95% of libsrt v1.5.5
 
@@ -138,5 +138,5 @@ For bilbycast's use case (media transport gateway with its own relay infrastruct
 | Access control (Stream ID, accept/reject) | ~90% (missing per-connection passphrase override) |
 | Retransmit shaping (Token Bucket) | 100% |
 | Connection modes (caller, listener, rendezvous) | 100% |
-| Bonding / socket groups | 0% |
+| Bonding / socket groups (required by bilbycast-edge) | 0% |
 | C FFI | ~10% (scaffolding) |

@@ -1,11 +1,11 @@
 ---
 title: Relay Overview
-description: bilbycast-relay — stateless, opaque per-path relay for NAT traversal between edge nodes.
+description: bilbycast-relay — stateless opaque per-path forwarder for NAT traversal between edge nodes, plus an optional stateful viewer-distribution role.
 sidebar:
   order: 1
 ---
 
-bilbycast-relay is a stateless relay server that enables NAT traversal between bilbycast-edge nodes behind NAT. It is a **generic, opaque per-path forwarder**: it pairs the two ends of each path by tunnel ID and forwards `[tunnel_id][ciphertext]` verbatim between them. It cannot read tunnel payloads (end-to-end ChaCha20-Poly1305 encryption between edges), and it never terminates or combines the streams it carries.
+bilbycast-relay is a **stateless opaque per-path forwarder** for NAT traversal between bilbycast-edge nodes behind NAT, with an optional **stateful** viewer-distribution role alongside it. As a forwarder it pairs the two ends of each path by tunnel ID and forwards `[tunnel_id][ciphertext]` verbatim between them. It cannot read tunnel payloads (end-to-end ChaCha20-Poly1305 encryption between edges), and it never terminates or combines the streams it carries. Statelessness is a property of *that* role: the viewer-distribution role below keeps per-viewer WHEP sessions in memory and an on-disk segment store it re-adopts on restart.
 
 It forwards three logically distinct path types, all the same opaque way:
 
@@ -13,7 +13,9 @@ It forwards three logically distinct path types, all the same opaque way:
 - **Native SRT / RIST over relay** — plain UDP, no QUIC (`:4434`), so SRT/RIST keep their own ARQ + congestion control without QUIC's overhead.
 - **Individual bond legs** — a relayed [multi-path bond](/edge/bonding/) leg is just a native plain-UDP tunnel. Bond aggregation, cross-leg ARQ, FEC, and reordering run **end-to-end edge↔edge**; the relay forwards each leg opaquely. There is **no "bond bridge"** — the relay does not terminate or combine bonds.
 
-A relay can also optionally run as a [**viewer-distribution node**](/relay/viewer-distribution/) — reaching browser viewers directly with a WHEP SFU (sub-second WebRTC) plus an LL-HLS/CMAF origin (CDN-scale), with no external streaming server and no ports opened on the edge. This is a separate, default-off capability shipped in the `-distribution` release variant; the opaque forwarding described above is unaffected.
+A relay can also run as a [**viewer-distribution node**](/relay/viewer-distribution/) — reaching browser viewers directly with a WHEP SFU (sub-second WebRTC) plus an LL-HLS/CMAF origin (CDN-scale), with no external streaming server and no ports opened on the edge. The opaque forwarding described above is unaffected either way.
+
+**Default-off describes the build, not the box.** The Cargo feature is off by default, so a plain forwarder build carries no distribution surface at all — but the shipped `-distribution` artefact comes up with the role **enabled** and listening on `:4485` (TCP — browser-facing HTTP signaling + origin) and `:4486` (UDP/QUIC ingest), both dual-stack, unless `relay.json` says `"distribution": { "enabled": false }`. `install-relay.sh` installs that variant by default; pass `--variant default` for the lean forwarder. The same tarball also carries a second binary, `bilbycast-portal` — the DVR viewer portal — installed only with `--with-portal` and deliberately left stopped until you issue it a manager service token.
 
 ## Key Features
 
@@ -25,7 +27,7 @@ A relay can also optionally run as a [**viewer-distribution node**](/relay/viewe
 - **Optional tunnel auth** — Per-tunnel HMAC-SHA256 bind tokens managed via manager
 - **Manager integration** — Optional WebSocket connection for centralized monitoring
 - **Lock-free design** — DashMap registries, AtomicU64 stats, zero Mutex usage
-- **Viewer distribution (optional)** — [WHEP SFU + LL-HLS origin](/relay/viewer-distribution/) to reach browser viewers natively; default-off, in the `-distribution` release variant
+- **Viewer distribution (optional)** — [WHEP SFU + LL-HLS origin](/relay/viewer-distribution/) to reach browser viewers natively; the Cargo feature is default-off, but the `-distribution` release variant ships it **enabled** on `:4485` / `:4486` unless `relay.json` disables it
 
 ## Security Layers
 

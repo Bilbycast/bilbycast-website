@@ -44,11 +44,18 @@ curl http://relay-host:4480/health
   "uptime_secs": 12345,
   "connected_edges": 4,
   "total_tunnels": 7,
-  "active_tunnels": 5
+  "active_tunnels": 5,
+  "udp_sessions_total": 3,
+  "udp_sessions_active": 2,
+  "manager": {
+    "connected": true,
+    "disconnected_secs": 0,
+    "reconnecting": false
+  }
 }
 ```
 
-A tunnel is **active** when both legs (ingress + egress) are bound. **Total** counts include tunnels in the half-bound `TunnelWaiting` state.
+A tunnel is **active** when both legs (ingress + egress) are bound. **Total** counts include tunnels in a half-bound `waiting_ingress` / `waiting_egress` status. The two `udp_sessions_*` counts cover the native plain-UDP plane, not QUIC tunnels. The `manager` object is **omitted entirely** when no manager is configured, so a monitoring probe must treat it as optional — it is the same object the [Stats reference](/relay/stats-reference/) documents for `/api/v1/stats`.
 
 ### `GET /metrics`
 
@@ -62,11 +69,13 @@ curl -H "Authorization: Bearer <token>" \
 Useful series:
 
 - `bilbycast_relay_uptime_seconds`
-- `bilbycast_relay_connected_edges`
-- `bilbycast_relay_active_tunnels` / `bilbycast_relay_total_tunnels`
+- `bilbycast_relay_edges_connected`
+- `bilbycast_relay_tunnels_active` / `bilbycast_relay_tunnels_total`
 - `bilbycast_relay_bytes_ingress_total` / `bilbycast_relay_bytes_egress_total`
-- `bilbycast_relay_bandwidth_bps`
+- `bilbycast_relay_bytes_forwarded_total`
 - `bilbycast_relay_peak_tunnels` / `bilbycast_relay_peak_edges`
+
+There is no throughput gauge on `/metrics`: take `rate(bilbycast_relay_bytes_forwarded_total[1m])`, or read `total_bandwidth_bps` from `GET /api/v1/stats`. Note that the metric names and the JSON field names are deliberately different spellings of the same quantities (`bilbycast_relay_edges_connected` vs `connected_edges`), so the two are not interchangeable.
 
 Pair with the [Stats reference](/relay/stats-reference/) for the full series catalogue.
 
@@ -114,20 +123,28 @@ curl -H "Authorization: Bearer <token>" \
   "tunnels": [
     {
       "tunnel_id": "550e8400-e29b-41d4-a716-446655440000",
-      "state": "active",
+      "protocol": "udp",
+      "status": "active",
       "ingress_edge_id": "edge-syd-1",
       "egress_edge_id": "edge-perth-1",
-      "bytes_ingress": 1234567,
-      "bytes_egress": 1234567,
-      "tcp_streams_total": 4,
-      "tcp_streams_active": 2,
-      "udp_datagrams_total": 5678
+      "ingress_remote_addr": "203.0.113.10:53219",
+      "egress_remote_addr": "198.51.100.7:41888",
+      "stats": {
+        "bytes_ingress": 1234567,
+        "bytes_egress": 1234567,
+        "tcp_streams_total": 4,
+        "tcp_streams_active": 2,
+        "udp_datagrams_total": 5678,
+        "uptime_secs": 321
+      }
     }
   ]
 }
 ```
 
-`state` is one of `waiting` (only one leg bound), `active` (both legs bound), or `unbinding` (transition state).
+The counters are nested under `stats`, not flat on the tunnel object. `protocol` is the **tunnelled payload** protocol — `tcp` or `udp` — not the carrier, which is always QUIC. `ingress_remote_addr` / `egress_remote_addr` are the post-NAT `host:port` each edge dialed in from, `null` until that side binds.
+
+`status` is one of `active` (both legs bound), `waiting_ingress` or `waiting_egress` (only the named leg is missing), or `empty` (neither leg bound yet).
 
 ### `GET /api/v1/edges`
 
@@ -178,7 +195,7 @@ curl -H "Authorization: Bearer <token>" \
 }
 ```
 
-A session is `active` once both edges' post-NAT source addresses have been latched by source-address rendezvous; before that it's `waiting`. `ingress_addr` / `egress_addr` are `null` until each side latches.
+`status` is `active` once both edges' post-NAT source addresses have been latched by source-address rendezvous, `waiting_ingress` or `waiting_egress` when only the other side has latched, and `empty` when neither has. There is no bare `waiting` value — a monitor filtering on it matches nothing. `ingress_addr` / `egress_addr` are `null` until each side latches.
 
 ### `DELETE /api/v1/tunnels/{id}` (admin, fail-closed)
 

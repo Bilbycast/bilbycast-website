@@ -47,7 +47,7 @@ The end-to-end flow (DNS pre-flight, port-80 reachability check, log lines that 
 
 Requirements:
 
-- Port **80** must be reachable from the internet for the HTTP-01 challenge. The manager spins up a temporary HTTP listener on this port for the duration of the challenge.
+- Port **80** must be reachable from the internet for the HTTP-01 challenge. Whenever ACME is enabled the manager binds this port **at startup and holds it for the life of the process** — one listener per address in `BILBYCAST_ACME_LISTEN_ADDRS` (default `0.0.0.0,[::]`), not a temporary listener raised for the duration of a challenge. Besides serving the challenge token, it redirects every other path (308 Permanent Redirect) to `https://<BILBYCAST_ACME_DOMAIN><path>`, so it doubles as a permanent HTTP→HTTPS redirector. Port 80 therefore cannot be shared with another service: a bind conflict is logged at boot (`ACME certificate requests will fail until 0.0.0.0:80 is available.`) and leaves ACME unable to issue or renew, but does **not** stop the manager.
 - Port **8443** (or whatever `BILBYCAST_PORT` is set to) must be reachable for the actual HTTPS service.
 - The DNS name in `BILBYCAST_ACME_DOMAIN` must resolve to the manager's public IP.
 
@@ -55,7 +55,9 @@ Requirements:
 
 The manager runs a background task that checks the cert **every 12 hours** (plus an immediate check on process startup). When the cert is within 30 days of expiry — or missing entirely — it triggers a renewal in the background. **The new cert is hot-reloaded without restarting the manager** — active WebSocket connections stay up, and new connections immediately use the new cert.
 
-Renewal failures are logged as `tls.renewal_failed` events. The retry uses exponential backoff (1h initial, capped at 24h). The manager keeps retrying until renewal succeeds or the cert actually expires.
+Renewal failures land on the Events page as **Warning** events in category **`tls`** against node `system`, with the message `ACME certificate request failed: <error>`; a successful renewal lands as an **Info** event in the same category, `ACME certificate renewed successfully`. There is no event *kind* — filter by category and message text. Both are platform-scoped, so only a SuperAdmin sees them. The retry uses exponential backoff (1h initial, capped at 24h). The manager keeps retrying until renewal succeeds or the cert actually expires.
+
+One failure mode is quieter than the rest: if the cert is issued but the in-process hot-reload fails, the manager logs `Failed to hot-reload TLS certificate` and sets the ACME status to Error with the reason, but writes **no** event — check the process log or `/api/v1/settings/acme` (Settings → TLS / ACME) rather than the Events page.
 
 ### Backups
 
@@ -221,15 +223,16 @@ And the edge process needs the `BILBYCAST_ALLOW_INSECURE=1` env var set, otherwi
 
 ## Security headers
 
-All three modes serve the same security headers on every response:
+All three modes serve the same three headers on every response. HSTS is the exception — it is `direct` mode only:
 
-| Header | Value |
-|---|---|
-| `X-Content-Type-Options` | `nosniff` |
-| `X-Frame-Options` | `DENY` |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` |
+| Header | Value | Modes |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | All |
+| `X-Frame-Options` | `DENY` | All |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; report-uri /api/v1/csp-report` — **enforcing**, not report-only | All |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | **`direct` only** — not sent when `BILBYCAST_TLS_MODE=behind_proxy` |
 
-In behind-proxy mode, you may also want to add HSTS at the proxy level to ensure browsers see it on all responses (including any served directly by the proxy).
+In behind-proxy mode the proxy **must** add HSTS itself: the manager sends none in this mode, on the assumption that the load balancer terminating TLS owns that header for every response it serves.
 
 ## Migration between modes
 

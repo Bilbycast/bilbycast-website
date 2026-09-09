@@ -20,14 +20,14 @@ MXL is **not** cross-host transport. For that, use SRT / RIST / RTP / ST 2110 / 
 ## License + status
 
 - **License:** Apache-2.0 (compatible with bilbycast-edge's AGPL-3.0-or-later combined work).
-- **Upstream version:** libmxl v1.0.1 (released 2026-05-07; v1.0 API explicitly frozen).
+- **Upstream version:** libmxl v1.0.2 (pinned as a git submodule; the v1.0 API is explicitly frozen).
 - **Maintainer:** [dmf-mxl/mxl](https://github.com/dmf-mxl/mxl) — EBU, Linux Foundation, NABA, plus broadcaster contributors.
 
 ## Feature flag — `mxl` (off by default)
 
 MXL ships compiled-in on the release binary but requires the `mxl` Cargo feature when building from source. The release tarball is built with `mxl mxl-not-built` — the Rust glue is in, libmxl.so is discovered at runtime via dlopen rather than baked in. That keeps the `*-linux-full` tarball portable across hosts that may or may not have libmxl installed.
 
-If the runtime probe doesn't find libmxl.so on the dynamic loader path, the edge starts cleanly without the `mxl-video` / `mxl-audio` / `mxl-anc` capability bits, and any flow referencing an MXL input/output is rejected with a clear validation error. No silent degradation.
+If the runtime probe doesn't find libmxl.so on the dynamic loader path, the edge starts cleanly without the `mxl-video` / `mxl-audio` / `mxl-anc` capability bits. Config validation never consults the probe, so the refusal lands at flow start rather than at config load: an MXL **output** fails to start outright, and an MXL **input** raises a Critical `mxl_domain_unavailable` event and then produces nothing while the rest of the flow keeps running. Loud on both sides — but on the input side it is an event to watch for, not a config the edge refused to accept.
 
 ## Install libmxl on the host
 
@@ -78,30 +78,37 @@ export LD_LIBRARY_PATH=$(dirname "$BILBYCAST_LIBMXL_SO"):$LD_LIBRARY_PATH
 
 ## Verify the probe
 
-After installing libmxl, restart the edge and check `/api/v1/stats/health`:
+The edge publishes no capability list over its own REST API — the bits ride the manager WebSocket on `HealthPayload.capabilities`. Three checks, in the order they answer:
+
+**1. The startup log.** Restart the edge and look for the `mxl: probe …` line:
+
+```
+mxl: probe succeeded — libmxl loaded from /usr/local/lib/libmxl.so; /dev/shm tmpfs check = OK
+```
+
+That line means the three capability bits are advertised. `mxl: probe found no libmxl.so — mxl-* capabilities will not be advertised` means the dynamic loader couldn't reach it — revisit Option A / B / C above. A `/dev/shm tmpfs check = MISS (libmxl perf will degrade)` is a **non-fatal performance warning**, not a probe failure: the probe has already succeeded and the bits are advertised either way.
+
+**2. The binary.** Confirm the feature was compiled in:
 
 ```bash
-curl https://edge:8443/api/v1/stats/health -H "Authorization: Bearer $TOKEN" | \
-  jq '.capabilities | map(select(startswith("mxl")))'
+./bilbycast-edge --print-capabilities | grep -x 'feature mxl'
 ```
 
-Expected output:
+The flag prints two lists — one `feature` line per compiled-in Cargo feature, then the capability list evaluated cold. `capability mxl-video` never appears in it: the flag returns before the boot probe that `dlopen`s libmxl has run.
 
-```json
-["mxl-video", "mxl-audio", "mxl-anc"]
-```
-
-If the capabilities are absent, check the startup log for the `mxl: probe …` line — `probe found no libmxl.so` means the loader couldn't reach it (Option A/B/C above); `probe failed: /dev/shm is not tmpfs` means the kernel mount needs fixing on this host.
+**3. The manager.** Drop an `mxl_*` node onto the unit in the [Visual Flow Editor](/manager/visual-flow-editor/) — it reads the bits off the node's last health tick and flags *"This physical unit does not advertise support for ..."* when no `mxl*` capability is there. That is the only manager surface that consults them today.
 
 ## PTP is mandatory
 
-MXL flows fail validation when `master_clock.kind = "wallclock"`. The grain timing model in MXL requires every attached process to agree on the same monotonic 27 MHz reference — on bilbycast that's the per-flow [master clock](/edge/clocking/) bound to `ptp4l`.
+The grain timing model in MXL requires every attached process to agree on the same monotonic 27 MHz reference — on bilbycast that's the per-flow [master clock](/edge/clocking/) bound to `ptp4l`. MXL flows get there on their own: the auto-selector maps every `mxl_*` input to the `ptp` master-clock kind, so leaving `master_clock` unset (or `"auto"`) is the correct configuration.
 
-If PTP isn't already set up on the host, switch the Time page to **Auto** (find a grandmaster) or **Grandmaster** (provide one yourself) — see [Time (PTP)](/edge/ptp/). The MXL bring-up probe waits for `port_state == SLAVE` before advertising the capability bits.
+Nothing enforces it, though. An explicit `master_clock.kind = "wallclock"` on an MXL flow is currently **accepted and honoured** — no validator inspects `master_clock.kind` for MXL flows — so setting it silently drops the grain timing model onto a free-running, undisciplined clock. Don't set it.
+
+If PTP isn't already set up on the host, switch the Time page to **Auto** (find a grandmaster) or **Grandmaster** (provide one yourself) — see [Time (PTP)](/edge/ptp/). The boot probe only `dlopen`s `libmxl.so` — it reads no PTP state of any kind, so the `mxl-*` capability bits appear on a host with no grandmaster in sight. PTP is a per-flow operational requirement here, not a capability gate.
 
 ## Input variants
 
-Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. All three share the same shape: attach to a domain + flow id on the local `/dev/shm` MXL store.
+Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. All three share the `(domain_path, flow_name)` domain reference — the pair both ends must agree on for libmxl to route grains — and then diverge per essence: `mxl_video` also carries the raster, the frame rate and a mandatory encode block, `mxl_audio` adds defaulted channel and packet-time fields, and `mxl_anc` carries nothing beyond the domain reference.
 
 ```json
 {
@@ -109,31 +116,43 @@ Add an MXL input by setting `type: "mxl_video"`, `"mxl_audio"`, or `"mxl_anc"`. 
   "name": "MXL video in from sibling pod",
   "type": "mxl_video",
   "domain_path": "/dev/shm/mxl",
-  "flow_name": "studio-1-cam-a"
+  "flow_name": "studio-1-cam-a",
+  "width": 1920,
+  "height": 1080,
+  "frame_rate_num": 30000,
+  "frame_rate_den": 1001,
+  "video_encode": {
+    "codec": "h264_auto", "chroma": "yuv422p", "bit_depth": 10, "bitrate_kbps": 20000
+  }
 }
 ```
+
+Shared by all three variants:
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `type` | string | `"mxl_video"`, `"mxl_audio"`, `"mxl_anc"`. |
-| `domain_path` | string | MXL domain mount point on the local host. Default `/dev/shm/mxl`. |
-| `flow_name` | string | Human flow name. The edge hashes this with `uuid_v5(NAMESPACE_DNS, flow_name)` to compute the MXL flow id — see [Flow id interop](#flow-id-interop) below. |
+| `domain_path` | string | **Required.** Absolute path, 1–4096 chars — the MXL domain directory, conventionally `/dev/shm/<name>`. There is no default; omitting it is a config error. Keep it on tmpfs / ramfs, or libmxl's shared-memory performance model degrades sharply. |
+| `flow_name` | string | **Required.** libmxl flow name — **`[A-Za-z0-9_-]` only, 1–256 chars**, so spaces and dots are rejected at config load. The edge hashes it with `uuid_v5(NAMESPACE_DNS, flow_name)` to compute the MXL flow id — see [Flow id interop](#flow-id-interop) below. |
+| `clock_domain` | u8 | PTP clock domain `0..=127`. Inherits from the flow when omitted. |
+
+Then, per essence:
+
+| Variant | Additional fields |
+|---------|-------------------|
+| `mxl_video` | **Required:** `width`, `height`, `frame_rate_num`, `frame_rate_den`, and a `video_encode` block (see below). Optional `pid_overrides` for the synthesised TS. |
+| `mxl_audio` | `channels` (1 / 2 / 4 / 8 / 16, default 2), `packet_time_us` (125 / 250 / 333 / 500 / 1000 / 4000, default 1000 — ST 2110-30 PM-compatible), plus optional `transcode`, `audio_encode` and `pid_overrides`. |
+| `mxl_anc` | None. |
 
 `mxl_video` carries uncompressed V210 (Y'CbCr 4:2:2 10-bit progressive) at the negotiated raster + rate. `mxl_audio` carries Float32 PCM at 48 kHz (mono or interleaved channels). `mxl_anc` carries RFC 8331-shaped ancillary data (officially supported since libmxl v1.0.1).
 
 ### Encoding to TS for transport / assembly
 
-`mxl_video` and `mxl_audio` are uncompressed essences. To carry them onto a TS transport (SRT, RTP, UDP, RIST) or feed them into a [Flow Assembly](/edge/flow-assembly/) PID bus, set per-input `video_encode` or `audio_encode`:
+`mxl_video` and `mxl_audio` are uncompressed essences. To carry either onto a TS transport (SRT, RTP, UDP, RIST) or feed it into a [Flow Assembly](/edge/flow-assembly/) PID bus, it has to be encoded first.
 
-```json
-{
-  "id": "mxl-audio-in",
-  "type": "mxl_audio",
-  "domain_path": "/dev/shm/mxl",
-  "flow_name": "studio-1-mic",
-  "audio_encode": { "codec": "aac_lc", "bitrate_kbps": 192 }
-}
-```
+On **`mxl_video` that path is live, and the `video_encode` block is mandatory** — it's the one in the example above. The input unpacks each V210 grain to planar 4:2:2 10-bit, encodes it with the named backend and muxes the result onto the flow's broadcast channel, exactly like the ST 2110-20 ingress path. Naming a backend this build wasn't compiled with is refused at config load, not at the first frame.
+
+On **`mxl_audio` the encode chain is not implemented.** `audio_encode` is accepted by validation and charged to the resource budget, then ignored: the read loop drains Float32 grains and discards them. No event fires in that case — the `mxl_audio_no_encode_set` Warning is raised only when `audio_encode` is *omitted* — so a flow configured this way produces silence with nothing on the Events page to explain it.
 
 `mxl_anc` is RFC 8331 either way — it can be carried into ST 2110-40 outputs verbatim with no transformation.
 
@@ -147,7 +166,11 @@ Mirror shape — set `type: "mxl_video" | "mxl_audio" | "mxl_anc"` on the output
   "name": "MXL video out to downstream pod",
   "type": "mxl_video",
   "domain_path": "/dev/shm/mxl",
-  "flow_name": "studio-1-cam-a-branded"
+  "flow_name": "studio-1-cam-a-branded",
+  "width": 1920,
+  "height": 1080,
+  "frame_rate_num": 30000,
+  "frame_rate_den": 1001
 }
 ```
 
@@ -179,7 +202,7 @@ All three are advertised together when libmxl probes successfully. The manager U
 
 ## Limitations (v1)
 
-- **Audio bridge stubbed; video bridge complete.** The **video** bridge is fully implemented both ways: `run_mxl_video_input` drives a scaled encoder (V210 → H.264 / HEVC → TS) and `run_mxl_video_output` drives decode + scale (TS → V210 grains). Only the **audio** bridge is incomplete — its encode-on-output and decode-on-input paths return clean `mxl_audio_no_encode_set` / `mxl_audio_decode_pending` Warning events at flow start instead of silently producing wrong-output. ANC pass-through is end-to-end and stable. Track progress in the edge repo's [`docs/mxl-integration-plan.md`](https://github.com/bilbycast/bilbycast-edge/blob/main/docs/mxl-integration-plan.md).
+- **Audio bridge stubbed; video bridge complete.** The **video** bridge is fully implemented both ways: `run_mxl_video_input` drives a scaled encoder (V210 → H.264 / HEVC → TS) and `run_mxl_video_output` drives decode + scale (TS → V210 grains). Only the **audio** bridge is incomplete, and the two halves report differently. The **output** side (TS → PCM decode) is scaffolded and always raises a `mxl_audio_decode_pending` Warning at flow start. The **input** side (PCM → TS encode) is missing too, but its `mxl_audio_no_encode_set` Warning fires only when `audio_encode` is *omitted* — set it and the grains are drained silently, with no event at all. ANC pass-through is end-to-end and stable. Track progress in the edge repo's [`docs/mxl-integration-plan.md`](https://github.com/bilbycast/bilbycast-edge/blob/main/docs/mxl-integration-plan.md).
 - **V210 + Float32 PCM @ 48 kHz are the only essence formats.** Other source pixel formats are converted via libswscale at encode time; other audio sample rates need explicit transcode (the edge will refuse a silent rate change).
 - **Same-host only.** MXL's experimental Fabrics API (cross-host) is deliberately not enabled. Cross-host stays on SRT / RIST / ST 2110 / [bonding](/edge/bonding/).
 - **No sub-grain I/O / slices.** The upstream experimental ultra-low-latency mode is not enabled — we'll pick it up when it leaves experimental.
@@ -188,6 +211,6 @@ All three are advertised together when libmxl probes successfully. The manager U
 
 - [`bilbycast-edge/docs/mxl-integration-plan.md`](https://github.com/bilbycast/bilbycast-edge/blob/main/docs/mxl-integration-plan.md) — architectural plan, FFI design, and the broadcast-quality gate plan.
 - [Time (PTP)](/edge/ptp/) — pick a PTP role and confirm grandmaster lock before bringing up MXL.
-- [Master clock & A/V sync](/edge/clocking/) — why PTP is the only valid master for MXL flows.
+- [Master clock & A/V sync](/edge/clocking/) — why MXL flows resolve to a PTP master, and what an explicit wallclock override costs.
 - [SMPTE ST 2110](/edge/st2110/) — the IP-transport sibling MXL was modelled after.
 - [Codec matrix](/edge/codec-matrix/) — what video / audio encode backends activate on which hosts.

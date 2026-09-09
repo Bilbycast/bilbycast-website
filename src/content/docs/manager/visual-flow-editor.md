@@ -31,7 +31,8 @@ If someone has left a draft open on a unit you need, a Super Admin can take it o
 
 | State | Meaning |
 |---|---|
-| **Pending** | Accepted, waiting for the unit — it is offline, or has not reported in yet. |
+| **Accepted** | Recorded as the desired state. Every deployment is written here first; runtime application has not started yet. |
+| **Pending** | The unit is not connected, or will not take a whole-config push. It applies automatically when the unit reconnects. |
 | **Applying** | Dispatched to the unit. |
 | **Applied** | The unit **acknowledged** the configuration. |
 | **Degraded** | The unit accepted it, and then something the change touched raised a critical alarm. |
@@ -59,6 +60,23 @@ A master graph puts several units on one canvas and lets you wire transport betw
 - **Units from another group appear as a boundary card** showing only their connection points. Their internal configuration is never sent to your browser — not merely hidden from view.
 - **Deleting a wire leaves its endpoints in place**, marked as no longer referenced. The graph records intent; it does not own a unit's configuration. Remove the endpoint through that unit's own editor if you want it gone.
 - **Endpoints reach units through each unit's own editor**, never a second write path — so they pass the same validation, snapshot, audit and deploy checks as any other change.
+
+### Feeding more than one unit
+
+An output reaches one peer, so the first wire you draw from an output **uses** that output — it is re-pointed at the address the wire settles on, rather than duplicated beside it. A wire to a *second* unit mints an extra sending session on the same unit, named `<output>-to-<receiver>` and derived from the output you dragged, so the latency, stream id, PID remap and anything else you tuned on it carry over instead of being dropped.
+
+- **Multicast is the exception.** One group already serves every subscriber, so a second destination on the same group reuses the output rather than minting anything.
+- **A session is drawn as an extra row under its port** until it is deployed. Once the unit has it, it is an ordinary port row with a connection point of its own.
+- **A cross-unit wire speaks SRT, UDP or RIST.**
+- **A second wire off an output whose unit has never reported its configuration is refused**, with `sending_unit_unreadable` — naming a session safely means knowing what is already on the sending unit. Bring the unit online, or open its own editor once so the manager records its configuration.
+
+### Observed connections
+
+Links the units are already configured to carry are drawn too, whether or not this graph authored them: an output on one unit dialling an input on another is inferred from the two configurations and drawn as a **dashed** edge, visually distinct from the wires the graph owns. Each one carries a confidence level — **certain** (the dialling end names an address the other unit answers on), **via a tunnel** (a loopback address plus a tunnel joining the pair), or **multicast** (both ends on the same group and port) — and a sentence saying how it was concluded.
+
+They are facts about the hardware, not rows, so the graph cannot delete one. Selecting one offers **Record it on this graph**, which creates an ordinary connection at the observed address and changes nothing on either unit — both endpoints already exist, which is why the link was visible at all.
+
+Reading them needs **Operate** on each unit, not just View, since inferring a link means reading a unit's interfaces and endpoints. A member you lack Operate on simply contributes nothing, rather than the whole request being refused.
 
 ### Reachability
 

@@ -26,7 +26,18 @@ That gives three groups:
 Manager file settings can also be written in the config TOML instead of the
 environment; where both are present the environment wins, in **both**
 directions — setting a variable to `false` disables the thing, it does not
-fall through to a stored value.
+fall through to a stored value. That only holds for a spelling the manager
+recognises: `1` or `true` to enable, `0`, `false`, `no` or `off` to disable.
+Anything else — **`yes` and `on` included** — is warned about at startup and
+ignored, so the layer below answers: the config file, then — for the two ACME
+switches, the only ones that have one — the stored setting, then the built-in
+default. The true set is deliberately the narrower one: widening it
+would flip `BILBYCAST_TRUST_PROXY_HEADER=yes` from off to on at upgrade, and
+start honouring a header a client can forge. This applies to
+`BILBYCAST_ACME_ENABLED`, `BILBYCAST_ACME_STAGING` and
+`BILBYCAST_TRUST_PROXY_HEADER`; the `BILBYCAST_OIDC_*` switches are read by a
+different function that accepts `yes` as true and treats everything it does
+not recognise as false.
 
 Variables marked **deprecated** below have moved into configuration but are
 still read for one more release. All of those are on the **edge**, and on the
@@ -49,6 +60,18 @@ rather than honoured; the manager logs a warning at startup naming the
 replacement setting. A unit file that lies is worse than no unit file.
 
 ## Manager Variables
+
+Before it starts, the manager reads a `.env` file — `.env` in its working
+directory, or `../.env` **only if there is no `.env` there**. The first of the
+two that exists wins outright; the other is never merged on top of it. Lines
+are `KEY=VALUE` split on the first `=`, with both halves trimmed, and blank
+lines and `#` comments skipped. **A variable already present in the process
+environment is not overwritten**, so an exported value or a systemd
+`Environment=` line silently beats the file — the opposite of what an operator
+chasing a stale secret usually assumes. Note that the guided install in
+[Getting Started](/manager/getting-started/) does not use this path at all: it
+writes `manager.env` and sources it into the shell, which puts the values in
+the process environment directly.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -94,7 +117,7 @@ Single sign-on is a licensed feature. Setting `BILBYCAST_OIDC_ENABLED=true` **wi
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `BILBYCAST_OIDC_ENABLED` | No | Set to `"1"`/`"true"` to enable OIDC SSO login |
-| `BILBYCAST_OIDC_ISSUER_URL` | Conditional | OIDC provider issuer URL (required when OIDC enabled) |
+| `BILBYCAST_OIDC_ISSUER_URL` | Conditional | OIDC provider issuer URL (required when OIDC enabled). **Must be `https://`** — an `http://` issuer aborts startup with `must use https:// — refusing to enable SSO over an unauthenticated scheme`. Discovery is an unauthenticated GET to `<issuer>/.well-known/openid-configuration`, so an on-path attacker who could rewrite it would substitute their own authorization and token endpoints and own every future SSO login. |
 | `BILBYCAST_OIDC_CLIENT_ID` | Conditional | OAuth2 client ID (required when OIDC enabled) |
 | `BILBYCAST_OIDC_CLIENT_SECRET` | Conditional | OAuth2 client secret (required when OIDC enabled) |
 | `BILBYCAST_OIDC_REDIRECT_URL` | Conditional | Redirect/callback URL registered with the provider |
@@ -108,12 +131,13 @@ Single sign-on is a licensed feature. Setting `BILBYCAST_OIDC_ENABLED=true` **wi
 
 | Variable | Description |
 |----------|-------------|
-| `BILBYCAST_ALLOW_INSECURE` | Set to `"1"` to allow `accept_self_signed_cert` in manager connection config. Safety guard against accidental use in production. |
+| `BILBYCAST_ALLOW_INSECURE` | Set to `"1"` to allow `accept_self_signed_cert` in manager connection config. Also what lets the relay's viewer-portal binary (`bilbycast-portal`, built only with the `portal` feature — a plain `cargo build` of the relay produces none of it) start against a plaintext `http://` `manager_url`: without it the portal refuses to start, because it sends its manager token on every request to that URL as a bearer credential. Safety guard against accidental use in production. |
+| `BILBYCAST_PORTAL_TOKEN` | Relay viewer portal (`bilbycast-portal`, `portal` feature): the shared service token the portal presents to the manager, matching the manager's `dvr_portal_service_token` setting. Generate it at **DVR Sessions → Portal logins → Generate a token** (super admin only); it is shown once. The variable **wins over** `manager_token` in the portal's config file — the file is what gets copied between hosts, the variable is what the service was actually started with. With neither, the portal refuses to start rather than loading and listing nothing. |
 | `BILBYCAST_MEDIA_DIR` | Edge: override the media-player library directory. Defaults to XDG → `$HOME/.bilbycast/media/` → `./media/`. 4 GiB per file, 16 GiB total cap. |
 | `BILBYCAST_REPLAY_DIR` | Edge: override the replay-server storage root. Defaults to XDG → `$HOME/.bilbycast/replay/` → `./replay/`. |
 | `BILBYCAST_MLOCKALL` | Edge: set to `"1"` to `mlockall()` the process at startup, locking pages to prevent paging-induced jitter. Off by default; recommended for low-latency production hosts. |
 | `BILBYCAST_PROBE_SESSION_LIMITS` | Edge: **deprecated** — use `tuning.probe_session_limits` in the node's config (Manager → node → Configure → Tuning). Still read for one release, below the config field; a node that still sets it raises a `deprecated_env_var` event. Set to `"0"` to disable the startup HW-encoder/decoder session-capacity probe. Default on. |
-| `BILBYCAST_INGRESS_RESIDENCE_MS` | Edge: **deprecated** — use `tuning.ingress_residence_ms` for the node default, or the per-input `ingress_residence_ms` field on a UDP/RTP input. Still read for one release, below both; a node that still sets it raises a `deprecated_env_var` event. Ingress de-jitter hard-shed residence cap. Defaults to `max(4 × setpoint, 250)` ms so a larger buffer gets proportionally more burst headroom. |
+| `BILBYCAST_INGRESS_RESIDENCE_MS` | Edge: **deprecated** — use `tuning.ingress_residence_ms` for the node default, or the per-input `ingress_residence_ms` field on a UDP/RTP input. Still read for one release, below both; a node that still sets it raises a `deprecated_env_var` event. Ingress de-jitter hard-shed residence cap. Defaults to `max(4 × setpoint, 250)` ms so a larger buffer gets proportionally more burst headroom. The permitted range — `setpoint + 40` to 5000 ms — is on the [edge configuration page](/edge/configuration/), but the two routes to the value are policed differently: the config fields are **rejected at config load** when out of range, whereas this variable is only checked for being a number and is then **silently clamped** into range. `BILBYCAST_INGRESS_RESIDENCE_MS=8000` therefore starts cleanly at 5000 ms, and the event it raises still reads `status: "deprecated"` — meaning "honoured" — while the value is being altered. |
 | `BILBYCAST_ENABLE_TXTIME` | Edge: set to `"1"` to opt in to the `SO_TXTIME` + ETF-qdisc wire-emit releaser tier. (The former alias `BILBYCAST_ENABLE_SO_TXTIME` has been **removed** — one name for one knob.) **Off by default** — the default release path is `clock_nanosleep` on a `SCHED_FIFO` thread. Configure the ETF qdisc + PTP discipline first, else `SO_TXTIME` silently degrades. Set `BILBYCAST_ETF_SO_PRIORITY=5` alongside it — see that row below. See [Wire-Time Precision](/edge/wire-pacing/). |
 | `BILBYCAST_FORCE_NANOSLEEP` | Edge: back-compat no-op — the `clock_nanosleep` tier is already the default. Only meaningful once `BILBYCAST_ENABLE_TXTIME=1` is set, where it forces the `clock_nanosleep` fallback for diagnostics. |
 | `BILBYCAST_ETF_SO_PRIORITY` | Edge: the `SO_PRIORITY` pinned on `SO_TXTIME` outputs so they land on the traffic class that carries the ETF qdisc (a DSCP marking otherwise derives its own priority, routes the packet off that class, and `SO_TXTIME` is silently ignored). **Default 0, which is the wrong value for the qdisc the shipped `setup-etf-qdisc.sh` installs**: that priomap sends *only* socket-priority 5 to the ETF class and routes everything else — priority 0 included — to `fq_codel`, deliberately, so unstamped traffic like ARP and IGMP can't be blackholed. Set `BILBYCAST_ETF_SO_PRIORITY=5` whenever you set `BILBYCAST_ENABLE_TXTIME=1` on a host prepared by that script, or the outputs land on `fq_codel` and lose ETF launch-time pacing while still reporting the `so_txtime` tier. See [Wire-Time Precision](/edge/wire-pacing/). |
@@ -144,6 +168,7 @@ applying is worse than one that says nothing.
 | `BILBYCAST_EGRESS_BUFFER_MS` | The per-output `egress_buffer_ms` config field. |
 | `BILBYCAST_EGRESS_RESIDENCE_MS` | The per-output `egress_buffer_ms` config field, which the residence is derived from. No field carries a residence directly — the egress servo derives it from the cushion it is asked to hold. |
 | `BILBYCAST_BOND_FWMARK_BASE` | `BILBYCAST_BOND_RT_TABLE_BASE` / `BILBYCAST_BOND_RT_PRIO_BASE`. Nothing ever read the fwmark variable. |
+| `BILBYCAST_TESTBED_TRACE_EVENTS` | `RUST_LOG=info,bilbycast_edge::testbed_events=debug` — the trace has its own tracing target, so the log level selects it. Keep the leading global `info`: a bare target directive sets the global default to `off`. See the `RUST_LOG` row above. |
 | `BILBYCAST_MEDIA_PLAYER_INCREMENTAL_MP4` | Nothing — the bounded incremental MP4/MOV reader is now unconditional in release builds. This selected the whole-file demux, which holds an entire asset resident: a 4 GiB file is a 4 GiB spike, and that out-of-memory is exactly what the bounded reader was written to fix. A control whose "off" position is a known OOM does not belong on an operator's screen, so unlike its two siblings it was **not** given a config field. It survives in debug builds only, for diagnostics. |
 
 ### Media-player rollback levers (edge) — now config fields

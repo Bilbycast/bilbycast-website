@@ -50,13 +50,13 @@ QuickSync on Intel, NVENC on NVIDIA, VAAPI on AMD, RKMPP on RK3568/RK3588 — wi
 libx264 as the floor where there is no hardware encoder.
 
 Releases up to and including **v0.105.0** encoded every wall on CPU libx264
-whatever the host carried, and silently ignored `codec`. If you are on v0.105.0
-or older, budget CPU for the wall.
+whatever the host carried, and silently ignored `codec`. **Fixed in v0.106.0**
+(edge #129). On v0.105.0 or older, budget CPU for the wall.
 :::
 
 ## Authoring a wall
 
-In phase 1 the manager's **Multiviewer Walls** page (`/mv/walls`) is a **read-only** view of your walls plus **Deploy**, **Redeploy** and **Undeploy**. Layouts, tile routing and head allocation are **REST calls** — there is no layout editor in the browser yet, and no live re-routing. See [Multiviewer walls (operator UI)](/manager/multiviewer/) for those endpoints and the deploy workflow. This page is the **edge** side: what the node accepts, what it draws, and what it reports.
+The manager's **Multiviewer Walls** page (`/mv/walls`) is the authoring surface, not just a deploy button: wall create / edit / delete, head assignment, a layout stage with drag, handle-resize, snap-to-guides, z-order and templates, a tile-routing pane, salvo save and recall, and **Deploy**, **Redeploy** and **Undeploy**. The `/api/v1/mv/…` endpoints are the automation path rather than the only path. Re-pointing a tile is a database write, so it reaches the unit on the next **Redeploy** — it is not a live crosspoint. See [Multiviewer walls (operator UI)](/manager/multiviewer/) for those screens and the deploy workflow. This page is the **edge** side: what the node accepts, what it draws, and what it reports.
 
 Everything below is also reachable directly: a mosaic is just another entry in the node's `inputs` array, so it can be created through the edge REST API or written into `config.json` like any other input.
 
@@ -93,11 +93,13 @@ Then put `wall-1` in a flow's `input_ids` and give that flow whatever outputs yo
 | `width` / `height` | u32 | `1920` / `1080` | Both must be **even** (every 4:2:0 encoder needs it). **Capped at 1920×1080** in phase 1 — written here, a larger canvas is refused when the config is validated, not at flow start. The manager-authored path refuses later, at deploy; see [Limitations](#limitations). |
 | `fps` | u16 | `25` | 1–60, **whole frames per second only**. A fractional broadcast rate cannot be expressed here at all, and the manager refuses a 29.97 or 59.94 layout rather than rounding it. The **canvas's own** cadence, deliberately independent of any source's rate: a tile slower than the canvas repeats, a faster one is decimated, and neither is an error. |
 | `video_bitrate_kbps` | u32 | `8000` | 100–200000. The canvas encodes with a 2-second GOP and no B-frames — a wall is judged on latency and on being readable, not on compression. |
-| `codec` | string | `"h264_auto"` | Accepts the same names as an output's `video_encode.codec`. **Does not select the encoder in phase 1** — see the note below. Max 64 characters. |
+| `codec` | string | `"h264_auto"` | One of `h264_auto`, `hevc_auto`, `auto`, `x264`, `x265`, `h264_nvenc` / `hevc_nvenc`, `h264_qsv` / `hevc_qsv`, `h264_vaapi` / `hevc_vaapi`, `h264_rkmpp` / `hevc_rkmpp` — the same names as an output's `video_encode.codec`. Resolved against this host's probed encoders, hardware first and CPU last, and the resolved chain also settles the PMT `stream_type` — see the note below. An unrecognised name is refused when the config is validated, as is an explicit backend whose `video-encoder-*` Cargo feature this build lacks (the refusal names the feature); an `*_auto` string is accepted even on a build carrying no encoder at all, so a wall stays storable until the node is rebuilt. Max 64 characters. |
 | `tiles` | array | — | 1–64 tiles. Required. |
 
-:::note[`codec` is accepted but does not choose the encoder]
+:::note[`h264_auto` lets the host pick the backend; naming one pins it]
 The compositor resolves `codec` against this host's probed encoders and takes the best one it can open, falling back through the chain to libx264. The node's **resource-budget estimate** resolves the same way, so the manager's "Resource impact" preview counts the session the wall will actually open — naming a hardware encoder no longer mis-bills it in either direction. Leave it at `h264_auto` unless you have a reason not to: it already picks the best backend this host can open, whereas naming one pins the wall to it, and a unit that cannot open that backend refuses to start the wall rather than quietly falling back.
+
+A wall whose **already-persisted** `codec` this build cannot honour — an unrecognised name, or a backend whose `video-encoder-*` feature is absent — is coerced to `h264_auto` at node start rather than being allowed to stop the node booting. The value it replaced is named in a warning on the node's own log and nowhere else: the repair runs before the manager WebSocket exists, so it raises no event and reaches no manager screen.
 :::
 
 ### Tile fields
@@ -182,7 +184,7 @@ Phase 1 ships a stream head and nothing else. Stated plainly:
 
 ## Where to read next
 
-- [Multiviewer walls (operator UI)](/manager/multiviewer/) — head allocation, the REST authoring surface, and deploying a wall to a node.
+- [Multiviewer walls (operator UI)](/manager/multiviewer/) — head allocation, the wall authoring screens, and deploying a wall to a node.
 - [Configuration reference](/edge/configuration/) — the full input schema in context.
 - [Display Output](/edge/display/) — put the wall on a locally-attached HDMI / DisplayPort connector.
 - [Resources & Capacity](/edge/resources/) — how per-flow cost units work. The wall's canvas encode is charged like any other encoder session; its per-tile decodes are not modelled at all.

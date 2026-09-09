@@ -23,9 +23,17 @@ PTP is required (or strongly recommended) in two cases:
    to be locked to a shared PTP grandmaster, and the NMOS IS-04 Node
    API advertises a `ptp` clock entry whenever any flow declares a
    `clock_domain`.
-2. **MXL (Media eXchange Layer)** flows — PTP-mandatory at validation
-   time. The `mxl-video` / `mxl-audio` / `mxl-anc` capabilities are
-   only advertised when the helper can probe a usable PTP lock.
+2. **MXL (Media eXchange Layer)** flows — every `mxl_*` input runs on
+   the PTP master clock (`engine::master_clock` pins
+   `MasterClockKind::Ptp` on the input's `clock_domain`, default 0), so
+   an MXL flow degrades if the node never locks. The `mxl-video` /
+   `mxl-audio` / `mxl-anc` capabilities are **not** gated on PTP,
+   though — a node advertises them when its binary was built with the
+   `mxl` Cargo feature *and* the boot probe successfully `dlopen`ed
+   `libmxl.so` (from `/usr/local/lib`, `/usr/lib/x86_64-linux-gnu`,
+   `/opt/bilbycast/lib`, or `BILBYCAST_LIBMXL_SO`). If the MXL options
+   are missing from the manager UI, look for `libmxl.so` on the host
+   first; PTP lock will not bring them back.
 
 PTP is **not required** for compressed TS over UDP / RTP / SRT / RIST
 / RTMP, including 2022-7 dual-leg hitless on a single edge. The
@@ -78,6 +86,15 @@ master-clock picture see the edge repo's
 | **Slave only** | The customer requires we never be the time source | `priority1=255`, `slaveOnly=1`, `clockClass=255`. Refuses to ever become master under BMCA, even if every other clock vanishes. |
 | **Off** | Not using ST 2110 / MXL | No `ptp4l` / `phc2sys` running. ST 2110 / MXL flows refuse to start. TS-class flows run on the system wallclock. |
 
+**Slave only hands `CLOCK_REALTIME` to the PTP fabric.** Entering it
+stops any active `chrony` / `chronyd` / `systemd-timesyncd`, and leaving
+it starts them again. Under the unprivileged production unit that stop
+can fail with nothing louder than a log warning — two servos then fight
+over the system clock. The opt-outs (`BILBYCAST_PTP_KEEP_NTP=1`, and
+`BILBYCAST_PTP_SYSCLOCK=ntp` to leave NTP owning the system clock while
+`ptp4l` still slaves the NIC PHC) are covered in the edge repo's
+[`docs/ptp.md`](https://github.com/bilbycast/bilbycast-edge/blob/main/docs/ptp.md#system-clock-ownership-ptp-vs-ntpchrony).
+
 **Default on a fresh install is Off.** Operators opt in explicitly via
 the UI; PTP packets on the wire at a customer site without their
 knowledge would be surprising and noisy.
@@ -113,7 +130,12 @@ curl -X PUT https://edge:8443/api/v1/ptp \
      -d '{"mode":"slave-only","iface":"eno4","domain":127}'
 ```
 
-Both endpoints require an admin-role JWT. The PUT side validates the
+Both endpoints require a valid Bearer JWT, but neither checks the
+role. Unlike the inputs / outputs / flows / config write handlers,
+`get_ptp` and `put_ptp` don't ask for the `RequireAdmin` extractor — and
+the auth middleware only validates the token, it never branches on role
+— so any valid token, monitor included, can read *and change* the
+node's PTP settings. The PUT side validates the
 payload before persisting — `iface` must be 1..=15 ASCII bytes
 matching `[A-Za-z0-9._-]+`, `domain` must be in 0..=127, `scan_timeout`
 must be in 1..=60.
@@ -133,10 +155,17 @@ iface        = eno4
 domain       = 127
 priority1    =
 scan_timeout = 5
+offset_warn_ns =
+path_delay_warn_ns =
 ```
 
 Unknown keys are tolerated (forward-compat). Blank lines and `#`
-comments are ignored.
+comments are ignored. A blank or `0` on either threshold disables it;
+when set, crossing it raises a Warning `ptp_offset_high` /
+`ptp_path_delay_high` and falling back under 80 % of it raises an Info
+`ptp_offset_recovered` / `ptp_path_delay_recovered`. For the full
+monitoring picture see the edge repo's
+[`docs/ptp.md`](https://github.com/bilbycast/bilbycast-edge/blob/main/docs/ptp.md#monitoring-ptp-health-over-time).
 
 ## How it works under the hood
 
@@ -165,7 +194,8 @@ comments are ignored.
 ┌─────────────────────────▼────────────────────────────────────────┐
 │  bilbycast-ptp-gm.sh                                             │
 │  ─ stage_conf renders per-mode ptp4l options                     │
-│  ─ systemctl restart ptp4l@<iface>.service + phc2sys             │
+│  ─ nohup ptp4l -f <staged conf> -i <iface> (+ phc2sys),          │
+│    PIDs in /var/run/bilbycast-ptp                                │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,7 +239,7 @@ threat model + mitigations:
 | Manager → Edge | Manager process | Authenticated WS to the edge | Send the `set_ptp_mode` command |
 | Edge → Disk | `bilbycast-edge` user | File write to `/var/lib/bilbycast/ptp.conf` | Persist mode + iface + domain |
 | Helper → Script | `bilbycast-ptp-helper` (separate process, `bilbycast` user) | `CAP_NET_RAW`, `CAP_NET_ADMIN`, `CAP_SYS_TIME` ambient caps | Exec `/opt/bilbycast/bin/bilbycast-ptp-gm.sh` with ~6 argv entries |
-| Script → ptp4l/phc2sys | The script | Inherits the helper's caps | `systemctl restart ptp4l@<iface>.service` + phc2sys |
+| Script → ptp4l/phc2sys | The script | Inherits the helper's caps | Launch/kill `ptp4l` + `phc2sys` directly (`nohup`, PID files under `/var/run/bilbycast-ptp`); stop/start `chrony`, `chronyd`, `systemd-timesyncd` |
 
 ### Defended attack vectors
 
@@ -219,10 +249,11 @@ threat model + mitigations:
   enforced on both the manager (HTTP 400) and the edge
   (`error_code: invalid_value`). Unit-tested in
   `util::ptp_config::tests::validate_rejects_*`.
-- **Shell injection via `iface` to the privileged script.** The
-  helper uses `Command::args` (no shell), but the script does
-  `systemctl restart "ptp4l@$iface"`. The same iface validator
-  blocks every shell metachar.
+- **Shell metacharacters in `iface`.** No shell is ever involved: the
+  helper uses `Command::args`, and the script hands the name to `ptp4l`
+  as an `execve` argv entry (`-i "$iface"`). The validator's real job is
+  the line above — stopping a newline from forging a `mode = …` line in
+  `ptp.conf`.
 - **Path traversal via `BILBYCAST_PTP_SCRIPT` env override.** In
   production the systemd unit `bilbycast-ptp.service` runs with a
   clean environment, so the compiled-in default path is what gets
@@ -263,15 +294,24 @@ invalid_value`.
 
 ## Lock states
 
-The "Live status" card on the manager Time page (and `GET /api/v1/ptp`
-on the edge) surfaces one of four states:
+The "Live status" card on the manager Time page surfaces one of six
+states. `GET /api/v1/ptp` is **not** where it comes from — that endpoint
+returns only the configured mode / iface / domain / thresholds. On the
+edge itself the lock state rides on the health tick's node-level
+`ptp_state` block, on the `bilbycast_edge_ptp_state` /
+`bilbycast_edge_ptp_locked` gauges in `/metrics`, and per-flow on
+`GET /api/v1/stats` as `ptp_state.lock_state` (present on any flow whose
+master clock resolves to PTP — ST 2110, MXL, or an explicit
+`master_clock.kind = "ptp"`).
 
 | State | Meaning |
 |---|---|
-| `locked` | `ptp4l` reports the port is in `SLAVE` state and the offset is below threshold |
-| `locked_holdover` | Recently locked but the master has gone away; the edge still trusts the local clock for a configurable holdover window |
-| `free_run` | No master has ever been seen since startup, or holdover has expired — the local clock is running free |
-| `unavailable` | The management socket is missing or unresponsive — the edge cannot determine state |
+| `unavailable` | No PTP daemon reachable — `ptp4l`'s management socket is missing, or the poll failed outright (no answer, undecodable reply) |
+| `acquiring` | `ptp4l` is running but the port is `LISTENING` / `UNCALIBRATED` / `PRE_MASTER` (or another transient state) — no usable lock yet. A slave-only node whose grandmaster is switched off sits here |
+| `locked` | `ptp4l` reports the port is in `SLAVE` state and the absolute master offset is below tolerance. Counted healthy |
+| `holdover` | The port is still `SLAVE`, but the master offset has drifted past tolerance. Raises a Warning PTP event on entry |
+| `master` | The port is `MASTER` — BMCA picked this node as the grandmaster, so it is definitionally locked to its own reference. Counted healthy, but unusual enough in a broadcast plant that entering it raises a Warning event |
+| `unknown` | The daemon answered, but not the port-state query — so the reporter refuses to guess. Not healthy, raises a Warning, and stays distinct from `unavailable` so the UI can say "unknown ptp4l state" rather than "no daemon" |
 
 The state is sampled on a low-frequency timer (~1 s) and cached.
 Reading it from the data path is a single atomic load — there is
@@ -303,10 +343,18 @@ with `ethtool -T <iface>`.
 
 | Symptom | Likely cause |
 |---|---|
-| `lock_state: unavailable` on every flow | `ptp4l` not running. Check the Time page mode; if it shows `Off`, switch to a real mode. If it shows the right mode, check `journalctl -u bilbycast-ptp.service` for the helper's last apply log. |
-| `lock_state: free_run` | No master visible. On Auto mode this means no Announce was heard in `scan_timeout` seconds and we became the master with `clockClass=248`. Real lock requires a peer with a better clock. |
+| `lock_state: unavailable` on every flow | `ptp4l` not running. Check the Time page mode; if it shows `Off`, switch to a real mode. If it shows the right mode, run `sudo /opt/bilbycast/bin/bilbycast-ptp-gm.sh status`, read `/var/log/bilbycast-ptp/ptp4l.log`, and check `journalctl -u bilbycast-ptp.service` for the helper's last apply log. |
+| `lock_state: master` | No peer master was visible. On Auto mode this means no Announce was heard in `scan_timeout` seconds and we became the grandmaster with `clockClass=248`. It counts as healthy; slaving to someone else needs a peer with a better clock. |
+| `lock_state: acquiring` that never becomes `locked` | `ptp4l` is up and listening but hasn't calibrated. Watch it live with `sudo /opt/bilbycast/bin/bilbycast-ptp-gm.sh logs`, and check the domain matches the fabric's — `ptp4l` silently drops mismatched-domain traffic. |
 | Receivers reject ST 2110 connections | NMOS Node API isn't advertising a `ptp` clock entry — confirm at least one flow has `clock_domain` set, then check `/x-nmos/node/v1.3/self`. |
 | HTTP 400 / `invalid_value` on Apply | Most often: iface name has a typo or non-permitted character. Iface must be `[A-Za-z0-9._-]+`, 1..=15 bytes. |
+
+`ptp4l` and `phc2sys` are **not** systemd units here — the script
+`nohup`s them itself and records the PIDs under `/var/run/bilbycast-ptp`,
+so `journalctl -u ptp4l@<iface>`, `systemctl status ptp4l@<iface>` and
+`systemctl list-units 'ptp4l*'` come back empty on a perfectly healthy
+node. Use `bilbycast-ptp-gm.sh status` (which also runs live `pmc`
+queries) and `bilbycast-ptp-gm.sh logs` instead.
 
 For deeper troubleshooting (helper-side logs, `pmc` queries, the
 exec'd script's per-mode rendering) see the edge repo's
@@ -318,9 +366,14 @@ If you're upgrading from an edge build before 0.92.0 that had you
 managing `ptp4l@…` units by hand: stop those units once, then let
 the helper take over via the Time page. The helper installs as
 `bilbycast-ptp.service`; it does **not** clobber your existing
-`/etc/linuxptp/ptp4l.conf` — it writes its own
-`/tmp/bilbycast-ptp-<iface>.conf` and points `ptp4l@<iface>.service`
-at that.
+`/etc/linuxptp/ptp4l.conf`. On every start it regenerates one staged
+file at `/etc/linuxptp/bilbycast-ptp-gm.conf` (override with
+`BILBYCAST_PTP_STAGED_CONF`) and hands it to `ptp4l` as `-f`. There is
+no per-iface file and nothing is written under `/tmp`. The
+`/etc/linuxptp` location is load-bearing: the distro AppArmor profile
+for `/usr/sbin/ptp4l` only permits reads under `@{etc_ro}/linuxptp/**`.
+
+If you previously ran the stock units by hand:
 
 ```bash
 # One-time cleanup of the old manual setup

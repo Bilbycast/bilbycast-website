@@ -5,7 +5,7 @@ sidebar:
   order: 14
 ---
 
-The release binary bundles every video encoder + decoder backend the edge knows about — libx264, libx265, NVIDIA NVENC + NVDEC, Intel QSV (x86_64 only), VAAPI, and Rockchip RKMPP (`h264_rkmpp` / `hevc_rkmpp` encode + RKMPP decode, shipped in the `aarch64-linux-rockchip` artefact). At startup the hardware probe walks the active set, opens a minimal session against each, and advertises capability bits on `HealthPayload.capabilities` for the ones that actually work on this host. The manager UI keys per-output codec dropdowns off those bits.
+The release binary bundles every video encoder + decoder backend the edge knows about — libx264, libx265, NVIDIA NVENC + NVDEC, Intel QSV (x86_64 only), VAAPI, and Rockchip RKMPP (`h264_rkmpp` / `hevc_rkmpp` encode + RKMPP decode, shipped in the `aarch64-linux-rockchip` artefact). At startup the hardware probe walks the active set and opens a minimal session against each; that result reaches the manager on `resource_budget.hw_encoders` / `hw_encoder_chroma`. `HealthPayload.capabilities` is a different question — the decoder, `display` and `sdi-decklink` bits there are probe-gated, but the `video-encoder-*` bits only say what was compiled in (see [Capability strings](#capability-strings-on-healthpayloadcapabilities) below). The manager UI keys per-output codec dropdowns off both.
 
 This page covers the **static support matrix**, the **`*_auto` resolver** that does the right thing without operator hand-holding, and the **verification commands** for confirming what activated on a given host.
 
@@ -58,8 +58,10 @@ Static rejection happens at config validation **and** at encoder open, so an ope
 **Auto resolution priority** — both the display path and the transcode input-decode path share the same priority:
 
 ```
-VAAPI ≻ NVDEC ≻ QSV ≻ CPU
+VAAPI ≻ NVDEC ≻ QSV ≻ RKMPP ≻ CPU
 ```
+
+RKMPP only ever compiles into the `aarch64-linux-rockchip` artefact, where none of VAAPI / NVDEC / QSV can resolve — so on that platform it is the first choice, ahead of the CPU last resort.
 
 The display path also relies on KMS atomic-commit zero-copy via DRM PRIME (see [Display Output](/edge/display/)); the transcode path doesn't get the same fast scanout but still benefits from offloading decode to dedicated silicon.
 
@@ -79,23 +81,25 @@ The display path also relies on KMS atomic-commit zero-copy via DRM PRIME (see [
 
 ## Capability strings on `HealthPayload.capabilities`
 
-Edges advertise the following when the matching feature is compiled in **and** the runtime probe finds the underlying driver / GPU usable. Anything missing is disabled in the manager UI dropdowns with a tooltip.
+Two classes of bit sit in this table, and the difference matters. The `video-encoder-*` bits — and `mv-compositor` — say only that the backend is **compiled into this binary**: no probe is consulted, so every node running the `*-x86_64-linux-full` artefact advertises `video-encoder-nvenc`, `-qsv` and `-vaapi` whether or not it has silicon that can open one of them. The `video-decoder-*`, `display` and `sdi-decklink` bits additionally require the boot probe to find the driver / GPU / card usable. Anything missing is disabled in the manager UI dropdowns with a tooltip.
+
+The table below is the codec and media subset — an edge advertises considerably more (replay, clocking, network, bonding and tunnel surfaces among them). `bilbycast-edge --print-capabilities` lists what a given binary carries without starting it, though probe-gated bits are absent from that cold listing by design.
 
 | Capability | Source | Meaning |
 |---|---|---|
 | `video-encode` | any of x264 / x265 / nvenc / qsv / rkmpp | Edge can re-encode video at all. |
 | `video-encoder-x264` | `video-encoder-x264` | libx264 available. |
 | `video-encoder-x265` | `video-encoder-x265` | libx265 available. |
-| `video-encoder-nvenc` | `video-encoder-nvenc` + probe | h264_nvenc / hevc_nvenc available. |
-| `video-encoder-qsv` | `video-encoder-qsv` + probe | h264_qsv / hevc_qsv available. |
-| `video-encoder-vaapi` | `video-encoder-vaapi` + probe | h264_vaapi / hevc_vaapi available. |
-| `video-encoder-rkmpp` | `video-encoder-rkmpp` + probe | h264_rkmpp / hevc_rkmpp available (Rockchip RK3568 / RK3588). |
+| `video-encoder-nvenc` | `video-encoder-nvenc` — compiled in, no probe | h264_nvenc / hevc_nvenc are in the binary. Whether this host can open them is on `resource_budget.hw_encoders`, not here. |
+| `video-encoder-qsv` | `video-encoder-qsv` — compiled in, no probe | h264_qsv / hevc_qsv are in the binary; runtime answer on `resource_budget.hw_encoders`. |
+| `video-encoder-vaapi` | `video-encoder-vaapi` — compiled in, no probe | h264_vaapi / hevc_vaapi are in the binary; runtime answer on `resource_budget.hw_encoders`. |
+| `video-encoder-rkmpp` | `video-encoder-rkmpp` — compiled in, no probe | h264_rkmpp / hevc_rkmpp are in the binary (Rockchip RK3568 / RK3588); runtime answer on `resource_budget.hw_encoders`. |
 | `video-decoder-nvdec` | `video-decoder-nvdec` + probe | NVDEC available (transcode + display). |
 | `video-decoder-qsv` | `video-decoder-qsv` + probe | QSV decode available. |
 | `video-decoder-vaapi` | `video-decoder-vaapi` + probe | VAAPI decode available. |
 | `video-decoder-rkmpp` | `video-decoder-rkmpp` + probe | RKMPP decode available (Rockchip RK3568 / RK3588). |
 | `display` | `display` + ≥ 1 KMS connector enumerated | Local-display output usable. |
-| `mv-compositor` | `multiviewer` + one of `video-encoder-x264` / `-x265` / `-nvenc` / `-qsv` | Mosaic compositor (multiviewer wall) usable. Both halves are required: the flow bus carries MPEG-TS, so a canvas reaches an output only by being encoded and muxed. A build with the feature and no such encoder advertises nothing and the manager hides the wall surfaces entirely — nothing in the UI explains the absence, so check `bilbycast-edge --print-capabilities` on the node. **Only those four encoder features satisfy the gate**: a self-built binary whose only encoder is VAAPI or RKMPP does not advertise the capability today. All three published release artefacts carry `video-encoder-x264`, so any node on a published binary advertises it. The wall's canvas is encoded with the best of those the **host** can open, hardware first — so QuickSync, NVENC, VAAPI or RKMPP carries it and **libx264 is the floor**, not the default, whatever the host's GPU or VPU could do. On the Rockchip artefact that means the VPU sits idle while a wall runs; budget the wall's encode as CPU cost. Ordinary transcoding outputs are unaffected and resolve encoders normally. See [Multiviewer](/edge/multiviewer/). |
+| `mv-compositor` | `multiviewer` + one of `video-encoder-x264` / `-x265` / `-nvenc` / `-qsv` | Mosaic compositor (multiviewer wall) usable. Both halves are required: the flow bus carries MPEG-TS, so a canvas reaches an output only by being encoded and muxed. A build with the feature and no such encoder advertises nothing and the manager hides the wall surfaces entirely — nothing in the UI explains the absence, so check `bilbycast-edge --print-capabilities` on the node. **Only those four encoder features satisfy the gate**: a self-built binary whose only encoder is VAAPI or RKMPP does not advertise the capability today. All three published release artefacts carry `video-encoder-x264`, so any node on a published binary advertises it. The wall's canvas is encoded with the best of those the **host** can open, hardware first — so QuickSync, NVENC, VAAPI or RKMPP carries it and **libx264 is the floor**, not the default, whatever the host's GPU or VPU could do. Releases up to and including **v0.105.0** encoded every wall on CPU libx264 regardless of the host (edge #129) — budget CPU on those builds; from **v0.106.0** the canvas codec resolves through the probe hardware-first, so the RK3588 VPU carries the wall on the Rockchip artefact and QuickSync / NVENC / VAAPI carry it elsewhere. Ordinary transcoding outputs are unaffected and resolve encoders normally. See [Multiviewer](/edge/multiviewer/). |
 | `sdi-decklink` | `sdi-decklink` + Desktop Video reachable + ≥ 1 card present *now* | SDI capture / playout usable. Driven by the status poller, so it tracks card hot-plug in both directions rather than freezing the boot enumeration. Shipped in the two `*-linux-full` artefacts from v0.103.0; never in `*-rockchip`. See [SDI](/edge/sdi/). |
 | `fdk-aac` | `fdk-aac` | In-process AAC family. |
 | `media-codecs` | `media-codecs` (default on) | libavcodec video decode + Opus / MP2 / AC-3. |
@@ -103,7 +107,7 @@ Edges advertise the following when the matching feature is compiled in **and** t
 | `tls` | `tls` (default on) | HTTPS + RTMPS. |
 | `replay` | `replay` (default on) | Recording + clip playback. |
 
-The `resource_budget.hw_encoder_chroma` block on the same payload carries the per-(codec, chroma, bit-depth) matrix with one boolean per cell — that's the source of truth the manager UI reads when graying out 4:2:2 chroma against NVENC.
+The `resource_budget.hw_encoders` and `resource_budget.hw_encoder_chroma` blocks on the same payload carry the per-backend runtime answer and the per-(codec, chroma, bit-depth) matrix, one boolean per cell — that pair, not the capability strings above, is the source of truth the manager UI reads when it grays out an encoder this host cannot open, or 4:2:2 chroma against NVENC.
 
 ## What `*_auto` activates on each host class
 
@@ -131,7 +135,7 @@ Static support is one thing; what your host actually opens at runtime is another
 
    On Tiger Lake+ Intel iHD: `hevc_vaapi_yuv422_10bit = true`.
    On AMD radeonsi: `hevc_vaapi_yuv422_10bit = false`.
-   On any host with NVENC: every `hevc_nvenc_yuv422_*` cell is `false`.
+   On any host with NVENC: no `hevc_nvenc_yuv422_*` key is present at all — NVENC has no 4:2:2 path on any GPU generation, so the matrix carries no such cell rather than a `false` one. The only NVENC cell in the block is `hevc_nvenc_yuv420_10bit`.
 
 2. **Confirm Auto resolution lands on the expected backend.** Create a flow with `video_encode.codec = "h264_auto"`, chroma `yuv420p`, 8-bit. Watch the edge logs for:
 
@@ -162,19 +166,21 @@ units = base × (width × height × fps) / (1920 × 1080 × 30)
         × 2.0    if chroma == yuv444p
 ```
 
+The result is rounded, then clamped to `[base, 100 000]` — so any HW encode costs at least 100 units and any SW encode at least 500, however small the raster.
+
 Examples:
 
 | Profile | Approximate units |
 |---|---|
-| 1080p25 H.264 4:2:0 8-bit on NVENC | ~83 |
+| 1080p25 H.264 4:2:0 8-bit on NVENC | 100 (83 computed, floored at the HW base) |
 | 1080p50 H.264 4:2:0 8-bit on NVENC (3G-SDI tier-1) | 167 |
 | 1080p59.94 H.264 4:2:0 8-bit on NVENC | 200 |
-| 1080p50 HEVC 4:2:2 10-bit on NVENC (broadcast contribution) | 313 |
+| 1080p50 HEVC 4:2:2 10-bit on NVENC (broadcast contribution) | 333 |
 | 4K30 H.264 4:2:0 8-bit on NVENC | 400 |
 | 1080p50 H.264 4:2:0 8-bit on libx264 | 833 |
 | 4K50 HEVC 4:2:2 10-bit on libx265 (broadcast contribution) | ~6 650 |
 | 4K59.94 HEVC 4:2:2 10-bit on libx265 (broadcast contribution) | ~7 980 |
-| 4K59.94 HEVC 4:2:0 8-bit on libx265 | ~4 800 |
+| 4K59.94 HEVC 4:2:0 8-bit on libx265 | ~4 000 |
 
 The per-host budget is `1000 + 200 × physical_cores`, so a 4-core edge gets 1 800 units, a 32-core EPYC gets 7 400. See [Resources & Capacity](/edge/resources/) for the per-family HW session caps and how oversubscription is surfaced.
 

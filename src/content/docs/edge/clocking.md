@@ -42,38 +42,46 @@ Operators can pin a specific master rather than take the auto cascade, via the p
 | `"auto"` / `null` *(default)* | Auto-pick per the table above (the cascade for single-source contribution + single-input assembly; Wallclock or PTP for the rest). `null` and the explicit string `"auto"` are equivalent. |
 | `"contribution"` *(preferred)* | Force the source-PCR PLL — surfaces intent on telemetry as a "contribution" master kind. |
 | `"source_pcr_pll"` *(legacy alias)* | Retained for back-compat. Identical behaviour to `"contribution"`. |
+| `"sender_timestamp"` | Recover rate from the **SRT sender's per-packet `srctime`** rather than from PCR sampled out of the TS bytes — for internet contribution where SRT's latency buffer makes PCR-from-bytes look jittery to the PLL while the sender's own clock is clean. **A label rather than a switch today**: it resolves to the same PLL runtime as `"contribution"`, and the rate reference is picked per packet by the ingress sampler on *any* PLL flow — `srctime` when the packet still carries one, PCR-from-bytes otherwise. Only SRT ever populates it, and the input's transcode / post-process stages (including the default muxer-mode rewriter) strip it, so in practice the PLL sees `srctime` only on an input running neither — `passthrough_clock: true` with no filters. Telemetry reports `kind: "source_pcr_pll"`; the pinned kind itself is not carried on the wire. |
+| `"audio_master"` | Reserved for the local-display ALSA master; not implemented. Runs on a Wallclock-backed master with the kind tag preserved so the manager still shows the intent. |
 | `"passthrough"` | Wallclock-backed master with **no PLL and no lock/fallback alarm** — the plain always-locked timeline intended for most contribution-to-distribution flows where the operator hasn't pinned `source_pcr_pll`. |
 | `"ptp"` | Force the PTP master regardless of input type. Refuses to start if `ptp4l` isn't reporting `SLAVE`. |
 | `"wallclock"` | Force Wallclock regardless of input type. (Refused on ST 2110 + MXL flows — they need real time discipline.) |
+
+### PLL lock thresholds
+
+Two optional fields sit alongside `kind` in the same per-flow `master_clock` block and tune the PLL rung, whether it was reached by the auto cascade or pinned explicitly:
+
+| Field | Default | Effect |
+|---|---|---|
+| `pll_lock_timeout_s` | 30 s | How long the PLL gets to lock before the master drops to the wallclock rung and raises a Warning `master_clock_pll_fallback` event. `0` opts out of the fallback entirely — the flow then stays unlocked indefinitely on an unlockable source. Otherwise validated 5–300. |
+| `pll_lock_jitter_us` | 100 µs | The p99 residual-jitter threshold at which the PLL declares lock, calibrated for hardware-paced contribution encoders. Prosumer encoders and internet contribution paths routinely sit in the 500 µs – 5 ms band on a perfectly healthy stream and so never cross the broadcast threshold; raise this to 500–2000 to let the PLL lock on those, at the cost of a looser recovered clock. Silently clamped to 50–5000 rather than rejected, and the unlock threshold tracks at 5× the lock value to keep the hysteresis. |
 
 ## Encoder-style PES PTS regeneration
 
 Every TS-carrying ingress regenerates PES PTS/DTS at the byte level **by default**. The per-input `passthrough_clock: bool` config field (default `false` — i.e. regeneration on) lets an operator opt **out**: set `passthrough_clock: true` to emit the source PCR/PTS bytes unchanged. With regeneration active, the byte-level rewriter rewrites each PES header's PTS (and DTS when present) so emitted timestamps come from the per-flow master clock instead of the source TS bytes.
 
-The model is per-PID **anchor + source-delta**:
+**MPTS sources are exempt, permanently.** The anchor model is SPTS-only, so the first PAT the rewriter parses that lists more than one program latches that input into verbatim passthrough for the life of the input — and the latch never clears, even if a later PAT drops back to a single program. On a multi-program source none of what follows applies: no PCR rewrite, no PES PTS/DTS regeneration, no discontinuity bridge, no PSI_RR injection. The flow's A/V skew telemetry reports the rewriter inactive too, so the lipsync trim reads as `0` there. Down-select to a single program at ingress with the per-input `program_number` filter if you need muxer-mode regeneration on one program of an MPTS — the filter emits a synthetic single-program PAT and runs ahead of the rewriter, so the latch never arms.
+
+The model is a single per-input **anchor + source-delta**, shared by PCR and every PES PID:
 
 ```text
-On first PES of PID (or on a > 500 ms source-PTS discontinuity):
-    anchor_out_90k = master.now_27mhz()/300 + PCR_PREROLL_90K  (= 7 200, 80 ms)
-                     + lipsync_offset_90k (audio PIDs only)
-    anchor_src_90k = source PES PTS
+On the first PCR of the input (one anchor per input; PES never sets or moves it):
+    anchor.src_27mhz = source PCR                                (27 MHz)
+    anchor.out_27mhz = master.now_27mhz() - PCR_PREROLL_27MHZ    (2 160 000 ticks, 80 ms)
 
-On every subsequent PES:
-    delta_src = source_pts - anchor_src_90k        (wrapping, 33-bit)
-    out_pts   = anchor_out_90k + delta_src
-    out_dts   = out_pts - (source_pts - source_dts)  (when DTS present)
+On every PES:
+    out_27mhz = anchor.out_27mhz + (source_pts * 300 - anchor.src_27mhz)  (wrapping)
+    out_pts   = (out_27mhz / 300) & 0x1_FFFF_FFFF
+                + lipsync_offset_90k (audio PIDs only)
+    out_dts   = the same formula applied to source_dts                    (when DTS present)
 ```
 
-This preserves the source's PES inter-arrival timing exactly (no per-PES master_now jitter injection) while making absolute PTS values master-clock-derived. DTS preserves the source PTS-DTS delta so H.264 / HEVC B-frame reorder still decodes correctly.
+This preserves the source's PES inter-arrival timing exactly (no per-PES master_now jitter injection) while making absolute PTS values master-clock-derived. Because PCR and every PES PID share one anchor, the source's own PCR→PTS lead is carried over rather than re-derived, and the PTS-DTS delta falls out for free, so H.264 / HEVC B-frame reorder still decodes correctly. Re-anchoring happens only on the PCR path — a backward jump, or a forward jump the wall clock did not witness; a PES PTS discontinuity never moves the anchor.
 
-A **10 s safety check** on the anchor candidate falls back to the raw source PTS when master and source are wildly uncorrelated (Wallclock master + small-offset encoder PTS — the common case today). The rewriter switches to master-clock-derived PTS only when master and source agree to within 10 s — i.e. PTP master with PTP-disciplined source, or a locked `SourcePcrPll` master.
+**When does it actually rewrite?** Unconditionally. The rewriter passes PES timestamps through verbatim only until the first PCR of the input establishes the anchor; from that packet on, every PES PTS and DTS is re-stamped as anchor + source-delta, whichever master kind is active. There is no correlation test between master and source, no safety threshold that falls back to the raw source PTS, and no master kind that switches regeneration off. The only two opt-outs are `passthrough_clock: true` on the input and the MPTS latch above. (On a PID-bus assembled flow the per-input rewriters stand down and the assembler runs one rewriter, on one anchor, over the assembled output instead.)
 
-**When does it actually rewrite?** Only when the 10 s safety lets it. On a flow with `Wallclock` master and a typical encoder-relative source PTS, the safety triggers and the anchor falls back to source PTS — effectively a no-op. To unlock master-clock-derived PTS output the flow needs:
-
-- `master_clock.kind = "ptp"` with PTP-disciplined sources, **or**
-- `master_clock.kind = "contribution"` (or `"source_pcr_pll"`) **and** the PLL has locked.
-
-The transcoded audio path uses the same model in `engine::ts_audio_replace::TsAudioReplacer::set_av_sync_pacer` — same `anchor_target` helper, same 10 s safety, same opt-in surface.
+The transcoded audio path does **not** anchor. `engine::ts_audio_replace::TsAudioReplacer` emits PES with source-relative PTS — its `anchor_target` helper ignores the pacer it is handed and returns the source PTS unchanged — because anchoring there would double-anchor the audio against the `ts_pts_rewriter` running on the same bytes downstream, which breaks A/V sync outright. One anchor per pipeline: the rewriter owns it for PCR, video PTS, audio PTS and SCTE-35 `pts_adjustment` alike.
 
 ### When to leave `passthrough_clock` off (regeneration on)
 
@@ -86,7 +94,7 @@ The transcoded audio path uses the same model in `engine::ts_audio_replace::TsAu
 
 ## PCR pre-roll
 
-Every master-clocked PCR is emitted as `master_now − PCR_PREROLL_27MHZ` with the pre-roll at **80 ms** (2 160 000 ticks). This matches the ISO/IEC 13818-1 Annex L T-STD model — receivers need PCR to lead PTS by at least the transport-buffer + CPB pre-roll. 80 ms also limits the apparent A/V offset on receivers that don't apply T-STD scheduling to audio.
+The master clock places the **first** output PCR of an input at `master_now − PCR_PREROLL_27MHZ`, with the pre-roll at **80 ms** (2 160 000 ticks); every later PCR advances on the source delta from that anchor (`anchor_out + (src_pcr − anchor_src)`), with the master re-read only to size a discontinuity bridge. The pre-roll matches the ISO/IEC 13818-1 Annex L T-STD model — receivers need PCR to lead PTS by at least the transport-buffer + CPB pre-roll. 80 ms also limits the apparent A/V offset on receivers that don't apply T-STD scheduling to audio.
 
 The pre-roll is fixed today; future work may expose it per-flow for low-latency contribution where 40 ms would be preferable.
 
@@ -102,8 +110,7 @@ The master-clock handle exposes a per-flow lipsync offset bounded **±18 000** i
 
 The trim applies to:
 
-- The PES PTS rewriter (`engine::ts_pts_rewriter`) on audio PIDs.
-- The transcoded audio replacer (`TsAudioReplacer::set_av_sync_pacer`) on its emitted PES PTS.
+- The PES PTS rewriter (`engine::ts_pts_rewriter`) on audio PIDs — the only place it is applied. The transcoded audio replacer does not apply it: it emits source-relative PTS and leaves every anchor and trim to the rewriter downstream.
 
 It does **not** yet apply to the transcoded video replacer's output PTS — that wire-up is planned. PCR generation is unaffected (the trim moves only the audio PTS values relative to PCR).
 
@@ -119,13 +126,16 @@ Every running flow surfaces a `master_clock` block on `FlowStats`:
     "locked": true,
     "rate_offset_ppm": -2.34,
     "jitter_us": 18,
-    "lipsync_offset_90k": 0
+    "lipsync_offset_90k": 0,
+    "active_input_id": "in-1"
   }
 }
 ```
 
 - `kind` is the **active rung** — the master actually running right now.
-- `configured_kind` is the **operator's request** — what `master_clock.kind` was set to (`"auto"` when unset). The auto cascade carries both so the manager can render a compound label like `Auto → Source PCR PLL` / `Auto → PTP` / `Auto → Wallclock`; when a specific kind is pinned, `kind` and `configured_kind` agree.
+- `configured_kind` is the **operator's request** — what `master_clock.kind` was set to (`"auto"` when unset). The auto cascade carries both so the manager can render a compound label like `Auto → Source PCR PLL` / `Auto → PTP` / `Auto → Wallclock`; when a specific kind is pinned the field is omitted altogether, and reappears only if that PLL falls back — `kind` flips to `wallclock` while `configured_kind` reports `source_pcr_pll`.
+- `active_input_id` names the input the clock is attributed to — for a PLL rung, the input whose PCR the loop is tracking, or the one it failed on. Assembled flows pin it to the designated `assembly.pcr_source` input for the flow's lifetime so a switcher Take doesn't relabel the clock source; every other flow has its active input restamped on each 1 Hz tick. Absent when the flow has no active input.
+- `fallback_active` and `fallback_reason` appear once the fallback watcher has given up on a **pinned** PLL and dropped the master to the wallclock rung — `fallback_reason` is one of `no_pcr_observed`, `insufficient_samples` or `jitter_too_high`. Both are omitted from the wire otherwise: the auto cascade treats its wallclock rung as an expected floor and leaves them unset (`kind` / `configured_kind` tell that story instead), while an assembled flow raises them whenever the designated `assembly.pcr_source` PLL is unlocked, on any rung. The Warning event `master_clock_pll_fallback` fires on both paths — see [Events & Alarms](/edge/events-and-alarms/).
 
 The manager renders the kind label (including the compound `configured → active` form), lock chip, rate offset, p99 jitter, and the trim knob on the per-flow detail page.
 
@@ -143,7 +153,7 @@ Four things about it matter on this page:
 
 - **The shared anchor is minted by the manager, not by a node.** Any mapping a node infers from its own observations is stamped on arrival, so it already carries the very latency alignment must cancel. The manager mints from the *slowest* member's arrival plus a margin, which makes each member's required dwell its lead over the slowest rather than its absolute end-to-end latency.
 - **Alignment and PCR/PTS regeneration are mutually exclusive.** The PCR reaching the emitter has to be a function of the content, not of the node, so every input must be `bonded` or set `passthrough_clock: true` — which also turns off the PES PTS regeneration and the discontinuity bridge described above.
-- **Scope is narrow and enforced.** Single-input, single-program, non-transcoded, non-assembled UDP/RTP forwarding, with explicit `egress_pacing: "pcr"` and no `cbr_pad_to_kbps`. `egress_offset_ms` is bounded 150–800 ms and must be identical on every member.
+- **Scope is narrow and enforced.** Single-input, single-program, non-transcoded, non-assembled UDP/RTP forwarding, with an unambiguous PCR PID — the output's `program_number` or an explicit `epoch_lock.pcr_pid`, one of the two required on every member — plus explicit `egress_pacing: "pcr"` and no `cbr_pad_to_kbps`. `egress_offset_ms` is bounded 150–800 ms and must be identical on every member.
 - **Every member's host clock still has to agree.** The anchor names an absolute wall instant, and each member releases when *its own* host clock reaches that instant plus the dwell. So a clock offset between two members misaligns the group by exactly that offset — and nothing reports it, because each node is doing precisely what it was told and both look healthy. Discipline every member to the same NTP or PTP source, and treat host clock discipline as part of the feature, not a background detail.
 
 Edges advertise `"epoch_lock"` on `HealthPayload.capabilities`; an edge without it ignores the config block silently, which looks exactly like success, so every manager surface gates on the bit. Full operator walkthrough: [Aligned Output](/manager/aligned-output/). Field reference: [Configuration](/edge/configuration/).

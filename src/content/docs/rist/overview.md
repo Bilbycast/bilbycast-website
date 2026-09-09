@@ -16,7 +16,7 @@ Zero C/C++ dependencies. Wire-verified against [librist](https://code.videolan.o
 - **NACK-based ARQ** — receiver detects gaps and requests retransmission
 - **RTT-aware timing** — NACK scheduling adapts to measured round-trip time
 - **Dual-port RTP/RTCP** — standard even/odd port pair (RFC 3550)
-- **SMPTE 2022-7 bonding** — hitless merge across redundant network paths
+- **SMPTE 2022-7 merger primitive** — `rist_protocol::protocol::bonding::BondingMerger` deduplicates redundant paths by sequence number, but it is *not* wired into `RistSocket`: `RistSocketConfig` carries no bonding field and nothing in `rist-transport` constructs `BondingConfig` / `ReceiverBonding`. `RistDelivered.rtp_seq` exposes the wire RTP sequence so a consumer can run the hitless merge itself
 - **Low, bounded latency** — configurable receiver buffer (typically 100–2000 ms)
 - **Async I/O** — Built on Tokio, lock-free data path
 

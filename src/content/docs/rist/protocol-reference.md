@@ -61,6 +61,12 @@ Two formats, both as Transport-layer Feedback (RTPFB):
 
 bilbycast-rist also **parses** librist's default APP-based range NACK (PT=204, "RIST" subtype 0), verified against librist 0.2.11.
 
+#### Implementation bounds
+
+- **Parser cap** — the APP range-NACK parser stops at `MAX_RANGE_NACK_ENTRIES` = 512 entries, so a hostile or oversized buffer can't make the entry `Vec` scale with its input. The ceiling sits above both librist's own 200-entry-per-packet writer limit and the 509 entries that physically fit a 2048-byte RTCP datagram, so no NACK that can reach the parser intact is ever truncated.
+- **Work budget is per received datagram, not per sub-packet** — a per-NACK cap is no bound at all, because a compound packs as many 16-byte minimal NACKs as fit and each arrives with fresh counters. One `recv_from` therefore buys at most one retransmit ring's worth of retransmits — `retransmit_buffer_capacity` rounded up to a power of two, then clamped to 512–8192 — and four times that many sequence-number lookups, shared by every NACK in the compound. Below that 8192 ceiling honest ARQ can't be under-served: serving more retransmits than the ring holds is provably duplicate work, since by then every packet still buffered has already gone back out. A ring configured larger than 8192 packets is the one case where the budget itself binds.
+- **Media SSRC 0 is accepted on purpose** — older bilbycast receivers built NACKs as `sender_ssrc.unwrap_or(0)` before they had seen an SR, so a NACK naming 0 is still honoured. That means a blind off-path attacker naming 0 can force retransmits out of a sender that has never received RTCP. The cost is bounded by the per-datagram budget above and the egress is aimed only at the operator's own configured `remote_rtp_addr` — self-inflicted cost, not a reflector — but Simple Profile is unauthenticated and offers no way to close it. Current receivers name the SSRC seen on inbound RTP headers, so the accept can be dropped once no supported peer emits 0.
+
 ### RTCP APP — RTT Echo (PT=204)
 
 Optional mechanism for measuring round-trip time (TR-06-1 Section 5.2.6).
@@ -112,6 +118,8 @@ Deduplicates packets arriving on multiple network paths:
 - Maintains a window of recently seen sequence numbers
 - First arrival wins; duplicates are dropped
 - Handles wraparound at the 16-bit sequence boundary
+
+It is a `rist-protocol` primitive and is **not reachable from `RistSocket`** — `RistSocketConfig` has no bonding field and nothing in `rist-transport` constructs `BondingConfig` / `ReceiverBonding`. A transport consumer that wants a hitless merge runs one itself over `RistDelivered.rtp_seq`, the wire RTP sequence number shared across 2022-7 redundant legs.
 
 ## Timestamp Design
 

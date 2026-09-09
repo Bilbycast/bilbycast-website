@@ -62,17 +62,32 @@ Lightweight health check suitable for load balancers, orchestrators, and monitor
   "version": "0.1.0",
   "uptime_secs": 3661,
   "active_flows": 2,
-  "total_flows": 3
+  "total_flows": 3,
+  "manager": {
+    "enabled": true,
+    "connected": true,
+    "reconnecting": false
+  }
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | string | Always `"ok"` when the server is responsive |
+| `status` | string | Always `"ok"` when the server is responsive. It reflects the edge's **own** health — it is deliberately not flipped to an error state when the manager link is down |
 | `version` | string | Application version from Cargo.toml |
 | `uptime_secs` | integer | Seconds since the application started |
 | `active_flows` | integer | Number of flows currently running |
 | `total_flows` | integer | Total flows defined in configuration |
+| `manager` | object | Device-local view of the manager link, so an operator standing at the box can see a lost link without reading logs |
+
+The `manager` sub-object:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | boolean | Whether a manager client is configured on this node at all. `false` means "not managed", not "disconnected" |
+| `connected` | boolean | Whether an authenticated WebSocket session to the manager is currently live |
+| `reconnecting` | boolean | `true` when a manager is enabled but the link is down — the client loop is always retrying in that state |
+| `disconnected_secs` | integer | Seconds since the link went down. **Omitted** while connected, and also before the first successful connection (boot — render that as "connecting") |
 
 **curl example:**
 
@@ -239,7 +254,7 @@ The returned JWT contains these claims:
 
 Inputs are top-level, first-class entities, independent of any flow. A flow references inputs by ID via its `input_ids` array; the same input can be referenced by more than one flow. Create/read/update/delete them here, then wire them into flows.
 
-The request/response body is an `InputDefinition` whose `type` field selects the variant. `type` is a free-form string: `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](configuration-guide.md) for per-type fields.
+The request/response body is an `InputDefinition` whose `type` field selects the variant. `type` is a free-form string: `rtp`, `udp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mosaic` under the `multiviewer` feature, which every published release artefact carries — see [Multiviewer](/edge/multiviewer/) — `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](/edge/configuration/) for per-type fields.
 
 ### GET /api/v1/inputs
 
@@ -341,7 +356,7 @@ List all configured flows. Returns a summary for each flow without full input/ou
 | `flows[].id` | string | Unique flow identifier |
 | `flows[].name` | string | Human-readable display name |
 | `flows[].enabled` | boolean | Whether the flow is enabled in config |
-| `flows[].input_type` | string | Type of the flow's first referenced input. A free-form string — one of `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). |
+| `flows[].input_type` | string | Type of the flow's first referenced input. A free-form string — one of `rtp`, `udp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mosaic` under the `multiviewer` feature, `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). |
 | `flows[].output_count` | integer | Number of outputs referenced by the flow |
 
 **curl example:**
@@ -669,7 +684,7 @@ Hot-swap the PID-bus assembly plan of an assembled (PID-bus / MPTS) flow in plac
 
 **Auth:** Requires `admin` role.
 
-**Request body:** A flow-assembly plan object (see the [Configuration Guide](configuration-guide.md)).
+**Request body:** A flow-assembly plan object (see the [Configuration Guide](/edge/configuration/)).
 
 **Error responses:**
 
@@ -683,7 +698,9 @@ Hot-swap the PID-bus assembly plan of an assembled (PID-bus / MPTS) flow in plac
 
 ## Outputs
 
-Like inputs, outputs are top-level, first-class entities; a flow references them by ID via its `output_ids` array. The body is an `OutputConfig` whose `type` field selects the variant — a free-form string: `udp`, `rtp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whip`, `hls`, `cmaf`, `bonded`, `display`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](configuration-guide.md) for per-type fields.
+Like inputs, outputs are top-level, first-class entities; a flow references them by ID via its `output_ids` array. The body is an `OutputConfig` whose `type` field selects the variant — a free-form string: `udp`, `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `webrtc`, `hls`, `cmaf`, `bonded`, `display`, `st2110_20`, `st2110_23`, `st2110_30`, `st2110_31`, `st2110_40` (plus `mxl_video` / `mxl_audio` / `mxl_anc` under the `mxl` feature, and `sdi` under `sdi-decklink`). See the [Configuration Guide](/edge/configuration/) for per-type fields.
+
+Two types an operator often looks for are not on that list. **WHIP is not an output type** — to push to a WHIP endpoint use `type: "webrtc"` with `mode: "whip_client"` and a `whip_url` (`mode: "whep_server"` is the other half of that variant). **RTSP is ingress-only** and has no output form at all. Both are rejected at deserialization, since `type` selects an enum variant.
 
 ### GET /api/v1/outputs
 
@@ -767,7 +784,7 @@ Add a new output to an existing flow. The output is validated, appended to the f
 
 **Request body:**
 
-An `OutputConfig` object. The `type` field determines the output kind. See the [Configuration Guide](configuration-guide.md) for all output types and their fields.
+An `OutputConfig` object. The `type` field determines the output kind. See the [Configuration Guide](/edge/configuration/) for all output types and their fields.
 
 ```json
 {
@@ -863,9 +880,32 @@ Retrieve the current PTP configuration and status.
 
 ### PUT /api/v1/ptp
 
-Update the PTP configuration (e.g. clock domain, interface).
+Update the PTP configuration (e.g. clock domain, interface). The settings are persisted to the file `bilbycast-ptp-helper` polls at 1 Hz, so a new mode is picked up within about a second.
 
-**Auth:** Requires `admin` role.
+**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can write PTP settings.
+
+**Request body:**
+
+```json
+{
+  "mode": "slave-only",
+  "iface": "eno1",
+  "domain": 127,
+  "offset_warn_ns": 100000
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `mode` | string | Yes | `auto`, `grandmaster`, `slave-only` or `off`. Case-insensitive; `gm` / `master` alias grandmaster, `slave` aliases slave-only, and `disabled` / `none` alias off. Any other value returns 400 |
+| `iface` | string | No | Interface `ptp4l` binds. 1–15 bytes, alphanumeric plus `._-` (Linux `IFNAMSIZ`); empty means unset |
+| `domain` | integer | No | IEEE 1588 domain, `0`–`127` |
+| `priority1` | integer | No | Grandmaster `priority1`. Ignored in `slave-only`, which is pinned to `255` before the settings are persisted |
+| `scan_timeout` | integer | No | Seconds the `auto` mode scans for an existing grandmaster, `1`–`60` |
+| `offset_warn_ns` | integer | No | Master-offset warning threshold in ns, `0`–`1000000000`. `0` is treated as disabled |
+| `path_delay_warn_ns` | integer | No | Mean-path-delay warning threshold in ns, same range and `0` handling |
+
+The response echoes the normalised settings plus `config_path`, the file the helper reads.
 
 ---
 
@@ -1011,12 +1051,27 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `bandwidth_exceeded` | boolean | `true` if the flow's input bitrate currently exceeds the configured `bandwidth_limit`. Omitted when `false`. |
 | `bandwidth_blocked` | boolean | `true` if the flow is currently gated (packets dropped) due to bandwidth limit enforcement. Omitted when `false`. |
 | `bandwidth_limit_mbps` | float/null | Configured bandwidth limit in Mbps (for display). Absent if no limit configured. |
+| `pcr_trust_flow` | object/absent | Flow-wide PCR-accuracy rollup — percentiles over the union of every output's PCR trust reservoir, so a multi-output flow still has one summary number. This is what broadcast quality gate 4 reads. Absent until an output has collected enough samples |
+| `master_clock` | object/absent | Master-clock telemetry: which clock the flow is paced against, whether it is locked, and recovered jitter / rate offset for PLL masters. Every running flow has one — see [Clocking](/edge/clocking/) |
+| `av_skew` | object/absent | Edge-added A/V skew — the lip-sync error this edge's PTS-touching stages introduce, measured on the active input's path |
+| `av_interleave_flow` | object/absent | Flow-wide A/V **mux-interleave** rollup (worst-case p95 across outputs). This is interleave, not lip-sync — `av_skew` is the lip-sync number |
+| `content_analysis` | object/absent | In-depth content-analysis snapshot; present when the flow enables `content_analysis` at the `lite`, `audio_full` or `video_full` tier. Each sub-field is independently optional, so a Lite-only selection returns a minimal payload |
+| `recording` | object/absent | Replay-server recording counters (`armed`, `current_pts_90khz`, `segments_written`, `bytes_written`, `packets_dropped`, `segments_pruned`, `index_entries`). Present only with a `recording` block configured and the `replay` feature compiled in — see [Replay](/edge/replay/) |
+| `health_reasons` | array | Why `health` is what it is: one entry per triggered condition, most-severe first, each with a stable `code`, its own `severity` and an operator-facing `detail`. `health` equals the maximum severity across these. Omitted when empty (a healthy flow) |
+| `assembly_health` | object/absent | Per-slot liveness rollup for assembled (PID-bus) flows: total slot count plus the subset currently stalled. Absent on passthrough flows — see [Flow Assembly](/edge/flow-assembly/) |
+| `per_es` | array/absent | Per-elementary-stream counters off the PID bus, one entry per `(input_id, source_pid)`; entries also carry `out_pid` while an assembler runs. Populated only for flows with an active assembly — passthrough flows use `media_analysis.program_bitrates` instead |
+| `inputs_live` | array/absent | Per-input liveness snapshot, one entry per configured input including passive / non-switched ones, so a UI can render "NO SIGNAL" per input rather than per flow |
+| `active_input_id` | string/absent | Which input is currently publishing to the broadcast channel. Absent when the flow has no inputs or is idle |
+| `ptp_state` | object/absent | PTP clock state. Populated by ST 2110 flows whose `clock_domain` is set; absent otherwise |
+| `network_legs` | object/absent | Per-leg counters for SMPTE 2022-7 Red/Blue dual-network operation. Present only when the flow's input sets `redundancy` |
+| `essence_flows` | array/absent | Per-essence breakdown when the flow is part of a multi-essence ST 2110 flow group |
+| `thumbnail` | object/absent | Thumbnail-generation statistics |
 
 **Input stats fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `input_type` | string | Input variant — a free-form string such as `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features) |
+| `input_type` | string | Input variant — a free-form string such as `rtp`, `udp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `bonded`, `media_player`, `test_pattern`, `replay`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mosaic` / `mxl_*` / `sdi` under their features) |
 | `state` | string | Connection state (e.g., `"receiving"`, `"connecting"`) |
 | `packets_received` | integer | Total RTP packets received |
 | `bytes_received` | integer | Total bytes received |
@@ -1034,7 +1089,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 |-------|------|-------------|
 | `output_id` | string | Output identifier |
 | `output_name` | string | Display name |
-| `output_type` | string | Output variant — a free-form string such as `udp`, `rtp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whip`, `hls`, `cmaf`, `bonded`, `display`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features) |
+| `output_type` | string | Output variant — a free-form string such as `udp`, `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `webrtc`, `hls`, `cmaf`, `bonded`, `display`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features). A WHIP push reports as `webrtc`; there is no `rtsp` or `whip` output |
 | `state` | string | Connection state |
 | `packets_sent` | integer | Total packets sent |
 | `bytes_sent` | integer | Total bytes sent |
@@ -1140,7 +1195,7 @@ Replace the entire application configuration atomically. Stops all running flows
 
 **Request body:**
 
-A complete `AppConfig` JSON object (see [Configuration Guide](configuration-guide.md)). Flow parameters (SRT passphrases, RTSP credentials, RTMP keys, etc.) are stored in `config.json`. Infrastructure secrets (auth config, TLS) are stored in `secrets.json`.
+A complete `AppConfig` JSON object (see [Configuration Guide](/edge/configuration/)). Flow parameters (SRT passphrases, RTSP credentials, RTMP keys, etc.) are stored in `config.json`. Infrastructure secrets (auth config, TLS) are stored in `secrets.json`.
 
 **Response (200):**
 
@@ -1234,6 +1289,8 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 | `bilbycast_edge_flow_output_bitrate_bps` | gauge | Output bitrate (bits/sec) |
 | `bilbycast_edge_flow_output_packets_dropped` | counter | Packets dropped |
 | `bilbycast_edge_flow_output_fec_sent_total` | counter | FEC packets sent |
+| `bilbycast_edge_flow_output_latency_us` | gauge | End-to-end output latency in microseconds. Carries an extra `stat` label — `min`, `avg` or `max` — and is emitted only for outputs that report latency |
+| `bilbycast_edge_flow_output_latency_frames` | gauge | The same latency expressed in video frames, when a frame rate is known |
 
 **SRT metrics** (labeled by `flow_id`, optionally `output_id` and `leg`):
 
@@ -1241,6 +1298,36 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 |--------|------|-------------|
 | `bilbycast_edge_srt_rtt_ms` | gauge | SRT round-trip time in ms |
 | `bilbycast_edge_srt_loss_total` | counter | SRT total packet loss |
+
+**RIST metrics** (labeled by `flow_id`, `leg_role` = `input` or `output`, `output_id` on output legs, and `leg` = `leg1` or `leg2`):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `bilbycast_edge_rist_rtt_ms` | gauge | RIST round-trip time in ms |
+| `bilbycast_edge_rist_nack_sent_total` | counter | NACK messages sent by the receiver |
+| `bilbycast_edge_rist_nack_received_total` | counter | NACK messages received by the sender |
+| `bilbycast_edge_rist_retransmit_total` | counter | Packets retransmitted by the sender |
+| `bilbycast_edge_rist_packets_lost_total` | counter | Packets not recovered by ARQ |
+| `bilbycast_edge_rist_packets_recovered_total` | counter | Packets recovered via retransmit |
+
+**Bond metrics.** The per-bond series are labeled by `flow_id`, `leg_role` (`input` or `output`) and `output_id` on output legs; the per-path series add `path_id`, `path_name` and `transport`. See [Bonding](/edge/bonding/).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `bilbycast_edge_bond_gaps_recovered` | counter | Sequence gaps recovered by ARQ |
+| `bilbycast_edge_bond_gaps_lost` | counter | Sequence gaps not recovered |
+| `bilbycast_edge_bond_packets_duplicated` | counter | Packets duplicated across paths (sender side) |
+| `bilbycast_edge_bond_throughput_bps` | gauge | Aggregate bond bandwidth in bits/sec (sum of per-path) |
+| `bilbycast_edge_bond_rtt_ms` | gauge | Per-path round-trip time in ms |
+| `bilbycast_edge_bond_loss_fraction` | gauge | Per-path loss rate, 0.0–1.0 |
+| `bilbycast_edge_bond_path_throughput_bps` | gauge | Per-path bandwidth in bits/sec |
+| `bilbycast_edge_bond_path_packets_sent` | counter | Packets sent on the path |
+| `bilbycast_edge_bond_path_packets_received` | counter | Packets received on the path |
+| `bilbycast_edge_bond_path_retransmits_sent` | counter | Retransmits emitted on the path (sender side) |
+| `bilbycast_edge_bond_path_nacks_sent` | counter | NACKs sent on the path (receiver side) |
+| `bilbycast_edge_bond_path_nacks_received` | counter | NACKs received on the path (sender side) |
+| `bilbycast_edge_bond_path_keepalives_sent` | counter | Keepalives sent on the path |
+| `bilbycast_edge_bond_path_dead` | gauge | Path liveness — `1` when dead, `0` when alive (there is no `path_alive`) |
 
 **TR-101290 metrics** (labeled by `flow_id`):
 
@@ -1254,6 +1341,8 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 | `bilbycast_edge_tr101290_tei_errors_total` | counter | Transport error indicator errors |
 | `bilbycast_edge_tr101290_pcr_discontinuity_errors_total` | counter | PCR discontinuity errors |
 | `bilbycast_edge_tr101290_pcr_accuracy_errors_total` | counter | PCR accuracy errors |
+| `bilbycast_edge_tr101290_pid_errors_total` | counter | PID errors (ES PIDs missing) |
+| `bilbycast_edge_tr101290_crc_errors_total` | counter | CRC-32 errors on PAT/PMT sections |
 
 **Media analysis metrics** (labeled by `flow_id` and `pid`):
 
@@ -1266,6 +1355,39 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 | `bilbycast_edge_media_total_bitrate_bps` | gauge | Total TS bitrate in bits/sec |
 
 Only metrics for currently running flows are emitted.
+
+The families below are node-level rather than per-flow, so they are emitted whether or not a flow is running.
+
+**PTP metrics** (labeled by `domain`):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `bilbycast_edge_ptp_locked` | gauge | `1` when the clock is locked or acting as master, `0` otherwise |
+| `bilbycast_edge_ptp_state` | gauge | Lock state as a label — the active `state` label (`unavailable`, `acquiring`, `locked`, `holdover`, `master`, `unknown`) carries value 1 |
+| `bilbycast_edge_ptp_offset_ns` | gauge | Offset from master in nanoseconds. Emitted only while slaved (`locked` or `holdover`) |
+| `bilbycast_edge_ptp_mean_path_delay_ns` | gauge | Mean path delay in nanoseconds. Slaved only |
+| `bilbycast_edge_ptp_steps_removed` | gauge | Steps removed from the grandmaster. Slaved only |
+
+**Replay metrics** (no labels; present only on a binary built with the `replay` feature):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `bilbycast_edge_replay_recordings_count` | gauge | On-disk replay recordings |
+| `bilbycast_edge_replay_recordings_bytes` | gauge | Bytes consumed by on-disk replay segments |
+| `bilbycast_edge_replay_orphan_recordings_count` | gauge | Recordings with no flow currently armed against them |
+| `bilbycast_edge_replay_orphan_bytes` | gauge | Bytes consumed by orphan recordings — watch this for storage creep |
+| `bilbycast_edge_replay_root_free_bytes` | gauge | Free bytes on the replay-root filesystem. Omitted when the filesystem cannot be stat'd |
+| `bilbycast_edge_replay_root_total_bytes` | gauge | Total bytes on the replay-root filesystem. Same omission rule |
+
+**Host resource metrics** (no labels):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `bilbycast_edge_system_cpu_percent` | gauge | System CPU usage percentage |
+| `bilbycast_edge_system_ram_percent` | gauge | System RAM usage percentage |
+| `bilbycast_edge_system_ram_used_bytes` | gauge | System RAM used in bytes |
+| `bilbycast_edge_system_ram_total_bytes` | gauge | System RAM total in bytes |
+| `bilbycast_edge_system_resources_critical` | gauge | `1` when the node is in a critical resource state. Note the plural `resources` |
 
 **curl example:**
 
@@ -1349,9 +1471,9 @@ Get status of a specific tunnel.
 
 Create a new IP tunnel. The tunnel configuration is validated before creation.
 
-**Auth:** Requires valid JWT with `admin` role when auth is enabled.
+**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can create a tunnel. The result is persisted to `config.json` (secrets to `secrets.json`), so it survives a restart.
 
-**Request body:** A `TunnelConfig` JSON object. See [Tunnel Configuration](configuration-guide.md#tunnel-configuration) for all fields.
+**Request body:** A `TunnelConfig` JSON object. See [Tunnel Configuration](/edge/configuration/#tunnel-configuration) for all fields.
 
 **Example — relay mode UDP tunnel:**
 
@@ -1394,7 +1516,7 @@ Create a new IP tunnel. The tunnel configuration is validated before creation.
 
 Destroy a tunnel and clean up its connections.
 
-**Auth:** Requires valid JWT with `admin` role when auth is enabled.
+**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can tear a live tunnel down. The removal is reconciled out of `config.json`, so it is not resurrected on the next restart.
 
 **Response (200 OK):**
 
@@ -1420,7 +1542,7 @@ Destroy a tunnel and clean up its connections.
 
 WebSocket endpoint for real-time statistics streaming. Upgrades the HTTP connection to a WebSocket and pushes JSON stats messages at approximately 1-second intervals.
 
-**Auth:** Requires valid JWT (any role) when auth is enabled. The token can be passed as a standard `Authorization: Bearer` header on the upgrade request or as a query parameter for browser clients (see [Security Guide](api-security.md)).
+**Auth:** Requires valid JWT (any role) when auth is enabled. The token must be sent as an `Authorization: Bearer` header on the upgrade request — **there is no query-parameter fallback**. A browser `WebSocket` cannot set request headers, so reaching this endpoint from a page needs either a reverse proxy that injects the header or an auth-disabled node. See [Auth Configuration](/edge/configuration/#auth-configuration).
 
 **Protocol:** This is a server-push channel. The server sends JSON text frames; client-to-server messages are ignored.
 
@@ -1452,7 +1574,7 @@ The structure of each flow stats object is identical to the entries in `GET /api
 - Messages are broadcast on a shared channel. If a client falls behind, messages are skipped (lagged) rather than buffered.
 - The connection closes when the client sends a `Close` frame, disconnects, or when the broadcast channel is closed.
 
-**JavaScript example:**
+**JavaScript example** (sends no credential, so it works only against an auth-disabled node or through a header-injecting proxy — see **Auth** above):
 
 ```javascript
 const ws = new WebSocket("ws://localhost:8080/api/v1/ws/stats");
@@ -1550,21 +1672,21 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | PUT | `/api/v1/flows/{flow_id}/assembly` | Yes | admin | Hot-swap PID-bus assembly plan |
 | POST | `/api/v1/flows/{flow_id}/outputs` | Yes | admin | Add output to flow |
 | DELETE | `/api/v1/flows/{flow_id}/outputs/{output_id}` | Yes | admin | Remove output from flow |
-| POST | `/api/v1/flows/{flow_id}/whip` | Yes | admin | WHIP: Accept WebRTC publisher (SDP offer → answer) |
-| DELETE | `/api/v1/flows/{flow_id}/whip/{session_id}` | Yes | admin | WHIP: Disconnect publisher |
-| POST | `/api/v1/flows/{flow_id}/whep` | Yes | admin | WHEP: Accept WebRTC viewer (SDP offer → answer) |
-| DELETE | `/api/v1/flows/{flow_id}/whep/{session_id}` | Yes | admin | WHEP: Disconnect viewer |
+| POST | `/api/v1/flows/{flow_id}/whip` | Yes | any | WHIP: Accept WebRTC publisher (SDP offer → answer) |
+| DELETE | `/api/v1/flows/{flow_id}/whip/{session_id}` | Yes | any | WHIP: Disconnect publisher |
+| POST | `/api/v1/flows/{flow_id}/whep` | Yes | any | WHEP: Accept WebRTC viewer (SDP offer → answer) |
+| DELETE | `/api/v1/flows/{flow_id}/whep/{session_id}` | Yes | any | WHEP: Disconnect viewer |
 | GET | `/api/v1/tunnels` | Yes | any | List all tunnels |
 | GET | `/api/v1/tunnels/{id}` | Yes | any | Get tunnel status |
-| POST | `/api/v1/tunnels` | Yes | admin | Create tunnel |
-| DELETE | `/api/v1/tunnels/{id}` | Yes | admin | Delete tunnel |
+| POST | `/api/v1/tunnels` | Yes | any | Create tunnel |
+| DELETE | `/api/v1/tunnels/{id}` | Yes | any | Delete tunnel |
 | GET | `/api/v1/stats` | Yes | any | All statistics |
 | GET | `/api/v1/stats/{flow_id}` | Yes | any | Single flow stats |
 | GET | `/api/v1/config` | Yes | any | Get running config |
 | PUT | `/api/v1/config` | Yes | admin | Replace entire config |
 | POST | `/api/v1/config/reload` | Yes | admin | Reload config from disk |
 | GET | `/api/v1/ptp` | Yes | any | Get PTP configuration + status |
-| PUT | `/api/v1/ptp` | Yes | admin | Update PTP configuration |
+| PUT | `/api/v1/ptp` | Yes | any | Update PTP configuration |
 | GET | `/api/v1/ws/stats` | Yes | any | WebSocket stats stream |
 | GET | `/x-nmos/node/v1.3/` | No | - | NMOS IS-04: Node API root |
 | GET | `/x-nmos/node/v1.3/self` | No | - | NMOS IS-04: Node resource |
@@ -1596,6 +1718,8 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | GET | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Staged channel map (in-memory) |
 | POST | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Stage a new channel map (1024 outputs × 64 ch limit) |
 | POST | `/x-nmos/channelmapping/v1.0/map/activate` | No | - | NMOS IS-08: Activate the staged map and persist |
+
+The four WHIP/WHEP rows exist only on a binary built with the default-on `webrtc` Cargo feature; on a `--no-default-features` build the routes are not registered at all. They sit behind the same JWT middleware as every other protected route but enforce no role of their own. The only per-endpoint gate is the optional per-flow `bearer_token` on the WHIP input / WHEP output config, and it covers the two **POST** signalling routes alone: when it is set, the offer handler compares it against the request's `Authorization: Bearer` value and returns 401 on a mismatch; when it is unset there is no per-flow gate, so any valid node JWT — or any caller at all on an auth-disabled node — can open a session. The two `DELETE` teardown routes check no bearer token in any configuration.
 
 ## NMOS IS-04 / IS-05 / IS-08 (Phase 1)
 
@@ -1629,7 +1753,7 @@ When any flow on the node sets `clock_domain`, the IS-04 `/self` resource includ
 
 ### IS-08 audio channel mapping
 
-The IS-08 endpoints expose every ST 2110-30/-31 audio input and output under `/io`. The active map is persisted to `<config_dir>/nmos_channel_map.json` (next to `config.json`) and reloaded on startup. The endpoints support the standard PUT/POST + activate workflow. Bilbycast does not currently re-route channels internally — the map is a passthrough — but the endpoints exist so external NMOS controllers can stage and activate maps.
+The IS-08 endpoints expose every ST 2110-30/-31 audio input and output under `/io`. The active map is persisted to `<config_dir>/nmos_channel_map.json` (next to `config.json`) and reloaded on startup. The endpoints support the standard GET/POST-staged + POST-activate workflow (there is no PUT route). Bilbycast does not currently re-route channels internally — the map is a passthrough — but the endpoints exist so external NMOS controllers can stage and activate maps.
 
 Bounds: at most 1024 outputs per map, at most 64 channels per output. A controller exceeding these limits receives a `413 PAYLOAD_TOO_LARGE` response.
 

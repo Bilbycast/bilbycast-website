@@ -137,6 +137,8 @@ address = "REPLACE_WITH_CHASSIS_IP"
 username = "admin"
 password = "REPLACE_WITH_CHASSIS_PASSWORD"
 accept_self_signed_cert = true   # Appear X units typically use self-signed HTTPS
+# Stronger posture — pin the chassis leaf cert instead (see Security notes):
+# cert_fingerprint = "aa:bb:cc:dd:..."
 
 [polling]
 alarms_interval_secs = 10
@@ -144,18 +146,35 @@ chassis_interval_secs = 30
 inputs_interval_secs = 15
 outputs_interval_secs = 15
 cards_interval_secs = 30
+card_status_interval_secs = 5
+xger_config_interval_secs = 30
+uptime_interval_secs = 60
 alarms_refresh_interval_secs = 1800
 alarms_mmi_version  = "2.8"
 chassis_mmi_version = "4.1"
 cards_mmi_version   = "2.8"
+uptime_mmi_version  = "5.6"
+sfp_low_rx_dbm_threshold = -18.0
+sfp_high_temp_c_threshold = 70.0
+
+# Required for manager-driven Remote Upgrade. enabled defaults to false,
+# so the section without it behaves exactly like no section at all.
+[upgrade]
+enabled = true
+allowed_channels = ["stable"]
+install_root = "/opt/bilbycast/appear-x-gateway"
 EOF
-sudo chown bilbycast-gateway:bilbycast-gateway /opt/bilbycast/appear-x-gateway/config.toml
+sudo chown root:bilbycast-gateway /opt/bilbycast/appear-x-gateway/config.toml
 sudo chmod 0640 /opt/bilbycast/appear-x-gateway/config.toml
 ```
 
 Replace the four `REPLACE_*` values with your real ones before continuing. There's no `[[polling.boards]]` block — the gateway auto-discovers cards at startup via the capability-discovery pass in `src/appear_x/capabilities.rs`.
 
-`config.toml` is bilbycast-gateway-owned (not root) because the gateway writes back to it on first connect to persist `node_id` + `node_secret`. Root-owned would block that.
+`card_status_interval_secs` drives the manager's **Card Health** panel — keep it at or below 5 s so a PTP drop or SFP RX-power loss surfaces promptly. The two `sfp_*` thresholds are the trigger points for the Minor `sfp_low_rx_power` and `sfp_high_temperature` events; the defaults shown are the code defaults, so you can omit any line you don't want to change.
+
+The `[upgrade]` block is what makes manager-driven [Remote Upgrade](/manager/remote-upgrade/) actually work. `enabled = true` is mandatory — it defaults to `false`, so a block without it is refused with the same `upgrade_disabled` error as omitting the section entirely. `install_root` must be an absolute path and `allowed_channels` must be non-empty with alphanumeric / dash / underscore entries, or the gateway refuses to start rather than degrading.
+
+`config.toml` is read once at startup and never written back, so it is root-owned with group `bilbycast-gateway` — readable by the service, not writable by it, since it holds the chassis password and the registration token. It is `credentials.json` (the `credentials_file` path) that the service user must be able to write: the SDK creates it on first registration and chmods it `0600`.
 
 ## Step 7: Drop the systemd unit
 
@@ -209,6 +228,17 @@ WantedBy=multi-user.target
 EOF
 ```
 
+### Verify chassis credentials and firmware interface versions
+
+Before starting the service, exercise the chassis link once with the `probe` subcommand:
+
+```bash
+sudo -u bilbycast-gateway /opt/bilbycast/appear-x-gateway/current/bilbycast-appear-x-api-gateway \
+  --config /opt/bilbycast/appear-x-gateway/config.toml probe
+```
+
+`probe` talks only to the Appear X unit — it never connects to the manager, and it skips the manager-URL validation entirely, so it works before the node has registered. It authenticates, then calls `alarms/GetActiveAlarms`, `chassisModel/GetGraph`, `cards/GetChassisInfo` and `cards/GetCardStates` once each at the `mmi:` versions your `[polling]` block configures, printing `PASS` / `FAIL` plus a truncated response per call. A `FAIL` line names the exact `mmi:<version>/...` method your firmware rejected, which is how you pick the right `*_mmi_version` values. A sample probe-only config ships as `config/probe-x5.toml`.
+
 ## Step 8: Enable and start
 
 ```bash
@@ -232,11 +262,13 @@ You should see `manager: connected` within a few seconds, then the polling tasks
 3. The **AI Assistant** can target the Appear X node — pick it from the dropdown.
 4. The node detail page's **Gateway Module** header shows the sidecar version, gateway host, polled chassis address, and a **reachable** / **target down** badge driven by the alarm-poll heartbeat.
 
+Two `[appear_x]` keys tune that badge. `reachability_failure_threshold` (default `2`) is how many consecutive failed alarm polls flip it to **target down** — roughly 20 s at the default 10 s alarms cadence; lower it for an inline broadcast path, raise it for a flaky remote uplink. `reachability_event_dwell_secs` (default `60`) is how long the badge must stay down before a `target_unreachable` event fires, which damps slow flap. Recovery is not dwell-gated — `target_recovered` fires on the first successful poll after the streak.
+
 ## Upgrades
 
 The gateway supports two upgrade paths.
 
-**Manager-driven Remote Upgrade (recommended).** Once the gateway is registered and shows up in `/admin/nodes`, every subsequent upgrade is driven from the manager UI:
+**Manager-driven Remote Upgrade (recommended).** Requires the `[upgrade]` block from Step 6. The gateway advertises the `upgrade` capability unconditionally, so the manager shows **Stage upgrade** even on a gateway with no `[upgrade]` section at all — the button's presence is not evidence the feature is wired, and clicking it on an unconfigured gateway returns `upgrade_disabled`. With the block in place and `enabled = true`, every subsequent upgrade is driven from the manager UI:
 
 1. **Admin → Managed Nodes**, click **Upgrade…** on the gateway's row.
 2. Pick a `(version, channel)` and click **Stage upgrade**.
@@ -296,7 +328,8 @@ sudo systemctl restart bilbycast-appear-x-gateway
 - Self-signed manager cert acceptance requires `BILBYCAST_ALLOW_INSECURE=1` (set via the env file above) as an explicit safety guard.
 - For production, use certificate pinning (`manager.cert_fingerprint`) instead of `accept_self_signed_cert`.
 - `credentials.json` is written `0600` by the gateway.
-- The Appear X HTTPS connection has its own independent `accept_self_signed_cert` (Appear chassis typically ship with self-signed certs).
+- The Appear X HTTPS connection has its own independent `accept_self_signed_cert` (Appear chassis typically ship with self-signed certs) — and its own pin, `appear_x.cert_fingerprint`. When the pin is set, full CA-chain validation runs **and** the leaf's SHA-256 must match; it takes precedence over `accept_self_signed_cert` whatever that is set to, and unlike the manager's self-signed path it needs no `BILBYCAST_ALLOW_INSECURE`, because pinning is strictly stronger. Colon-separated and bare hex are both accepted; a malformed value aborts startup rather than degrading. Use it as the production posture instead of `accept_self_signed_cert = true`.
+- `config.toml` is read once at startup and never rewritten, so it does not need to be writable by the service account — see Step 6.
 
 ## Troubleshooting
 
@@ -307,5 +340,6 @@ sudo systemctl restart bilbycast-appear-x-gateway
 | `BILBYCAST_ALLOW_INSECURE=1 is not set` | `accept_self_signed_cert = true` set without the env-var safety guard | Add `RUST_LOG=info` + `BILBYCAST_ALLOW_INSECURE=1` to `/etc/bilbycast/appear-x-gateway.env`, restart |
 | `Authentication failed` (manager) | Registration token already consumed | Generate a fresh token in the manager UI; if `credentials.json` exists already, delete it to force re-registration |
 | `BeginSession failed` (Appear X) | Wrong chassis username / password | Verify `appear_x.username` and `appear_x.password` in config.toml |
-| Many `Method '...' was not found` warnings | Wrong MMI version | Set the right `alarms_mmi_version` / `chassis_mmi_version` / `cards_mmi_version` for your firmware |
-| `Permission denied` writing `config.toml` / `credentials.json` | Files owned by root | `sudo chown bilbycast-gateway:bilbycast-gateway /opt/bilbycast/appear-x-gateway/{config.toml,credentials.json}` |
+| Many `Method '...' was not found` warnings | Wrong MMI version | Run the `probe` subcommand (before Step 8) to see which interface versions this firmware answers, then set `alarms_mmi_version` / `chassis_mmi_version` / `cards_mmi_version` accordingly |
+| `Permission denied` writing `credentials.json` | File or its directory owned by root | `sudo chown bilbycast-gateway:bilbycast-gateway /opt/bilbycast/appear-x-gateway/credentials.json` |
+| `command_ack` returns `upgrade_disabled` after **Stage upgrade** | No `[upgrade]` block in `config.toml`, or the block omits `enabled = true` | Add the Step 6 `[upgrade]` block with `enabled = true`, then restart the service |

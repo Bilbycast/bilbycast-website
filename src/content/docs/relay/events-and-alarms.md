@@ -44,7 +44,11 @@ Events are sent as WebSocket messages with type `"event"`:
 
 ### Buffering
 
-Events are queued in an unbounded in-memory channel. When the relay is not connected to the manager, events accumulate and are delivered once the connection is re-established.
+Events are queued in a **bounded** in-memory channel — capacity 1024 (`EVENT_CHANNEL_CAPACITY` in `src/manager/events.rs`) — drained by the manager WebSocket client loop. When the relay is not connected to the manager, events accumulate up to that depth and are delivered once the connection is re-established. Beyond it, every further event is **dropped on arrival**: the queue keeps what it already holds and discards the new ones, so a long outage replays at most the first 1024 events rather than the whole backlog. The same applies to an inbound flood that generates events faster than they can be shipped.
+
+Sending is a non-blocking `try_send`, because callers include the native-UDP receive loop and reporting an error must never stall media forwarding. Drops are counted (`EventSender::dropped_total`) and logged at most once per second — `event queue full — dropping events` — carrying the cumulative total.
+
+When the structured-JSON log shipper is configured it sees every event *before* the queue, so an event the manager queue drops still reaches the configured stdout / file / syslog target even though the manager never gets it — unless the shipper's own bounded queue (2048) has filled too, which it counts and warns about separately. A standalone relay with no manager configured has no receiver at all: those events are discarded silently and counted nowhere.
 
 ---
 
@@ -58,7 +62,7 @@ Events are queued in an unbounded in-memory channel. When the relay is not conne
 | info | Edge disconnected from {addr} | Edge QUIC connection closed | `{ remote_addr }` |
 | warning | Edge connection failed: control stream error from {addr} | Failed to accept bidirectional control stream | `{ remote_addr }` |
 | warning | Connection rejected: per-IP cap exceeded ({n} active from {ip}) | New QUIC connection dropped at handshake — per-IP connection cap (`max_connections_per_ip`, default 64) reached. DoS mitigation | `{ error_code: "relay_dos_suspect", remote_addr, remote_ip, active_connections, cap }` |
-| warning | Protocol version mismatch (edge={v}, relay={v}) | Edge Hello message version differs from relay | `{ edge_version, relay_version }` |
+| warning | Protocol version mismatch with '{connection_id}': edge={v}, relay={v} | Edge Hello message version differs from relay | `{ edge_version, relay_version }` |
 | warning | QUIC connection accept failed: {error} | QUIC/TLS handshake failure at the server level | `{ error }` |
 
 **Source**: `src/session.rs`, `src/server.rs`

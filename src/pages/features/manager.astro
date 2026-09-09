@@ -44,7 +44,7 @@ const security = [
   { label: 'TOTP MFA', body: 'pure-Rust totp-rs' },
   { label: 'OIDC SSO', body: 'optional, with tenant-aware group sync' },
   { label: 'Envelope encryption', body: 'per-secret DEK wrapped by domain-specific KEK; HKDF-SHA256' },
-  { label: 'Master-key rotation', body: 'one-shot CLI; no service restart required' },
+  { label: 'Master-key rotation', body: 'one-shot CLI; re-encrypts every secret column, then swap BILBYCAST_MASTER_KEY and restart the server' },
   { label: 'Per-IP + per-account login limits', body: '15-min lockout after 5 failed passwords' },
   { label: 'Encrypted backup & restore', body: 'portable export + DR-grade pg_dump archive (licensed)' },
 ];
@@ -64,7 +64,7 @@ const security = [
     <div class="mx-auto max-w-5xl px-6 text-center">
       <div class="mb-6 inline-flex items-center gap-2 rounded-full border border-sky-800/40 bg-sky-950/40 px-4 py-1.5 text-xs font-medium text-sky-300">
         <span class="h-1.5 w-1.5 rounded-full bg-sky-400"></span>
-        Pillar 4 · Manager &amp; AI
+        Pillar 1 · Manager &amp; AI
       </div>
       <h1 class="text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
         Manage your media plant

@@ -42,7 +42,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Features:**
   - AES-128/192/256 encryption (AES-CTR default, AES-GCM authenticated encryption selectable via `crypto_mode`)
   - Stream ID access control (`stream_id`, max 512 chars per SRT spec; supports `#!::r=name,m=mode,u=user` structured format)
-  - FEC (Forward Error Correction) via `packet_filter` — XOR-based row/column parity, staircase layout, ARQ integration modes (`always`/`onreq`/`never`), wire-compatible with libsrt v1.5.5
+  - FEC (Forward Error Correction) via `packet_filter` — XOR-based row/column parity, staircase layout, ARQ integration modes (`always`/`onreq`/`never`), wire-compatible with libsrt v1.5.7
   - Configurable latency buffer (symmetric or asymmetric receiver/sender latency)
   - Retransmission bandwidth capping (Token Bucket shaper via `max_rexmit_bw`)
   - SMPTE 2022-7 hitless redundancy merge (dual-leg input)
@@ -131,7 +131,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   screen-ID text, tone/beep ident, A/V-sync sweep) muxed as a paced MPEG-TS.
   No external source needed — handy for standing up and validating a flow.
 - **`media_player`** (default `media-codecs` build) — replays a playlist of
-  local assets (TS / MP4 / MOV / MKV / still image) from the edge media
+  local assets (TS / MP4 / MOV / still image) from the edge media
   library as a paced fresh MPEG-TS: `loop_playback`, `shuffle`, optional
   `paced_bitrate_bps` (TS only), and optional MPTS→SPTS `program_number`.
 - **`replay`** (default-on `replay` feature) — plays a recorded clip or
@@ -242,8 +242,9 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Features:**
   - **Dual manifests:** emits `.m3u8` (HLS) and `.mpd` (DASH) off the same CMAF segment set — operators reach Apple and DASH players with a single push. `manifests` is a subset of `["hls", "dash"]` (default both).
   - **Standard CMAF:** whole-segment HTTP PUT — target `segment_duration_secs` (1.0-10.0, default 2.0), rolling playlist of `max_segments` (1-30, default 5).
+  - **Time-based DVR window:** `dvr_window_secs` (float, >= 1.0) supersedes `max_segments` — the playlist length is derived as `ceil(dvr_window_secs / segment_duration_secs)`, so the window stays the duration you asked for if the segment length changes. Refused above 21600 derived entries (every viewer refetches the whole playlist each segment). The window slides: it advertises only what the origin still holds, so size origin retention to match or clients will seek to evicted segments.
   - **Low-latency CMAF (LL-CMAF):** `low_latency: true` enables chunked-transfer PUT + `#EXT-X-PART` in HLS and DASH `availabilityTimeOffset`. Chunk cadence set by `chunk_duration_ms` (100-2000, default 500). Sub-second end-to-end latency on a well-tuned CDN.
-  - **Video passthrough or re-encode:** H.264 and HEVC source streams ride unchanged by default. Setting `video_encode` forces a `VideoDecoder` → `VideoEncoder` pipeline (x264/x265/NVENC, same schema as other outputs) with GoP alignment to `segment_duration_secs`. HEVC output is DASH-only — HLS fMP4 HEVC (`hvc1`) playback support varies by client, so prefer `manifests: ["dash"]` when encoding to HEVC.
+  - **Video passthrough or re-encode:** H.264 and HEVC source streams ride unchanged by default. Setting `video_encode` forces a `VideoDecoder` → `VideoEncoder` pipeline (x264/x265/NVENC, same schema as other outputs); segments still cut on IDR, and the re-encoder pins a 60-frame GoP unless you set `video_encode.gop_size` yourself — it is not derived from `segment_duration_secs`, so set both if you want them to line up. `video_encode.codec` must name an explicit backend (`x264`, `x265`, `h264_nvenc`, `hevc_nvenc`, `h264_qsv`, `hevc_qsv`, `h264_vaapi`, `hevc_vaapi`, `h264_rkmpp`, `hevc_rkmpp`) — the `*_auto` aliases every TS output accepts are refused at validation, because the CMAF re-encoder does not resolve them. HEVC output is DASH-only — HLS fMP4 HEVC (`hvc1`) playback support varies by client, so prefer `manifests: ["dash"]` when encoding to HEVC.
   - **HEVC `hvc1`/`hev1` signalling:** DASH MPD carries the codec FourCC in the `<Representation codecs="...">` attribute; iOS Safari compatibility drives `hvc1` by default.
   - **Audio passthrough or re-encode:** AAC sources ride unchanged by default. Setting `audio_encode` runs the decode → optional `transcode` → re-encode pipeline with the AAC family only (`aac_lc`, `he_aac_v1`, `he_aac_v2`). MP2, AC-3, and Opus are not valid for CMAF.
   - **ClearKey CENC encryption** (ISO/IEC 23001-7 Common Encryption). Two schemes:
@@ -252,12 +253,14 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   - **DRM bring-your-own:** the edge emits a W3C EME ClearKey `pssh` box automatically; operators can additionally supply pre-built Widevine, PlayReady, and FairPlay `pssh` boxes via `encryption.pssh_boxes` and the edge copies them verbatim into the init segment's `moov`. Commercial DRM license servers are operator-managed (not part of bilbycast).
   - **Subsample encryption** keeps video NAL prefixes and parameter sets in the clear (first ~32 bytes per NAL), encrypts the rest. `senc`/`saio`/`saiz` boxes per segment.
   - **Optional Bearer auth** on uploads via `auth_token`.
+  - **Scrub-preview thumbnail track:** an optional `thumbnails` block (`interval_secs` 1-30 default 2, `frames_per_sheet` 1-200 default 20, `width` 64-640 default 160, `height` 36-360 default 90) publishes sprite sheets plus a WebVTT index beside the media, so a browser player can show a picture while the operator drags the scrub bar. It rides the broadcast as a sibling subscriber and can never stall the output. Needs the default-on `replay` feature, which owns the frame capture — a build without it runs the output and warns rather than silently publishing nothing. Validation refuses a sheet over 4096 px on either axis, and refuses `interval_secs x frames_per_sheet` greater than or equal to the playlist window (`dvr_window_secs` when set, otherwise `max_segments x segment_duration_secs`): a sheet is only published once it is full, so a longer lag than the window means no sheet ever describes a segment the playlist still lists. Note what that implies for the defaults — 2 s x 20 frames is 40 s of lag against a 10 s default playlist, so a thumbnail track in practice comes with a `dvr_window_secs` long enough to cover it.
   - **MPTS filtering:** optional `program_number` selector filters an MPTS input to a single program before segmenting.
   - **Never blocks the broadcast subscriber:** all codec work runs in `tokio::task::block_in_place`; the LL-CMAF chunked upload uses a bounded `mpsc(8)` with drop-on-full semantics so a slow CDN can't back-pressure the rest of the flow.
 - **Limitations:**
   - Output only — bilbycast-edge does not ingest its own CMAF output (the playback side is any compliant HLS or DASH player).
   - HLS fMP4 HEVC clients are inconsistent; re-encoding to HEVC → HLS typically fails on older Apple devices. Recommended: `manifests: ["dash"]` when re-encoding HEVC, or stick to H.264 when serving HLS.
   - `transcode` requires `audio_encode` to be set — it has no effect on passthrough audio and is rejected at validation.
+  - `encryption` and `low_latency: true` are mutually exclusive. The chunked LL path writes no `senc` / `saiz` / `saio` and applies no CENC transform, so the media would go out in the clear under a config that says it is encrypted. Validation refuses the combination and the flow does not start, rather than warning — set `low_latency: false` for an encrypted output, or drop `encryption` if latency matters more (bilbycast-edge#135).
 - **Reference:** see [Configuration — CMAF Output](/edge/configuration/#cmaf-output) for the field table and worked examples, and `bilbycast-edge/docs/cmaf.md` in the repo for the implementation deep-dive (threading model, segment boundary semantics, DASH manifest profile, CENC subsample algorithm).
 
 ### RTSP
@@ -397,7 +400,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 
 ## Video Transcoding (`video_encode`)
 
-SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs accept an optional `video_encode` block. TS-carrying outputs (SRT / RIST / UDP / RTP) run the streaming `engine::ts_video_replace::TsVideoReplacer`: the source video ES is demuxed, decoded via `video-engine::VideoDecoder`, re-encoded via `video-engine::VideoEncoder`, and re-muxed into the output TS — non-video PIDs (audio, PCR, PSI, ST 2110-40 ANC) pass through untouched. RTMP drives the same decoder/encoder pair, emitting classic FLV for H.264 targets and Enhanced RTMP v2 (`hvc1` FourCC, hvcC extradata) for HEVC targets. WebRTC is H.264-only and auto-transcodes HEVC sources.
+SRT, RIST, UDP, RTP, RTMP, CMAF, and WebRTC outputs accept an optional `video_encode` block. TS-carrying outputs (SRT / RIST / UDP / RTP) run the streaming `engine::ts_video_replace::TsVideoReplacer`: the source video ES is demuxed, decoded via `video-engine::VideoDecoder`, re-encoded via `video-engine::VideoEncoder`, and re-muxed into the output TS — non-video PIDs (audio, PCR, PSI, ST 2110-40 ANC) pass through untouched. RTMP drives the same decoder/encoder pair, emitting classic FLV for H.264 targets and Enhanced RTMP v2 (`hvc1` FourCC, hvcC extradata) for HEVC targets. WebRTC is H.264-only and auto-transcodes HEVC sources. CMAF re-encodes into its fragmented-MP4 segments, and is the one output that needs an explicit backend rather than an `*_auto` alias — see the CMAF / CMAF-LL section above.
 
 ![Manager — Output modal with the video transcode picker open across libx264, libx265, NVENC, QSV, and VAAPI; only backends the host actually supports stay enabled](../../../assets/screenshots/transcoding-example.png)
 
@@ -412,7 +415,10 @@ Supported encoders (opt-in via Cargo features):
 | `video-encoder-vaapi` | H.264 / HEVC via VAAPI (libva MIT, Linux; AMD radeonsi / Intel iHD) | iGPU/dGPU |
 | `video-decoder-nvdec` | NVIDIA NVDEC HW decode (`h264_cuvid` / `hevc_cuvid`) — display + transcode | GPU |
 | `video-decoder-qsv` | Intel QSV HW decode (`h264_qsv` / `hevc_qsv`, x86_64 only) — display + transcode | iGPU |
-| `video-encoders-full` | Bundle of every video codec backend — encoders (x264 + x265 + NVENC + QSV + VAAPI) + HW decoders (NVDEC + QSV + VAAPI). Used by the release build | — |
+| `video-decoder-vaapi` | VAAPI HW decode (`h264_vaapi` / `hevc_vaapi`, Linux) — display + transcode | iGPU/dGPU |
+| `video-encoder-rkmpp` | H.264 / HEVC via Rockchip RKMPP on RK3568 / RK3588 (8-bit 4:2:0 only) | VPU |
+| `video-decoder-rkmpp` | Rockchip RKMPP HW decode — display + transcode | VPU |
+| `video-encoders-full` | Bundle of every video codec backend — encoders (x264 + x265 + NVENC + QSV + VAAPI) + HW decoders (NVDEC + QSV + VAAPI). Used by the `x86_64` `*-full` release artefact only; both aarch64 artefacts list their features individually | — |
 
 The release tarball (`bilbycast-edge-$(uname -m)-linux-full.tar.gz`) bundles libx264 + libx265 + NVENC + QSV + VAAPI (encode) and NVDEC + QSV-decode + VAAPI-decode (display HW playout + transcode decode) — the `aarch64` build omits QSV in both directions because Intel iGPU is x86_64-only. Combined work is AGPL-3.0-or-later under the GPL portions; the runtime probe auto-detects which backends actually open on the host.
 
@@ -445,7 +451,9 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 
 ### TR-101290 Transport Stream Analysis
 - Priority 1: Sync byte, continuity counter, PAT/PMT presence
-- Priority 2: TEI, PCR discontinuity, PCR accuracy
+- Priority 2: TEI, PCR discontinuity (`pcr_discontinuity_errors` now strictly counts unsignalled PCR jumps — a forward leap over 100 ms, or any step backwards, on a packet whose `discontinuity_indicator` is clear), PCR accuracy — plus the extended checks: PCR repetition (a PCR-bearing PID silent for more than 100 ms, split out of the discontinuity counter), PTS repetition (a PES PID that has produced a PTS going quiet for more than 700 ms), and CAT presence
+- Priority 3: NIT, SDT, EIT, TDT, RST, SI-repetition, and Unreferenced_PID errors
+- The P2-extended and P3 counters are summarised together as `priority3_ok` on `Tr101290Stats` — omitted from the payload entirely by edges that predate them — and are advertised as the `tr101290_full` capability. The manager gates its extended TR 101 290 sub-panel on that bit, so an older edge keeps the Priority 1 + 2 surface it always had
 - Runs as independent broadcast subscriber (zero jitter impact)
 - Skipped automatically for non-TS inputs (ST 2110-30/-31/-40, `rtp_audio`, WebRTC)
 
@@ -487,13 +495,16 @@ For non-TS transports (raw ST 2110 RTP audio or video), the fixer is transparent
 | `video-decoder-nvdec` | NVIDIA NVDEC hardware decode (display output + transcode decode path). Shares `nv-codec-headers` with `video-encoder-nvenc` | No |
 | `video-decoder-qsv` | Intel QSV hardware decode (display output + transcode decode path). Shares `libvpl-dev` with `video-encoder-qsv`; x86_64 only | No |
 | `video-decoder-vaapi` | VAAPI hardware decode (display output + transcode decode path). Shares `libva-dev` with `video-encoder-vaapi`; Linux | No |
-| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV + VAAPI) **and** HW decoders (NVDEC + QSV-decode + VAAPI-decode). Used by the release build | No |
+| `video-encoders-full` | Composite of every video codec backend the edge knows about — encoders (x264 + x265 + NVENC + QSV + VAAPI) **and** HW decoders (NVDEC + QSV-decode + VAAPI-decode). Used by the `x86_64-linux-full` release artefact only — both aarch64 artefacts enumerate their features individually and never pull in this composite | No |
 | `video-encoder-rkmpp` | Rockchip RK3568 / RK3588 hardware H.264 / HEVC encode via RKMPP (8-bit 4:2:0 only; x264 / x265 cover 10-bit and 4:2:2). Links dynamically against `librockchip_mpp` | No (on in `aarch64-linux-rockchip`) |
 | `video-decoder-rkmpp` | Rockchip RKMPP hardware decode — shared by the local-display output and the transcode decode path | No (on in `aarch64-linux-rockchip`) |
 | `rga-transfer` | Rockchip RGA-accelerated DRM_PRIME→sysmem frame transfer on the local-display path, replacing FFmpeg's CPU `mmap`+`memcpy` (~3 ms/frame vs ~106 ms spikes at 1080p on RK3588). Implies `video-decoder-rkmpp`; needs `/dev/rga` at run time | No (on in `aarch64-linux-rockchip`) |
 | `multiviewer` | Mosaic compositor + stream head — composites N node-local inputs onto one canvas and republishes it as MPEG-TS, so a multiviewer wall is an ordinary flow source (`type: "mosaic"`). Implies `media-codecs`, and **needs a `video-encoder-*` feature to be usable**: the flow bus carries TS, so a canvas reaches an output only by being encoded and muxed. The `mv-compositor` capability is advertised only when both halves are present. See [Multiviewer](/edge/multiviewer/) | No (on in all three release artefacts) |
 | `mxl` | MXL (Media eXchange Layer) — EBU / Linux Foundation same-host shared-memory composition. Heavy build prerequisites, `dlopen`s `libmxl.so` at run time. See [MXL](/edge/mxl/) | No (on in all three release artefacts) |
+| `mxl-not-built` | Sub-toggle of `mxl`: skip the upstream libmxl C++ cmake build, emitting only the dlopen FFI from the vendored headers. The binary still loads `libmxl.so` at run time, so the heavy build chain is not needed on the release runner. See [MXL](/edge/mxl/) | No (on in all three release artefacts) |
 | `sdi-decklink` | SDI capture + playout on Blackmagic DeckLink cards (`type: "sdi"`). Build needs the EULA-gated DeckLink SDK headers, which is why it is not folded into `video-encoders-full`. See [SDI](/edge/sdi/) | No (on in both `*-linux-full` artefacts from v0.103.0; never in `*-rockchip`) |
+| `hardware-monitor-nvml` | Live NVIDIA NVENC / NVDEC utilisation sampling via `nvml-wrapper`, feeding the manager's resource-budget UI. The dependency is target-conditional (Linux + Windows only), so a generic `cargo build` stays portable without it. See [Resources](/edge/resources/) | No |
+| `ptp-internal` | Reserved for an in-process PTP slave clock via the pure-Rust `statime` crate, for single-process deployments that would rather not run `ptp4l`. Currently a no-op marker — the flag builds and is advertised, but the reporter still falls back to `ptp4l`. See [ST 2110](/edge/st2110/) | No |
 
 The **Default** column above says what a plain `cargo build` does; the parenthetical says what the *published* release artefacts carry, which is the answer that matters if you are running a downloaded binary rather than one you built. Confirm either with `bilbycast-edge --print-capabilities`, which prints one `feature <name>` line per compiled-in feature.
 

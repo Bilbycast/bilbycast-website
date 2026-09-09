@@ -12,6 +12,8 @@ The page has three tabs — **Live** (the JKL scrub workspace, which is most of 
 ## Prerequisites
 
 - The edge node must advertise the `replay` capability — every release with the default feature set does.
+- Slow motion (the **0.1× / 0.25× / 0.5× / 1×** transport presets) and the dedicated frame-step command additionally need the edge to advertise `replay-v2`. Without it the speed row is hidden outright and `,` / `.` fall back to a 33 ms seek.
+- Filmstrip thumbnails on the scrub strip are not gated on a capability bit — the manager just asks. An edge that doesn't know the command answers `unknown_action`, which the manager turns into an empty strip rather than an error toast.
 - The flow must have `recording.enabled = true`. Add it on the flow create / edit modal (the **Recording** sub-block).
 - Operators need at least the **Operator** role on the group that owns the node + flow.
 
@@ -35,14 +37,21 @@ The timeline shows the rolling buffer for the currently-recording flow. The vert
 |---|---|---|
 | Pause | click play-head | **K** |
 | Play forward 1× | — | **L** |
+| Toggle play / pause | — | **Space** |
 | Reverse scrub | drag left | **J** |
 | Frame step back | — | `,` |
 | Frame step forward | — | `.` |
 | Mark in | click marker | **I** |
 | Mark out | click marker | **O** |
 | Lock to live | toggle the Lock-to-live checkbox | — |
+| Zoom in at the play-head | — | `+` / `=` |
+| Zoom out at the play-head | — | `-` / `_` |
+| Fit the whole buffer | — | **Z** |
+| Show the hotkey overlay | — | **?** |
 
 **Lock to live** keeps the play-head on the latest frame as new content arrives — useful when you want to stay in step with the broadcast and only break off to clip something on demand.
+
+At 900 px of viewport width or narrower a **touch transport bar** appears below the timeline, so the same transport is reachable on a tablet with no keyboard.
 
 ![Replay page — live preview, JKL-scrub timeline with play-head, mark in/out, and the per-flow clip library](../../../assets/screenshots/replay.png)
 
@@ -54,12 +63,14 @@ Each button uses the active **tag profile**'s default tag (see below).
 
 ## Bracket-trim — `[` and `]`
 
-Once a clip exists, select it in the library and use:
+Once a clip exists, select it in the library and press **Cue Selected** — the trim keys act on the *cued* clip, not on whichever row is highlighted. Double-clicking a row plays it and leaves the trim keys inert. Then use:
 
 - **`[`** to nudge the in-point later by 100 ms.
 - **`]`** to nudge the out-point earlier by 100 ms.
 
 Both keys trim the clip inward in 100 ms steps. Trims fire `update_clip` against the edge — SMPTE timecode strings are cleared on PTS trim because the index doesn't store them.
+
+Cueing runs against whichever input is *on air*, so the flow's active input has to be a `replay` input — a replay member sitting on standby doesn't count. Without one the cue is refused with `replay_no_playback_input`, nothing is cued, and `[` / `]` answer *"Cue a clip first to trim it"*.
 
 ## The clip library
 
@@ -72,7 +83,7 @@ The right-hand panel lists every clip in the current flow's recording. It's **gr
 | Filter by tag | click a tag pill at the top of the panel; clicks toggle inclusion / exclusion |
 | Rename / re-describe | row hover → pencil icon |
 | Tag | row hover → tag icon, or use the active profile's hotkeys |
-| Trim | select row, then `[` / `]` |
+| Trim | select row → **Cue Selected**, then `[` / `]` |
 | Delete | row hover → trash, then confirm |
 
 ## Push-to-air
@@ -115,7 +126,7 @@ For Soccer, `1` = `GOAL`, `2` = `FOUL`, `3` = `OFFSIDE`, …. For Studio default
 
 ### Sport-preset catalogue
 
-The system ships a built-in catalogue at `static/js/shared/replay_tag_presets.js` covering: **Soccer**, **Rugby Union**, **Rugby League**, **NFL**, **AFL**, **Cricket**, **Tennis**, **Basketball**, **Ice Hockey**, **Field Hockey**, **Volleyball**, **Badminton**, **Baseball**, **Netball**, **Handball**, **Combat Sports**, **Athletics**, and a fall-through **Generic** profile. Group admins can copy any preset into the group as a new profile from **Admin → Groups → \<group\> → Replay tag profiles → Import sport preset**, then edit it freely.
+The system ships a built-in catalogue at `static/js/shared/replay_tag_presets.js` covering: **Soccer**, **Rugby Union**, **Rugby League**, **NFL**, **AFL**, **Cricket**, **Tennis**, **Basketball**, **Ice Hockey**, **Field Hockey**, **Volleyball**, **Badminton**, **Baseball**, **Netball**, **Handball**, **Combat Sports**, **Athletics**, and a fall-through **Generic** profile. Group admins can copy any preset into the group as a new profile on the **Replay quick-tags** page (`/admin/replay-tags`), using the **+ New profile from preset…** option at the head of the profile dropdown, then edit it freely. Two ways in: group admins and SuperAdmins get a **Customise tags →** link at the right of the quick-tag bar on `/replay`, and **Admin → Groups → \<group\> → Replay quick-tags → Configure quick-tags →** links to the same page — the Groups form itself shows only a one-line summary, not an editor.
 
 The system **Soccer** preset is the NULL fallback when neither the group nor the operator has selected a profile — clicks just work.
 

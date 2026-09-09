@@ -86,7 +86,7 @@ Outputs are JSON top-level entities in `config.json`. The minimum:
 | `scaling_mode` | string | `"match_source"` | How the panel's KMS mode is chosen. `match_source` (default) re-modesets to the smallest mode that covers the source's `(width, height)`, on every source-shape change — best A/V sync, no scaling. `monitor_native` picks the connector's preferred (panel-native) mode once at task startup and holds it, letting libswscale upscale the source to fill it; pick it for fixed-mode panels (HDCP-locked, signage) and desktop monitors that handle their native mode best. |
 | `sync_mode` | string | `"vsync_to_display"` | `"vsync_to_display"` (default, audio-master) or `"genlock"` (locks the display's audio to the flow master clock so the panel stays rate-coherent with the flow's wire outputs; video still follows the audio playout, so lip-sync is identical either way). |
 | `hw_decode` | string | `"auto"` | `"auto"`, `"cpu"`, `"nvdec"`, `"qsv"`, `"vaapi"`, or `"rkmpp"`. Auto resolves to `vaapi ≻ nvdec ≻ qsv ≻ rkmpp ≻ cpu` against the host's probed capabilities. `"rkmpp"` is the Rockchip RK3568 / RK3588 hardware decode path (shipped in the `aarch64-linux-rockchip` release). See [Codec matrix](/edge/codec-matrix/). |
-| `show_audio_bars` | bool | `false` | Render translucent audio level bars as an ARGB8888 overlay plane composed at vblank. Stays on the zero-copy path — no CPU-blit demotion. |
+| `show_audio_bars` | bool | `false` | Render translucent audio level bars, plus a single-line stream-info header, as an ARGB8888 overlay plane composed at vblank. Where the host cannot program a second plane the strip is baked into the video frame on the CPU instead, which takes a zero-copy frame off the PRIME path — see [Audio level bars overlay](#audio-level-bars-overlay). |
 | `present_lead_ms` | u32 | `null` (decoder-dependent) | How far ahead of its present instant a frame is queued, 0–1000 ms, so a delivery burst is served from a backlog instead of stalling the present. It costs exactly that much added display latency. **Unset is not the same as `0`**: with the field absent the lead is picked from the decoder that is actually running — the RKMPP zero-copy path gets **200 ms** (where its dose-response saturates; the elbow is ~120 ms), every other backend gets **0** and is bit-for-bit unchanged. Set `0` to disable it explicitly where the latency matters more than the stutter. Clamped at run time to what the decode queue can hold (a third of its depth) — a deeper lead spills onto `frames_dropped_mpsc_full` instead of buffering. **Applies only to outputs with no `audio_device`**: an audio-enabled output paces against the measured ALSA playout position and ignores this entirely. |
 | `present_vblank_cadence` | bool | `false` | Assign each frame to whole vblanks on the panel's real raster instead of computing a wall-clock present instant and hoping it lands on the right one. At 25p on a 50 Hz panel it holds every frame for 2 vblanks; at 24p on 60 Hz it generates true 2:3 pulldown (3,2,3,2); crystal drift is absorbed as one longer or shorter hold per beat instead of a continuous sub-frame slide. It engages only where the flip clock has earned trust, the measured rates give a schedulable ratio, and the source rate has stabilised — anything else silently keeps the wall-clock path, and a source faster than the panel (60p on 50 Hz) is declined outright because that needs frame *dropping*, a different algorithm that is not implemented. **Video-only outputs**: an output with an `audio_device` paces against ALSA, so the resolver declines to engage. **Off by default pending fleet validation.** |
 
@@ -102,7 +102,7 @@ The audio task is the master clock. The display task vsync-paces to the connecto
 - Frames more than one frame-period ahead are **held** for an extra vsync (`frames_repeated`).
 - An ALSA xrun (`EPIPE`) recovers via `snd_pcm_prepare()` and is counted in `audio_underruns` — the audio clock keeps moving but the renderer doesn't nudge it, so the dup/drop algorithm naturally re-aligns.
 
-The video-vs-audio offset is published as a signed EMA on the per-output `display_stats.av_sync_offset_ms`. Sustained drift > 100 ms for 3 s emits a `display_av_drift` Warning event.
+The video-vs-audio offset is published as a signed EMA on the per-output `display_stats.av_sync_offset_ms`. No event is raised on drift — the manager polls the field continuously. For late frames read `frames_dropped_late` and the `display_frame_loss_sustained` event.
 
 ## Supported codecs
 
@@ -135,16 +135,21 @@ Hosts that reject atomic ioctls (`EOPNOTSUPP` from the kernel, or `EINVAL` on th
 
 Setting `show_audio_bars: true` discovers a second KMS plane (Overlay-type, with Cursor as a fallback) that the CRTC can drive in `DRM_FORMAT_ARGB8888`. The display task allocates a panel-width × strip-height ARGB8888 dumb buffer and paints translucent-black backgrounds (alpha=0x80) plus opaque bars (alpha=0xFF) into it; the overlay composes at vblank in a single atomic commit alongside the prime framebuffer.
 
-The overlay stays on the zero-copy video path — there's no CPU-blit demotion of the underlying video frame when bars are enabled.
+The same strip also carries a left-aligned, single-line **stream-info header** — codec name, `WxH`, source fps, `HDR-PQ` / `HDR-HLG`, `BT.2020`, `V:0x<pid>`, `A:0x<pid>`, `PROG <n>` — painted in a warm amber tint so it reads apart from the white per-block audio labels. Fields drop out until the demuxer has locked them rather than showing `0x0` / `0p` placeholders, the line is truncated to whatever room is left of the leftmost meter block, and it is skipped entirely below 72 px of space.
+
+The overlay keeps the video on the zero-copy path only where that second plane can actually be programmed. Where it can't — a host stuck on legacy `set_crtc` (multi-plane composition needs atomic commit), no Overlay / Cursor plane the CRTC will drive in ARGB8888, or a panel too short for the strip — the edge deliberately downloads each hardware surface (VAAPI, or RKMPP's DRM_PRIME) to sysmem and CPU-blits it, so the bars stay visible at the cost of one PCIe transfer per frame. That fallback applies at **1920x1080 and below only**: above the software-blit ceiling the video stays zero-copy and the bars simply do not render. Read `display_stats.bars_overlay_enabled` (`false` = no plane, CPU bake) alongside a rising `download_count`.
 
 ## Capacity
 
 Each running display output consumes resource-budget units on the edge:
 
-- **1080p30 software decode** → 275 units (250 video + 5 audio + 20 KMS).
-- **4K60 software decode** → ~1025 units. Without HW decode that's likely to fall behind on most CPUs — the manager surfaces a `display_decoder_overload_predicted` hint in the validation pane when you save the flow.
+- **CPU decode** → a flat **275 units** (libavcodec decode + libswscale convert + the KMS render and audio path).
+- **Hardware decode** (NVDEC / QSV / VAAPI / RKMPP) → a flat **100 units**, plus one session booked against that backend's family limit. The two tiers are alternatives, not additions — an output is charged one or the other, decided by the same decoder resolver `start_output()` uses.
+- **`show_audio_bars`** → **15 units** on top, for the independent multi-PID audio decoder behind the meters.
 
-The edge also enforces **per-connector uniqueness** — only one active display output per `(device, audio_device)` pair. A second one is rejected with `display_device_busy`.
+The figure is **resolution-independent**: the cost plan carries no source resolution, so a 4K output is charged exactly what a 1080p one is. Budget the difference yourself when you put 4K on a CPU-decoded output.
+
+The edge does **not** reject a second display output on the same `(device, audio_device)` pair. Config validation logs a warning and accepts both, because two redundant flows mapped to one confidence monitor is a supported arrangement. At run time a per-edge claim registry serialises them first-come-first-served: the first output to start holds the connector, the others park and emit Info `display_output_waiting` (details carry `queue_position` plus the holder's `holder_flow_id` / `holder_output_id`), then Info `display_output_acquired` when they are promoted. The manager refuses the duplicate up front instead — see `display_device_busy` below.
 
 ## Events and error codes
 
@@ -154,12 +159,12 @@ Most of these are filed under the `display` event category with `details.output_
 |---|---|---|
 | `display_started` | Info | Modeset succeeded, ALSA opened (or muted), first frame queued. |
 | `display_stopped` | Info | Cancellation token fired. Includes lifetime `frames_displayed`, `frames_dropped_late`, `audio_underruns`. |
-| `display_device_unavailable` | Critical | KMS connector vanished mid-flow (cable unplug observed via udev or `drmModeGetConnector`). |
 | `display_mode_set_failed` | Critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
 | `display_audio_open_failed` | Critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
 | `display_subscriber_lagged` | Warning | broadcast `Lagged(n)`; rate-limited to one event / second. The decoders flush and resync on the next IDR. |
 | `display_hdr_tonemap_active` | Warning | HDR source landed on an SDR panel. The decode falls back to sysmem download + CPU LUT tonemap. Fires once per flow start. |
 | `display_atomic_unavailable` | Warning | Kernel rejected the atomic-commit ioctl. The output falls back to legacy `set_crtc` per-frame. Fires once per output start. |
+| `display_hw_decode_unavailable_falling_back` | Warning | The backend named in `hw_decode` is not compiled into this build, or the host cannot provide it. Decided at output start, before a decoder is opened: the output runs on CPU instead. Details carry `preference`, `reason` (`feature_disabled` / `driver_missing` / `probe_unavailable`) and `fell_back_to: "cpu"`. |
 | `display_hw_decode_unavailable` | Warning | The requested HW backend could not be opened on this host — four attempts (immediate, then 50 ms, 100 ms, 200 ms) — so the output ran on CPU decode instead, for the rest of the run. `decoder_kind` then reports `"cpu (hw unavailable)"`. This one is **not** retried by `display_hw_decode_repromote`: the backend never opened, so there is no working session to re-arm. |
 | `display_hw_decode_runtime_failed` | Warning | A HW decoder that had opened successfully failed mid-stream, and the output demoted to CPU. |
 | `display_hw_decode_no_frames` | Warning | The HW decoder accepted packets but produced no frame inside the watchdog window, so the output demoted to CPU. |
@@ -168,11 +173,13 @@ Most of these are filed under the `display` event category with `details.output_
 | `display_frame_loss_recovered` | Info | The shortfall cleared. |
 | `display_deinterlace_engaged` | Info | An interlaced source was detected; bob deinterlacing engaged and fields are presented at 2× frame rate. |
 | `display_input_switch_acquiring` | Info | A Take was detected on the flow and the output is waiting for the new source's first IDR. |
+| `display_input_switch_acquired` | Info | The new source is on the panel; details carry `elapsed_ms`. |
+
+This table covers the display events you meet in normal operation. The full catalogue — including the claim-registry pair, the HW-decode reset / MPEG-2 pin family, the VAAPI and RKMPP PRIME-export failures and the unsupported-pixel-format cases — is in [Edge events and alarms](/edge/events-and-alarms/).
 
 :::note[Two events you may have seen referenced do not exist]
 `display_decoder_overload` and `display_av_drift` have been described in older material, but the edge has **no emitter for either** — they cannot fire, so do not build an alarm rule on them. Read the underlying condition directly instead: late frames are on `frames_dropped_late` and the frame-loss events above, and live A/V offset is on `av_sync_offset_ms`, which the manager polls continuously rather than waiting to be told about.
 :::
-| `display_input_switch_acquired` | Info | The new source is on the panel; details carry `elapsed_ms`. |
 
 Save-time errors that surface as `command_ack.error_code` on `add_output` / `update_config`:
 
@@ -183,8 +190,8 @@ Save-time errors that surface as `command_ack.error_code` on `add_output` / `upd
 | `display_resolution_unsupported` | The connector advertises no usable mode for the source, or KMS refused the chosen mode. Not driven by the deprecated `resolution` / `refresh_hz` fields. |
 | `display_program_not_found` | After 5 s, the demuxer hasn't seen the configured `program_number` in the PAT. |
 | `display_audio_track_not_found` | Configured `audio_track_index` exceeds the PMT's audio-stream count. |
-| `display_device_busy` | Another active output already claimed this `(device, audio_device)` pair. |
-| `display_decoder_overload_predicted` | Validation-time hint when 4K60 is requested without HW decode. Does **not** block save — informational only. |
+
+One code you will meet that is **not** on that list: `display_device_busy`. It comes from the manager, not the edge — adding or editing a display output whose `(device, audio_device)` pair is already used on that node is refused with HTTP 422 and `error_code: "display_device_busy"` before any command reaches the wire. The edge itself never emits it; a duplicate pair that arrives in `config.json` is accepted and queued by the claim registry instead.
 
 ## Per-output stats
 
@@ -217,10 +224,10 @@ The manager renders the resolution annotation as `display (1920x1080@60Hz)` in t
 - Connector hotplug is picked up by a 10-second background poll rather than a udev event, so a newly plugged monitor can take ~10 s (plus one ~15 s health tick) to reach the manager's `display_devices` list.
 - `present_vblank_cadence` is off by default pending fleet validation, and never engages on an output that has an `audio_device` — locking video to the panel raster is only sound once audio is resampled to the same clock, which the edge does not do yet.
 - Multichannel passthrough over HDMI is not supported — multichannel sources are downmixed to stereo on the configured `audio_channel_pair`.
-- One active display output per connector — cross-output uniqueness is enforced via `display_device_busy`.
+- Only one display output can hold a connector at a time. Duplicates are legal in `config.json` — the edge queues them on its claim registry rather than rejecting them — but the manager's own preflight refuses the pair with HTTP 422 `display_device_busy` when you add or edit the output through the UI or REST API.
 - Closed captions and SCTE-104 cue display are not rendered. The decoded raw video is what reaches the screen.
 - HDR signalling is supported (BT.2020 + PQ / HLG) when the panel reports `HDR_OUTPUT_METADATA`; non-HDR panels fall back to CPU LUT tonemap with one `display_hdr_tonemap_active` warning per flow start.
-- The auto decoder priority follows the [codec matrix](/edge/codec-matrix/) — operators can pin a specific backend via `hw_decode`. Backends not compiled into this build, or unsupported on the host, are rejected at output validation.
+- The auto decoder priority follows the [codec matrix](/edge/codec-matrix/) — operators can pin a specific backend via `hw_decode`. A pinned backend that is missing from this build, or unusable on this host, is **not** rejected: the output starts on CPU decode and raises a Warning `display_hw_decode_unavailable_falling_back` carrying `preference`, `reason` and `fell_back_to: "cpu"`. The picture stays on screen; watch the events, not the save dialog.
 
 ## Where to read next
 

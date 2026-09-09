@@ -395,7 +395,7 @@ Sign in with the admin credentials you set in step 4. From here:
 
 - **Add nodes** at `/admin/nodes` — each issues a one-shot **registration token** to paste into the matching edge / relay / sidecar setup wizard.
 - **Create groups** at `/admin/groups` — multi-tenant Groups, optional but recommended if you have more than one team.
-- **Apply a license** at `/admin/license` — free tier supports a small number of nodes. HA, SSO, Backup, and Replay are paid features. Contact `contact@bilbycast.com`.
+- **Apply a license** at `/admin/settings` → the **License** section — paste the key into **License Key** and press **Apply License**. Free tier supports a small number of nodes. HA, SSO, Backup, and Replay are paid features. Contact `contact@bilbycast.com`.
 
 ## TLS
 

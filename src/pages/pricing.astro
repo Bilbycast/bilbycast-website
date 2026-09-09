@@ -61,9 +61,13 @@ const managerTiers: Tier[] = [
     description:
       'Self-host bilbycast-manager under the free Community tier of the bilbycast-manager End-User Licence Agreement (EULA). Suitable for evaluation, small plants, and teams running Bilbycast for their own broadcast operation — up to ten managed nodes, no fee, no time limit on the licence itself.',
     features: [
-      'Up to 10 managed nodes (edges + relays combined)',
+      'Up to 10 managed nodes (edges, relays, and third-party gateways combined)',
       'Full management UI — topology view, flow config, real-time stats, thumbnails',
       'Live Switcher — PGM/PVW director console with Take, presets, and per-tenant pages',
+      'Replay — per-flow JKL scrub, clip library, and push-to-air',
+      'Visual Flow Editor — draw a unit on a canvas, or several units on one master graph, with global, per-group and per-zone address pools',
+      'Node Bus Matrix — three-pane crosspoint authoring with click-to-wire and drag-and-drop',
+      'Multiviewer Wall Control — layout stage, tile routing, and salvo recall (needs an edge advertising the mv-compositor capability)',
       'Routines — cron-scheduled flow automation with DST-correct IANA timezones',
       'Multi-tenant Groups with per-tenant logo + brand-colour theming (white-label out of the box)',
       'On-edge Media Library — browser upload of slates, loops, and emergency-fallback content',
@@ -108,7 +112,7 @@ const managerTiers: Tier[] = [
       'For broadcasters running 24×7 critical infrastructure and vendors embedding Bilbycast inside their own appliance or hosted service.',
     features: [
       'Everything in Commercial',
-      'Active/Active HA — two manager instances against a shared Postgres 18 cluster, with cross-instance pubsub and per-region observability (licensed feature)',
+      'Active/Active HA — multiple manager instances against a shared Postgres 18 cluster, with cross-instance pubsub and per-region observability (licensed feature)',
       '24×7 broadcast-critical SLA with a dedicated engineer',
       'Redistribution rights beyond the EULA default — host the manager as a service, ship it inside an appliance',
       'AGPL commercial exemption for edge + relay when bundled in closed-source products',
@@ -158,7 +162,7 @@ const faqs = [
   },
   {
     q: 'How is a "managed node" counted?',
-    a: 'Every edge node and every relay server connected to a single manager instance counts as one managed node. Ten edges and zero relays is ten nodes. Seven edges and three relays is also ten nodes.',
+    a: 'Every device registered against a single manager instance counts as one managed node — edge nodes, relay servers, and third-party devices such as Appear X gateways alike, whether or not they are currently connected. A node registered but never brought online still holds its slot. Ten edges and zero relays is ten nodes; seven edges, two relays and one Appear X gateway is also ten.',
   },
   {
     q: 'What is community support?',

@@ -1,18 +1,18 @@
 ---
 title: Remote Upgrade
-description: Upgrade edge nodes and gateway sidecars from the manager UI. Sigstore-verified, with automatic rollback on a bad release.
+description: Upgrade edge nodes from the manager UI. Sigstore-verified, with automatic rollback on a bad release.
 sidebar:
   order: 13
 ---
 
-The manager can upgrade every connected edge node and gateway sidecar over the existing WebSocket link — no SSH, no shell scripts on each box, no fleet-wide outage during a rolling release. Operators pick a version in the manager UI; the target node downloads + verifies the new build, atomically swaps a symlink, and respawns under systemd.
+The manager can upgrade every connected edge node over the existing WebSocket link — no SSH, no shell scripts on each box, no fleet-wide outage during a rolling release. (Gateway sidecars speak the same upgrade protocol, but the manager can't yet resolve their releases — see below.) Operators pick a version in the manager UI; the target node downloads + verifies the new build, atomically swaps a symlink, and respawns under systemd.
 
 This page is the operator's runbook. The cryptographic trust model and the edge-side staging machinery live in the [edge upgrade reference](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/upgrade.md) and the [security model](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/security.md) — those documents matter if you're auditing the supply chain. Most operators only need this page.
 
 ## What the manager can upgrade
 
-- **bilbycast-edge** nodes
-- **Gateway sidecars** built on `bilbycast-gateway-sdk` — today that means [bilbycast-appear-x-api-gateway](/appear-x-gateway/setup-guide/), and any future first- or third-party sidecar that opts into the same machinery
+- **bilbycast-edge** nodes — the only device type the UI can actually upgrade today.
+- **Gateway sidecars** built on `bilbycast-gateway-sdk` — **not yet upgradeable from the UI.** The sidecar half is finished: [bilbycast-appear-x-api-gateway](/appear-x-gateway/setup-guide/) advertises the `"upgrade"` capability unconditionally and handles `upgrade_binary` through the SDK, so the **Upgrade…** button renders on its row. But the manager's release index maps only `edge` → `Bilbycast/bilbycast-edge` and returns an empty list for every other device type, so the modal's version dropdown reads *No releases available* and **Stage upgrade** refuses with *Select a version first.* Until the per-sidecar repo mapping lands, upgrade a sidecar by [re-running its installer on the box](#recovering-a-node-whose-upgrader-is-stuck).
 
 Manager and relay binaries are upgraded **manually** today. The same Sigstore-signed releases ship for them, but there's no manager-driven rollout — see [Install the manager](/manager/getting-started/) and [Install the relay](/relay/getting-started/) for the manual flow (and the optional Sigstore-verification step on each).
 
@@ -35,23 +35,32 @@ Both installers lay out `/opt/bilbycast/<service>/{current,versions/<v>/,state.j
    - **stable** is the only channel published today.
    - The dropdown lists the most recent ~10 releases. Pick the one you want.
 6. Click **Stage upgrade**.
-7. The modal closes and the node row's Version column starts showing a small badge:
-   - `upgrading` — the edge is staging (downloading + verifying + extracting + symlink swap)
+7. The modal closes and the node row's Version column starts showing a small badge, followed by `→ <target version>`:
+   - `upgrading` — the edge is staging (downloading + verifying + extracting + symlink swap). This is the catch-all label: the distinct database states `requested`, `downloading` and `staged` all render as `upgrading`.
    - `updated` — completed; the node is now running the new version
    - `upgrade failed` — staging rejected the release. Hover for the structured `error_code` (e.g. `upgrade_signature_invalid`, `upgrade_checksum_mismatch`, `upgrade_disk_full`).
+   - `rolled back` — the boot watchdog reverted the symlink and the node is back on its previous version. Amber, like `upgrade failed`. See [Rollback — automatic](#rollback--automatic).
 
-Steady-state, the whole flow takes ~30 seconds for a small binary on a fast link. The node briefly disconnects from the WebSocket while systemd respawns it; the manager treats that as an in-flight upgrade and waits for the new binary to re-authenticate with the new `software_version`.
+Steady-state, the whole flow takes ~30 seconds for a small binary on a fast link. The node briefly disconnects from the WebSocket while systemd respawns it; the manager treats that as an in-flight upgrade and waits for the new binary to re-authenticate with the new `software_version`. The one node-side setting that stops the flow part-way is `upgrades.manual_only` — see the [Troubleshooting](#troubleshooting) row for the badge it leaves stuck.
 
-## Group bulk rollout (UI)
+## Group bulk rollout (API only)
 
-For larger fleets the per-node flow is tedious. Group Admin users can roll out a release across every node in a group with one action:
+For larger fleets the per-node flow is tedious. A group-wide rollout exists, but **only as a REST call — there is no "Upgrade group" button on `/admin/groups` today.** Issue it directly:
 
-1. Navigate to **Groups** (`/admin/groups`) and pick the target group.
-2. Click **Upgrade group**.
-3. Pick `(version, channel)` and a strategy:
-   - **Staged (recommended)** — the manager fans out the upgrade in three waves: 10% canary → 50% wave → 100% wave, with a 5-minute settle window between waves. If any node in a wave fails staging, the orchestrator **pauses** and the remaining waves do not run. You retry after fixing the underlying issue.
-   - **Immediate** — every node in parallel. Use this for small clusters or test environments.
-4. Click **Stage rollout**. The modal returns immediately with the wave plan; the actual rollout proceeds in the background. Watch the **Events** page (filter category: `upgrade`) for live progress.
+```
+POST /api/v1/groups/{id}/upgrade
+{ "version": "0.109.0", "channel": "stable", "strategy": "staged" }
+```
+
+- **Permission** — **Group Admin** on that group, or SuperAdmin. Operator is not enough.
+- **`strategy`** — `"staged"` (the default if you omit it) or `"immediate"`:
+  - **Staged** — the manager fans out the upgrade in three waves: 10% canary → 50% wave → 100% wave, with a 5-minute settle window between waves. If any node in a wave fails to ack, the orchestrator **pauses** and the remaining waves do not run. You retry after fixing the underlying issue.
+  - **Immediate** — every node in parallel. Use this for small clusters or test environments.
+  - A group of two or fewer upgrade-capable nodes collapses to a single wave whichever strategy you pick.
+- **`channel`** defaults to `stable`. The optional `target_arch` and `variant` override the release asset the nodes resolve.
+- Nodes that didn't advertise the `"upgrade"` capability on their last health beat are **silently skipped**. If none of them did, the call still returns `200` with `"scheduled": 0` and a `note` saying so.
+
+The call returns immediately with `scheduled` and the `waves` plan; the rollout itself proceeds in the background. Watch the **Events** page (filter category: `upgrade`) or the per-node version badges for live progress.
 
 ## Rollback — automatic
 
@@ -77,7 +86,7 @@ The same trust roots are used by the curl-pipe-bash installer at first install, 
 
 ## Audit trail
 
-Every upgrade attempt is recorded in the audit log (`/admin/audit`):
+Every upgrade attempt is recorded in the audit log (`/admin/audit-log`):
 
 | Action | Trigger | Details |
 |---|---|---|
@@ -94,6 +103,7 @@ Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_sta
 |---|---|---|
 | Upgrade button missing | Node's last health beat didn't advertise `"upgrade"` capability | The node predates the remote upgrade module. [Manually upgrade it once](/edge/getting-started/#manual-upgrade) — after that the button appears and all future upgrades work from the UI. |
 | `upgrade_disabled` | Operator left `[upgrade] enabled = false` (or omitted the `upgrades` section) in the node's local config | SSH to the node, add or fix the `"upgrades": { "enabled": true, "allowed_channels": ["stable"], "install_root": "/opt/bilbycast/edge" }` block in `/opt/bilbycast/edge/config.json`, restart the service. |
+| Badge stuck on `upgrading`, no failure recorded, node still on the old version | The node's `config.json` has `"upgrades": { "manual_only": true }`. The edge verifies and downloads the release, then returns `upgrade_staged_manual` **before extracting anything** — no `versions/<new>/` directory is created. The manager maps that code to the database state `staged`, which the badge renders as `upgrading`, so it sits there indefinitely. | Confirm it on the **Events** page (category `upgrade`, look for `upgrade_staged_manual`). The only remedy today is to set `manual_only` back to `false` on the node, restart the service, and re-issue the upgrade — there is no way to apply a manually-staged upgrade in place. |
 | `upgrade_channel_not_allowed` | Node's `[upgrade] allowed_channels` doesn't include the requested channel | Add the channel locally and restart. |
 | `upgrade_version_too_old` | Node's `[upgrade] min_version` is higher than the requested version | Pick a newer version. |
 | `upgrade_signature_invalid` / `upgrade_identity_not_allowed` | The manifest's Sigstore signature didn't pass — either tampering or a release workflow path that doesn't match the node's compiled-in allowlist | If you renamed the release workflow recently, you must publish a new release from the OLD workflow first that carries the new allowlist. |

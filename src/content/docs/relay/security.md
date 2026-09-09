@@ -115,16 +115,17 @@ This connection is the channel the manager uses to call `authorize_tunnel`, `rev
 
 ## Layer 6 — Viewer distribution (`-distribution` builds only)
 
-The optional `viewer-distribution` role adds a **browser-facing HTTP listener** (default `:4485`). It is a separate surface from the REST API on `:4480` and from the QUIC and native-UDP data planes, it is **not** covered by `api_token`, and it carries `/whep/{stream}`, `/whip/{stream}`, `/watch/{stream}`, `/origin/{stream}/{file}` and `/distribution/health`. A plain forwarder build does not have it at all.
+The optional `viewer-distribution` role adds a **browser-facing HTTP listener** (default `:4485`). It is a separate surface from the REST API on `:4480` and from the QUIC and native-UDP data planes, it is **not** covered by `api_token`, and it carries `/distribution/health`, `POST /whep/{stream}` + `DELETE /whep/{stream}/{session_id}`, `POST /whip/{stream}` + `DELETE /whip/{stream}/{session_id}`, `GET /watch/{stream}`, `GET /dvr/{stream}` (the browser DVR player, which scrubs back over whatever `origin_retention_secs` still holds — a wider read surface than `/watch`) and `GET /dvr/hls.js` (the vendored `hls.js` bundle that page loads), and `PUT` / `GET /origin/{stream}/{file}`. A plain forwarder build does not have it at all.
 
-Two independent gates, and they do not cover the same thing:
+Three independent gates, and they do not cover the same thing:
 
 | Gate | Default | Covers |
 |---|---|---|
 | `require_ingest_token` | **true** | The write surfaces — the WHIP offer and the edge's `PUT /origin/{stream}/{file}` |
-| `require_viewer_token` | false | **WHEP only** — `GET /origin/{stream}/{file}` is unauthenticated in every mode |
+| `require_viewer_token` | false | **WHEP only** — it does not reach `GET /origin/{stream}/{file}` |
+| `require_origin_token` | false | `GET /origin/{stream}/{file}` — the CMAF / LL-HLS read tier. Off by default so a CDN can pull it; turn it on per session for a gated audience with no CDN in front |
 
-The ungated origin `GET` is deliberate: it is the CDN-facing half, and a CDN pulls it with no credential of the relay's. It also means that for any stream also running the LL-HLS tier, the viewer gate is bypassable by fetching `/origin/{stream}/index.m3u8`. Restrict the listener at the network or reverse-proxy layer if that matters. See [Viewer Distribution — Access control](/relay/viewer-distribution/#access-control).
+The ungated origin `GET` is the deliberate **default**, not a fixed property: it is the CDN-facing half, and a CDN pulls it with no credential of the relay's. Left off, it also means that for any stream also running the LL-HLS tier, the WHEP viewer gate is bypassable by fetching `/origin/{stream}/index.m3u8`. `require_origin_token: true` closes that; restrict the listener at the network or reverse-proxy layer instead if a CDN needs the open path. The manager pushes all three gates over `configure_distribution` and the relay persists all three to `relay.json`, so they survive a restart. A relay that advertises the `origin-policy` capability is one whose build understands the third gate — an older build acks the push and silently ignores it, which fails open. See [Viewer Distribution — Access control](/relay/viewer-distribution/#access-control).
 
 Tokens are minted by the manager, scoped (`viewer` or `ingest`) to a single stream, and expiring; the relay validates them statelessly with no database and no revocation path. **Front the listener with TLS.** Browsers require a secure context anyway, and without a TLS terminator the `?token=` form of a viewer credential crosses the wire in clear and lands in the proxy's default access log.
 
@@ -139,7 +140,7 @@ For production deployments:
 - [ ] Configure the manager to issue `authorize_tunnel` for every tunnel, then set `require_bind_auth: true` in the relay config so an un-authorised tunnel is refused rather than admitted. Do this only on a manager-driven relay — strict mode fails closed on both planes. If you do not carry native SRT/RIST or bond legs over this relay, `udp_relay_enabled: false` removes the plane where an unauthenticated bind can move live media.
 - [ ] Distribute `tunnel_encryption_key` only via the manager, never out-of-band by hand.
 - [ ] On edge configs, prefer `cert_fingerprint` over `accept_self_signed_cert`.
-- [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433), the native-UDP carrier port (default 4434, if you use native SRT/RIST or bond legs over relay), and the REST API port to the systems that need them.
+- [ ] Run the relay behind a firewall that only exposes the QUIC port (default 4433), the native-UDP carrier port (default 4434, if you use native SRT/RIST or bond legs over relay), and the REST API port to the systems that need them. On a `-distribution` build add the two listeners the role opens: `:4485` (browser HTTP signaling + origin) and `:4486` (QUIC ES ingest, ALPN `bilbycast-distribution`). `distribution.enabled` defaults to **true**, so both are open with no operator action unless you set it false.
 - [ ] Monitor the relay's `event` stream for bind-rejection events (category `tunnel`, message _"Tunnel bind rejected: invalid token"_) and for the structured `relay_dos_suspect` DoS identifier raised when a source trips the per-IP connection or per-connection tunnel-bind caps — repeated hits indicate either misconfiguration or an active attack.
 
 ## What the relay logs and what it doesn't

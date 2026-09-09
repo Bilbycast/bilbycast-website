@@ -275,8 +275,9 @@ When the bond pins a path to an interface (the `interface` field →
 finds *its* default route → out the right modem. The high metric keeps these
 off the host's real default route, so un-pinned traffic still uses your
 management/WAN link. That's the whole routing story — **no policy tables, no
-`ip rule` juggling** (those are only needed for the shared-interface
-[alternative](#alternative-one-interface-multiple-ips) below).
+`ip rule` juggling**. Those are only needed for the shared-interface designs
+below, where the edge either programs them for you (gateway mode) or you write
+them yourself (the [alternative](#alternative-one-interface-multiple-ips)).
 
 Then set **loose reverse-path filtering** on the modem interfaces so
 asymmetric/multi-homed return traffic isn't dropped (netplan can't set this;
@@ -295,9 +296,59 @@ sudo sysctl --system      # re-run after netplan apply (the sub-ifs must exist)
 Per-interface `rp_filter` wins via `max(conf.all, conf.<iface>)`, so this
 relaxes only the modem interfaces — the rest of the host stays strict.
 
+## Gateway mode — several legs on one NIC, routed by the edge
+
+If the modems sit on one L2 segment behind one NIC — the dumb-switch topology —
+you don't have to hand-maintain the policy tables at all. Set **`gateway`,
+`source` and `interface` together** on a bonded **output** leg and the edge
+programs the policy route itself over netlink when the flow starts:
+
+```json
+{
+  "type": "udp",
+  "remote": "203.0.113.5:5000",
+  "interface": "enp3s0",
+  "source": "10.0.11.2/24",
+  "gateway": "10.0.11.1"
+}
+```
+
+For each such leg the edge adds the `source` address to the NIC (idempotent),
+installs `default via <gateway>` in a private routing table, and adds an
+`ip rule from <source-ip> lookup <table>` pointing at it. Nothing goes in your
+netplan.
+
+**What it needs and what it enforces:**
+
+- `CAP_NET_ADMIN` — granted by the packaged systemd unit
+  (`AmbientCapabilities=CAP_NET_ADMIN`).
+- `gateway` is **sender-side only** on a plain UDP leg: it's rejected on a
+  bonded input, because the receiver's return path uses the host default route.
+- `gateway` requires **both** `source` and `interface`, and `source` is rejected
+  without `gateway`. The gateway must be the same IP family as `source` and
+  inside its prefix, or the leg is refused at validation.
+- Don't set `bind` — in gateway mode the socket's bind address is derived from
+  `source`.
+
+**The reserved slice** it allocates from: routing tables **48128–48383**
+(base from `BILBYCAST_BOND_RT_TABLE_BASE`, default `48128` = `0xBC00`) and
+`ip rule` priorities **10000–10255** (base from `BILBYCAST_BOND_RT_PRIO_BASE`),
+one slot per leg, so **256 concurrent gateway-mode legs** per host. Override
+either base if it collides with tables you already use — see
+[Environment Variables](/reference/environment-variables/). The edge sweeps
+orphaned entries out of those ranges once per process, before it programs the
+first leg (so a crash doesn't leak routes), and tears down each leg's table and
+rule when its flow stops.
+
+Field-by-field reference for these three keys is in
+[Multi-Path Bonding](/edge/bonding/).
+
 ## Alternative: one interface, multiple IPs
 
-If you can't give each path its own interface, put **all modems on one L2
+The same one-NIC topology can be wired by hand instead, and that's what you
+fall back to for legs gateway mode can't serve — a bonded **input**, or a
+DHCP Wi-Fi leg with no static `source` to key a rule on (routed by `oif`
+[below](#wi-fi--starlink-uplinks-as-a-bond-leg)). Put **all modems on one L2
 segment and the host on one interface with multiple IPs**, then bind each bond
 path to a different **source IP** (the path's `bind` field) instead of an
 interface. (You no longer need this just because you can't grant `CAP_NET_RAW` —

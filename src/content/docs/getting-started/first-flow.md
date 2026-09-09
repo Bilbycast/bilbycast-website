@@ -19,43 +19,47 @@ Input (SRT) ──► broadcast channel ──► Output 1 (RTP)
 
 ## Step 1 — Open the node config page
 
-In the manager, go to **Admin → Nodes** and click the edge you just registered. Then click **Configure**. The config page shows three tabs: **Inputs**, **Outputs**, **Flows**.
+In the manager, go to **Admin → Nodes** and click the edge you just registered. Then click **Configure**. The config page opens on the **Flows** tab, alongside **Inputs**, **Outputs**, **IP Tunnels** and **Uplink Monitoring** — plus a **Tuning** tab on nodes that advertise the `node_tuning` capability.
 
-<!-- TODO screenshot: node config page with three tabs visible -->
+<!-- TODO screenshot: node config page with the tab strip visible -->
 
 ## Step 2 — Add an SRT input
 
-1. **Inputs** tab → **+ Add Input**.
+1. **Inputs** tab → **New Input**.
 2. Pick **SRT** as the type.
 3. Set:
-   - **Name**: `Source feed`
+   - **Input ID**: `in-srt` — required; the name auto-fills from it if you leave it blank
+   - **Input Name**: `Source feed`
    - **Mode**: `Listener`
-   - **Local port**: `9000`
+   - **Local Address**: `0.0.0.0:9000`
    - **Latency (ms)**: `120`
-4. **Save**. The new input appears in the list with a status pill — yellow until the first sender connects.
+4. **Create Input**. The new input appears in the list with a status pill — yellow until the first sender connects.
 
 ![Add Input modal — protocol picker expanded over the SRT entry, with name, mode, port, and latency fields](../../../assets/screenshots/inputs-config-example.png)
 
 ## Step 3 — Add an RTP output
 
-1. **Outputs** tab → **+ Add Output**.
+1. **Outputs** tab → **New Output**.
 2. Pick **RTP** as the type.
 3. Set:
-   - **Name**: `Local preview`
-   - **Destination**: `127.0.0.1:5004`
-4. **Save**.
+   - **Output ID**: `out-rtp`
+   - **Output Name**: `Local preview`
+   - **Destination Address**: `127.0.0.1:5004`
+4. **Create Output**.
 
 ![Add Output modal — same protocol picker on the output side, with destination + latency + key fields](../../../assets/screenshots/output-config-example.png)
 
 ## Step 4 — Wire them into a flow
 
-1. **Flows** tab → **+ Add Flow**.
+1. **Flows** tab → **New Flow**.
 2. Set:
-   - **Name**: `My first flow`
+   - **Flow ID**: `my-first-flow`
+   - **Flow Name**: `My first flow`
+   - **Flow Type**: leave on `Standard — has outputs`
    - **Inputs**: select `Source feed`
    - **Outputs**: select `Local preview`
-   - **Enabled**: ✓
-3. **Save**. The flow appears with a green dot once both ends settle.
+   - **Enabled**: `Yes - Start on apply`
+3. **Apply to Node**. The flow appears with a green dot once both ends settle.
 
 ![Flow list — green status pill with input + output chips and a live thumbnail of the on-air content](../../../assets/screenshots/flows.png)
 
@@ -83,7 +87,7 @@ Or in VLC: **Media → Open Network Stream → `rtp://@:5004`**.
 
 ## Adding more outputs
 
-Open the flow, click **Edit**, and add another output ID under **Outputs**. Each output subscribes independently — you can add an RTP multicast, an SRT push to a remote site, and an RTMP push to YouTube on the same flow without affecting the others.
+Open the flow, click **Edit**, add another output under **Outputs**, and **Save Changes** (on an existing entity all three modals relabel their submit button to that). Each output subscribes independently — you can add an RTP multicast, an SRT push to a remote site, and an RTMP push to YouTube on the same flow without affecting the others.
 
 ## What to read next
 

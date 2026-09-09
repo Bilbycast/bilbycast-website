@@ -49,8 +49,12 @@ A bonded hop rides between two edges:
 Each edge runs **one flow**. The `bonded_output` on edge A and the
 `bonded_input` on edge B are peered by matching `bond_flow_id`.
 
-Each packet is framed with a 12-byte bond header carrying a 32-bit
-sequence number, a path ID, and a priority hint. The scheduler on
+Each packet is framed with a bond header — 12 bytes, or 16 bytes on a
+leg whose far end has advertised per-leg equalization (the default, so
+a steady-state bond between two modern edges runs the 16-byte form) —
+carrying a 32-bit sequence number, a path ID, and a priority hint. The
+sender falls back to the 12-byte header at cold start and permanently
+against an equalization-off or older peer. The scheduler on
 the sender decides which path(s) each packet rides; the receiver
 reorders across paths using a sequence-keyed reassembly buffer and
 NACKs lost packets back to the sender.
@@ -75,11 +79,12 @@ packets. Non-IDR frames go where they're cheapest, so you don't pay
 
 ## Path transports
 
-Each bond leg uses one of three per-path transports:
+Each bond leg uses one of four per-path transports:
 
 | Transport | When | Features |
 |---|---|---|
 | **UDP** | Simplest, broadest device support | Bidirectional. Plaintext. Use when the NAT allows it and you don't need per-leg TLS |
+| **Relay** | Both ends behind NAT, or you want a fixed rendezvous | Bidirectional. The leg rides a native plain-UDP relay tunnel **in-process** — see [Bonding over a relay](#bonding-over-a-relay-per-leg) |
 | **QUIC** (RFC 9221 DATAGRAM) | Need per-leg TLS 1.3 | Bidirectional. ALPN `bilbycast-bond`. Self-signed mode for trusted LAN / loopback, PEM mode for production |
 | **RIST** (VSF TR-06-1 Simple Profile) | Config-file only — see note | Unidirectional. Role (`sender` / `receiver`) matches the bonded input/output side |
 
@@ -100,27 +105,36 @@ bonding](#when-to-use-it) instead.
 
 Each bond leg can run **direct** (edge-to-edge over its uplink) or
 **through a relay** — independently, in any combination. A relayed leg
-is just an existing native-UDP [IP tunnel](/manager/ip-tunneling/)
-loopback-bridged onto the leg: the leg's local socket targets
-`127.0.0.1:<port>`, the tunnel carries it to the far edge, and the
-relay forwards `[tunnel_id][encrypted payload]` opaquely. The bond's
-ARQ, FEC, reordering, and capacity scheduling all run **end-to-end
-edge↔edge** — the relay never sees, terminates, or combines bond
-traffic (there is no "bond bridge"; the relay is a generic per-path
-forwarder).
+carries its own relay tunnel **in-process**: the leg's `transport` block
+is `{"type": "relay", ...}` (see [Relay path](#path-transport-blocks)),
+and the edge owns the relay socket itself — the same Register/keepalive
+rendezvous, bind-token auth and primary→backup failover a native
+SRT/RIST [IP tunnel](/manager/ip-tunneling/) uses, and the same 16-byte
+`tunnel_id` prefix on the wire, so the relay is unchanged and still
+forwards `[tunnel_id][encrypted payload]` opaquely. There is no
+`127.0.0.1` hop and no separate carrier Tunnel object to provision. The
+leg's direction is auto-derived from the side — a bonded output leg
+registers `egress`, a bonded input leg `ingress`. The bond's ARQ, FEC,
+reordering, and capacity scheduling all run **end-to-end edge↔edge** —
+the relay never sees, terminates, or combines bond traffic (there is no
+"bond bridge"; the relay is a generic per-path forwarder).
 
 This is what lets a bond work when **both ends are behind NAT**: each
-relayed leg is its own native-UDP tunnel and both edges dial out to the
-relay, so neither end needs to accept inbound connections. A *direct*
-leg, by contrast, is asymmetric — the receiving (destination) edge must
-be reachable. Mix freely: some legs direct, others via a relay, each
-leg able to use a different relay with a primary + backup for failover.
+relayed leg dials out to the relay from both edges, so neither end needs
+to accept inbound connections. A *direct* leg, by contrast, is
+asymmetric — the receiving (destination) edge must be reachable. Mix
+freely: some legs direct, others via a relay, each leg able to use a
+different relay with a primary + backup for failover.
 
-Per-leg relay routing (relay choice, backup relay, and the leg's
-uplink / NIC pin) is provisioned from the manager's **Bonded-Link
-wizard** or the **Tunnels** page — not by hand-editing the leg's
-loopback address in the bonded-output form, where such legs are shown
-locked with a *"Via relay (managed tunnel)"* note.
+A relay leg is minted by the manager's **Bonded-Link wizard** or the
+**Tunnels** page, which stamps the shared `tunnel_id` — and, on an
+unencrypted bond, the shared per-leg tunnel key — onto both ends. In
+the bonded input / output form the leg then renders under a *"Relay
+leg — dials the relay in-process"* note with its **relay address**,
+optional **backup relay** and (sender side) **source uplink NIC**
+editable in place; only the transport type, the `tunnel_id` and the
+leg key are locked, because changing either of the last two unpairs
+the two ends.
 
 ## Config reference
 
@@ -151,9 +165,9 @@ locked with a *"Via relay (managed tunnel)"* note.
 | `keepalive_ms` | u32 | 200 | Keepalive interval — drives per-path RTT / liveness |
 | `equalization` | enum | `auto` | Per-leg latency/jitter equalization (`auto` / `on` / `off`). In `auto`/`on` the receiver measures each leg's relative one-way delay and time-aligns the legs so heterogeneous high-latency/jitter legs (5G + Starlink + ISP) *aggregate* their bandwidth in-order instead of head-of-line blocking. Should match the sender's setting |
 | `max_bonding_latency_ms` | u32 | 1000 | Equalization latency budget — the ceiling for how far a fast leg is held to align a slow one, and the loss-recovery deadline while aligned. The single bonding-latency knob; should match the sender's value. Derived from `hold_max_ms` when unset |
-| `ingress_dejitter_ms` | u32 | — | Optional de-jitter depth applied to the reassembled bond stream before it reaches the flow's outputs (HDMI display, UDP/RTP egress) — the reassembler releases in-order but in HOL-gated bursts, and this smooths that burstiness. Unset / 0 = pass through. Typical 150–250 ms |
+| `ingress_dejitter_ms` | u32 | — | **Ignored on a bonded input.** The rate-paced de-jitter servo has only ±5 % rate authority, so it cannot drain the reassembler's head-of-line-gated clumps (potentially seconds deep) — the buffer backs up and the residence cap *sheds* 15–30 % of the bond's media. The bond already delivers in order, and the egress wire-emit servo (UDP/RTP) and the display A/V clock (HDMI) re-time the bursty stream losslessly downstream. Setting it above 0 logs a warning and raises a Warning `bond_ingress_dejitter_ignored` event. Use `hold_ms` / `hold_max_ms` / `max_bonding_latency_ms` to control bond latency instead |
 | `encryption_key` | string (64 hex) | — | Optional 32-byte ChaCha20-Poly1305 AEAD key opening the encrypted (UDP) legs — must match the sender's key |
-| `fec` | object | — | Optional proactive FEC — must match the sender's geometry |
+| `fec` | object | — | Optional proactive FEC — must match the sender's geometry. See [Proactive FEC](#proactive-fec) |
 
 ### Bonded output (sender)
 
@@ -165,8 +179,7 @@ locked with a *"Via relay (managed tunnel)"* note.
   "active": true,
   "bond_flow_id": 42,
   "paths": [ { ... }, ... ],
-  "scheduler": "media_aware",
-  "retransmit_capacity": 8192,
+  "scheduler": "adaptive",
   "keepalive_ms": 200,
   "program_number": null
 }
@@ -179,19 +192,61 @@ locked with a *"Via relay (managed tunnel)"* note.
 | `scheduler` | enum | `adaptive` | `round_robin`, `weighted_rtt`, `media_aware`, or `adaptive` (see [Scheduler options](#scheduler-options)) |
 | `congestion` | object | — | Optional tuning for the `adaptive` scheduler's per-leg capacity controller (see [Adaptive capacity scheduling](#adaptive-capacity-scheduling)) |
 | `encryption_key` | string (64 hex) | — | Optional 32-byte ChaCha20-Poly1305 AEAD key applied per-datagram on the UDP legs (QUIC legs are already TLS). Both ends must share it |
-| `retransmit_capacity` | usize | 8192 | Sender retransmit buffer capacity (packets). Must exceed `send_rate_pps × max_nack_round_trip_seconds` |
+| `retransmit_capacity` | usize | *auto-derived* | Sender retransmit buffer capacity (packets). Unset, the edge sizes the ring itself: aggregate leg ceiling (each leg's `max_bitrate_bps`, or 20 Mbps assumed for a leg with no ceiling) × `max_bonding_latency_ms` ÷ the typical datagram size (which shrinks with `path_mtu`), clamped to `[8192, 262144]`. Set it only to override that derivation |
 | `keepalive_ms` | u32 | 200 | Keepalive interval |
+| `equalization` | enum | `auto` | Per-leg latency/jitter equalization (`auto` / `on` / `off`). In `auto`/`on` the sender stamps each data packet with a 16-byte v2 header timestamp so the receiver can measure relative one-way delay and time-align heterogeneous legs (5G + Starlink + ISP) into one in-order aggregate instead of head-of-line blocking. Should match the bonded input's setting |
+| `max_bonding_latency_ms` | u32 | 1000 | Equalization latency budget — the ceiling for how far a fast leg is held to align a slow one, and the loss-recovery deadline while aligned. The single bonding-latency knob; should match the bonded input's value |
 | `path_mtu` | u32 | 1500 | Smallest IP-layer path MTU across the bond's legs, `[576, 9000]`. The sender re-chunks outbound MPEG-TS at 188-byte boundaries into datagrams that fit this MTU *after* every per-datagram overhead, so no leg emits an IP-fragmented datagram. Lower it for constrained cellular / satellite bearers — see [Fitting datagrams to the path MTU](#fitting-datagrams-to-the-path-mtu). Sender-side only |
 | `priority` | enum | `best_effort` | QoS tier for the shared-leg capacity broker (`critical` / `normal` / `best_effort`). When several bonded outputs share one physical uplink, the guaranteed tiers reserve their measured demand ahead of best-effort flows. See [Sharing an uplink between bonds](#sharing-an-uplink-between-bonds) |
+| `fec` | object | — | Optional bond-wide proactive FEC over the striped stream (XOR only). Mutually exclusive with any per-leg `path.fec`. See [Proactive FEC](#proactive-fec) |
+| `redundancy` | object | — | Optional packet replication across the N best legs. See [Packet redundancy](#packet-redundancy) |
 | `program_number` | u16 | — | Optional MPTS → SPTS filter applied before bonding |
 
-Three more optional resilience blocks ship on the bonded output and
-are off by default: `fec` (bond-wide interleaved-XOR repair), per-path
-`fec` (per-leg XOR or Reed-Solomon, adaptive parity), `redundancy`
-(replicate packets across the N best legs), and `equalization` +
-`max_bonding_latency_ms` (time-align heterogeneous legs so high-jitter
-satellite + cellular legs aggregate in order instead of head-of-line
-blocking). They are surfaced in the manager UI's bonded-output editor.
+Of the resilience blocks, only the three repair models are off by
+default: the bond-wide `fec`, the per-path `fec`, and `redundancy`.
+`equalization` defaults to `auto` and `max_bonding_latency_ms` to
+1000 ms, so a stock bonded output already stamps the 16-byte v2 header
+and lets the receiver time-align heterogeneous legs — set
+`"equalization": "off"` to opt out. All of them are surfaced in the
+manager UI's bonded-output editor.
+
+#### Proactive FEC
+
+Both the bond-wide `fec` and a per-path `fec` take the same object.
+They are **mutually exclusive**: a bond runs one model or the other,
+and configuring both is rejected at config load.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `algorithm` | enum | `xor` | `xor` (interleaved XOR, SMPTE 2022-1 column model) or `reed_solomon`. **`reed_solomon` is per-leg only** — it is rejected on the bond-wide `fec` |
+| `columns` | u16 | *required* | XOR: interleave depth (burst tolerance), `[1, 64]`. Reed-Solomon: data shards *k*, `[1, 64]` |
+| `rows` | u16 | *required* | XOR: packets per column, `[2, 64]` — overhead is `1/rows`. Reed-Solomon: parity shards *m*, `[1, 64]` — recovers up to *m* losses per `k+m` block at `m/k` overhead |
+| `parity_max` | u16 | — | Reed-Solomon **adaptive** parity ceiling. Set above `rows` (the parity floor) and the leg scales parity within `[rows, parity_max]` with its measured loss; equal or unset means fixed parity. `[1, 64]`, with `columns + parity_max ≤ 256` |
+
+XOR additionally requires `columns × rows ≤ 4096`; Reed-Solomon
+requires `columns + rows ≤ 256`. Note the asymmetry on `parity_max`:
+it is **rejected** on the bond-wide XOR `fec`, but on a per-leg XOR
+path it is accepted and simply ignored. Both ends must configure the
+same geometry.
+
+#### Packet redundancy
+
+`redundancy` replicates packets across the N best legs — the strongest
+loss-resilience, at N× the bandwidth for the replicated traffic. The
+bonded input dedups; nothing is configured on the receiver.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `mode` | enum | `off` | `off` (only Critical/IDR keyframes still duplicate), `all` (every packet across the N best legs, N× bandwidth), or `threshold` (only packets at or above `min_priority`) |
+| `min_priority` | enum | `high` | `threshold` mode only: `normal`, `high` or `critical` |
+| `replicas` | u8 | 2 | Legs to replicate across, `[2, 8]`. Clamped at runtime to the live leg count |
+
+`mode: "all"` is *ride-fastest*, so it automatically suppresses
+equalization on the receiver — holding the fast copy to align a slow
+duplicate the receiver would deliver immediately defeats the point.
+`threshold` mode keeps alignment on. Setting `"equalization": "on"` on
+the bonded **input** overrides the suppression if you want alignment
+alongside duplicate-all.
 
 ### Path transport blocks
 
@@ -202,7 +257,7 @@ Each entry in `paths` has a common shell plus a `transport` block:
   "id": 0,
   "name": "lte-0",
   "weight_hint": 1,
-  "transport": { "type": "udp|rist|quic", ... }
+  "transport": { "type": "udp|relay|rist|quic", ... }
 }
 ```
 
@@ -211,6 +266,8 @@ Each entry in `paths` has a common shell plus a `transport` block:
 | `id` | u8 | *required* | Path identifier. Unique within `paths`. Echoed in NACKs so the sender knows which path to fault |
 | `name` | string | *required* | Operator-visible label (`"lte-0"`, `"starlink"`, …) |
 | `weight_hint` | u32 | 1 | Scheduler weight hint. Higher = more traffic at steady state. `weighted_rtt` / `media_aware` combine this with live RTT |
+| `max_bitrate_bps` | u64 | — | Hard bits/sec ceiling the adaptive scheduler never drives this leg above, `[100000, 10000000000]`. Unset = auto-discover with no ceiling. This is the cost cap for a metered cellular SIM, and it also sizes the auto-derived `retransmit_capacity` |
+| `fec` | object | — | This leg's own per-leg FEC (XOR or Reed-Solomon). Recovers a leg burst locally instead of clustering it in the combined stream. Mutually exclusive with the bond-wide `fec`; both ends must list the same geometry for this leg. See [Proactive FEC](#proactive-fec) |
 | `transport` | object | *required* | Per-leg protocol (below) |
 
 **UDP path** (bidirectional, simplest):
@@ -238,6 +295,41 @@ still preferred. macOS / FreeBSD use `IP_BOUND_IF` and are
 unprivileged. Omit the field to let the kernel decide (or to use
 source-IP binding plus `ip rule` policy routing instead).
 
+**Relay path** (bidirectional; the leg's own relay tunnel, in-process):
+
+```json
+{
+  "type": "relay",
+  "tunnel_id": "3f2a9c40-1d7e-4a2b-9f11-0c7d5e8b6a34",
+  "relay_addrs": ["relay-lon.example.com:4434", "relay-fra.example.com:4434"],
+  "tunnel_encryption_key": "…64 hex chars…",
+  "interface": "wwan0"
+}
+```
+
+| Subfield | Meaning |
+|---|---|
+| `tunnel_id` | Required UUID. Both ends must carry the same value — it is what the relay pairs the ingress and egress halves by |
+| `relay_addrs` | Required, ≥ 1 dialable `host:port` — the relay's **native-UDP carrier** port (`4434` by default), not its QUIC port. No duplicates. Extra entries are an ordered failover list the bridge rotates through when a relay goes dead |
+| `tunnel_bind_secret` | Optional 64-hex (32-byte) secret → HMAC-SHA256 bind token in the `Register`, the same auth a native SRT/RIST relay tunnel uses |
+| `tunnel_encryption_key` | Optional 64-hex (32-byte) per-leg tunnel AEAD key — see the encryption rule below |
+| `interface` | Optional NIC pin (1–15 chars) for the leg's outbound relay socket. Same `SO_BINDTODEVICE` → `IP_UNICAST_IF` mechanism as the UDP leg |
+| `source` | Optional source address (`ip` or `ip/prefix`). Only meaningful with `gateway` |
+| `gateway` | Optional gateway-mode next-hop. Requires `source` **and** `interface`, same IP family, gateway inside the source subnet |
+
+Unlike a plain UDP leg — where `gateway` is rejected on the receiver —
+gateway mode is legal on **both** sides of a relay leg, because both
+ends dial out to the relay and each can pin its own egress uplink.
+
+:::caution[Exactly one encryption layer]
+A relayed leg is **fail-closed** on encryption: it must carry either
+the bond's own `encryption_key` **or** the leg's
+`tunnel_encryption_key`, never both and never neither. Config
+validation rejects "neither" (media would cross the public relay in
+the clear) and "both" (a wasted ChaCha20 pass and a layer-mismatch
+blackout risk).
+:::
+
 **RIST path** (unidirectional at the bond layer; per-leg ARQ from
 the RIST protocol itself):
 
@@ -261,7 +353,6 @@ both must be reachable.
 ```json
 {
   "type": "quic",
-  "role": "client",
   "addr": "203.0.113.5:7000",
   "server_name": "edge-b.example.com",
   "tls": { "mode": "self_signed" }
@@ -270,10 +361,12 @@ both must be reachable.
 
 | Subfield | Meaning |
 |---|---|
-| `role` | `"client"` (dial) or `"server"` (accept) |
+| `role` | Optional and ignored — auto-derived from the side (a bonded **output** leg is always the `client`, a bonded **input** leg always the `server`). Kept only for back-compat with configs that still carry it |
 | `addr` | Client: remote `host:port`. Server: local bind `ip:port` |
 | `server_name` | Client SNI / ALPN. Ignored on server role |
 | `tls.mode` | `"self_signed"` (dev / loopback / trusted LAN) or `"pem"` |
+| `bind` | Client-only local source `ip:port` (port usually 0) pinning egress on a multi-homed sender. Omitted, the client binds `0.0.0.0:0` (`[::]:0` for an IPv6 remote), the kernel routing table picks the NIC, and every QUIC leg collapses onto the default route — the same cosmetic-bond failure the UDP section warns about. Ignored on the server role, which binds `addr` |
+| `interface` | NIC pin (1–15 chars), honoured on **both** roles. Same `SO_BINDTODEVICE` → unprivileged `IP_UNICAST_IF` fallback as the UDP leg, with the same `CAP_NET_RAW` note |
 
 PEM mode:
 
@@ -386,11 +479,28 @@ Two host-level knobs on the edge config tune the broker:
 | `shared_leg_broker` | bool | `true` (on) | Explicit on/off. Unset → on. `false` reverts to uncoordinated per-bond contention |
 | `bond_uplinks` | array | `[]` | Optional per-NIC **hard ceilings** for metered / rate-limited links whose capacity the broker can't infer from loss. On a normal link leave it empty — the broker self-discovers. Listing an uplink does **not** enable the broker (it's already on) |
 
-Contention is surfaced via the `bond` event category:
-`bond_leg_contention` (a shared leg's demand exceeds its discovered
-capacity and the broker is arbitrating) and `bond_leg_oversubscribed`
-(the guaranteed tiers alone exceed capacity — a real capacity
-shortfall, not just best-effort yielding).
+Each `bond_uplinks` entry takes:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `interface` | string | *required* | NIC name the bonded legs pin to (`"eno4"`, `"wlo5"`, …). Matched against each bonded leg's `interface` |
+| `capacity_bps` | u64 | *required* | Physical uplink capacity, bits/sec — the amount divided across every bonded flow sharing this NIC |
+| `min_viable_bps` | u64 | 200 000 | Per-flow minimum-viable rate on this leg. When the sum across the flows on the leg exceeds `capacity_bps`, the broker flags admission pressure |
+| `demand_active_bps` | u64 | 50 000 | Activity-grace threshold — a flow delivering at least this on the leg keeps its min-viable reservation; below it (once the grace window lapses) it releases its share to a co-flow that actually wants the leg. Raise it when sporadic keyframe-duplication traffic holds an unused reservation |
+
+Contention is **not** an event. The edge advertises the `bond-broker`
+capability and publishes a `bond_leg_contention` block on each health
+tick (and on `/api/v1/stats`) carrying per-leg `capacity_bps` /
+`member_count` / `oversubscribed` / `unmet_bps` /
+`guaranteed_unmet_bps`, plus per-member `demand_bps` /
+`allocation_bps` / `protected` — which the manager renders as the
+node-detail Shared Uplink Contention card. The broker's *events* are
+`bond_leg_oversubscribed` (the guaranteed tiers alone exceed capacity
+— a real shortfall, not just best-effort yielding), its
+`bond_leg_oversubscribed_cleared` counterpart, and
+`bond_leg_admission_pressure`, raised once when a bonded output starts
+on a leg whose combined min-viable rates already exceed its capacity.
+All three are filed under category `bonding`, not `bond`.
 
 ## Fitting datagrams to the path MTU
 
@@ -457,7 +567,7 @@ router).
     "name": "Bond to Edge B",
     "type": "bonded",
     "bond_flow_id": 42,
-    "scheduler": "media_aware",
+    "scheduler": "adaptive",
     "paths": [
       { "id": 0, "name": "sim-a", "transport": { "type": "udp", "remote": "203.0.113.5:5000" }},
       { "id": 1, "name": "sim-b", "transport": { "type": "udp", "remote": "203.0.113.5:5001" }}
@@ -517,7 +627,7 @@ leg for the LTE secondary:
   {
     "id": 0, "name": "fibre",
     "transport": {
-      "type": "quic", "role": "client",
+      "type": "quic",
       "addr": "203.0.113.5:7000",
       "server_name": "edge-b.example.com",
       "tls": { "mode": "pem",
@@ -538,9 +648,11 @@ is required on the LTE leg.
 
 ### Three-path heterogeneous bonding (5G + Starlink + fibre)
 
-With `media_aware` scheduling and very different RTTs, IDR frames
-ride the two fastest paths; non-IDR traffic rides a single path
-weighted by live RTT.
+This is the case `adaptive` (the default) exists for. IDR frames ride
+the two best paths; non-IDR traffic rides a single path chosen by each
+leg's *measured* capacity, so the 5G and Starlink legs each carry what
+they can actually sustain rather than what their RTT implies. The
+`weight_hint` values below only seed the initial capacity priors.
 
 ```json
 "paths": [
@@ -595,8 +707,9 @@ version-controlled deployments.
      bonds). Use `Media-aware` for the legacy RTT-only split,
      `Weighted RTT` for non-video data where IDR detection is a no-op,
      or `Round Robin` when all paths are near-identical.
-   - **Retransmit buffer (packets):** 8192 default. Must exceed
-     `send_rate_pps × worst_NACK_round_trip_seconds`.
+   - **Retransmit buffer (packets):** leave blank — the edge
+     auto-sizes it from the latency budget × the aggregate leg
+     bitrate. Fill it in only to override that.
    - **Keepalive (ms):** 200.
    - **Program number (optional):** set to down-select a single
      program from an MPTS input before bonding.
@@ -630,6 +743,66 @@ The topology view shows only the aggregate state
 (`up` / `degraded` / `idle`). Deep per-path inspection lives on
 the Node Detail page.
 
+### Test a leg before you go on air
+
+Each leg row in the bonded input / output editor carries a **Test leg**
+button, and a sender leg additionally carries **Measure capacity**.
+They answer the two questions the running bond can't: *is this leg
+wired the way I think it is*, and *how much can it actually carry
+right now*.
+
+**Test leg** — the pre-flight, and the one to reach for first. It puts
+**zero packets on the wire**, so it is safe while the bond is carrying
+a live feed. It introspects the host and uses a `connect()` route
+lookup (which transmits nothing) to report, per check, `pass` / `warn`
+/ `fail` / `skipped`:
+
+| Check | What it proves |
+|---|---|
+| `interface_link` | The pinned NIC exists and carrier is up; reports MTU + link speed |
+| `source_ip` | A gateway-mode `source` address is actually present on a NIC |
+| `bind` | Interface-mode / default-route legs: a socket binds exactly as the leg will, and the report says whether the strict `SO_BINDTODEVICE` pin was available. Not emitted for a gateway-mode or listener leg |
+| `egress_route` | Interface-mode / default-route legs: the leg egresses the intended NIC and hasn't collapsed onto the kernel default route — the classic cosmetic-bond trap |
+| `first_hop` | Gateway-mode legs: the next-hop router is in the kernel neighbour table |
+
+Two caveats. Strict `SO_BINDTODEVICE` needs `CAP_NET_RAW`; without it
+the `bind` check `warn`s and notes the unprivileged `IP_UNICAST_IF`
+fallback the bond itself uses. And `egress_route` is deliberately
+`skipped` for a gateway-mode leg while idle — the per-leg policy route
+is only programmed at flow start, so a lookup now would follow the
+default route and mislead; `source_ip` + `first_hop` prove that leg
+instead. The reported MTU is the **local NIC** MTU, not the
+end-to-end path MTU — see
+[Fitting datagrams to the path MTU](#fitting-datagrams-to-the-path-mtu).
+
+**Measure capacity** — the active probe, sender legs only. It drives
+synthetic traffic over the leg to a cooperating peer and reads back
+delivered rate, ramping until the loss / RTT-inflation knee. It needs
+an ephemeral responder started on the far node first (a stateless echo
+on its own socket and port, never the leg's media port, which
+auto-expires after `duration_secs` — default 30 s, clamped 1–120 s).
+The probe itself defaults to 8 s, clamps to 1–60 s, and honours an
+optional `max_bitrate_bps` ceiling so a metered SIM is never
+over-driven.
+
+:::caution[The capacity probe is idle-only]
+A capacity ramp is **refused** — `error_code:
+bond_leg_test_unsafe_link_busy` — when the leg under test, or any
+other bonded I/O sharing its interface / source / gateway, is carrying
+a live flow. Saturating a shared physical link is the one thing that
+would affect the feed. For a live leg, read the scheduler's own
+`capacity_bps` / `delivered_bps` on the flow card instead.
+:::
+
+The WS actions behind the buttons are `test_bond_leg` (modes
+`usability` / `reachability` / `capacity`), `start_bond_probe_responder`
+and `stop_bond_probe_responder`, gated on the edge capabilities
+`bond-leg-test`, `bond-leg-capacity` and `bond-probe-responder`. Note
+the manager renders both buttons on **every** node with no capability
+check, so against an edge predating those bits the command returns
+`unknown_action` and the panel shows *"No report — this edge may
+predate the bond-leg-test capability."*
+
 ### Troubleshooting
 
 - **"bond UI helper missing — reload the page"** in a config form
@@ -644,11 +817,16 @@ the Node Detail page.
 - **`gaps_lost` climbing steadily** — either `hold_ms` is too low
   for the worst path's RTT, or a path has saturated and is dropping
   packets faster than ARQ can repair. Check per-path
-  `loss_fraction`.
+  `loss_fraction`, and if you suspect a leg is smaller than you
+  provisioned for, take the bond off air and
+  [measure its capacity](#test-a-leg-before-you-go-on-air).
 - **One path stays `dead` but others work** — keepalive isn't
   making it through. Check the bind / remote addresses and firewall;
   a dead path is excluded from the scheduler without affecting the
-  bond as a whole.
+  bond as a whole. Run [Test leg](#test-a-leg-before-you-go-on-air)
+  on it — it is safe to do while the rest of the bond is on air, and
+  it catches the wiring faults (wrong NIC, missing source address,
+  leg collapsed onto the default route) that produce exactly this.
 
 ## Stats, events, Prometheus
 
@@ -667,46 +845,77 @@ aggregate and per-path metrics.
 | `packets_retransmitted` | sender | Count of ARQ retransmits |
 | `packets_duplicated` | sender | Packets intentionally duplicated (IDR frames on two paths) |
 | `packets_dropped_no_path` | sender | Scheduler couldn't dispatch — bond is hard-failed |
+| `aggregate_capacity_bps` | sender | The adaptive scheduler's discovered usable bonded bitrate — the sum of the per-leg capacity estimates across alive legs. Provision a fixed external encoder the edge can't throttle at or below this. `0` on the receiver, for the non-adaptive policies, and on older edges |
 | `packets_received` / `bytes_received` | receiver | |
 | `packets_delivered` | receiver | Packets delivered to the application after reassembly |
 | `gaps_recovered` | receiver | Gaps filled by ARQ or a second path |
 | `gaps_lost` | receiver | Gaps that exceeded `hold_ms` — packet loss |
 | `duplicates_received` | receiver | Duplicates absorbed by reassembly |
+| `hold_ms` | receiver | The adaptive hold servo's **current** reorder/recovery budget in ms, between the `hold_ms` config floor and the `hold_max_ms` ceiling (fixed at `hold_ms` when no ceiling is set). Absent on the sender. Note the name collision with the config field — this one is the live value, not the setpoint |
 | `late_stale_drops` | receiver | Datagrams that arrived too late to use — they aged out of the reordering ring before delivery. Climbing counts mean a path's latency exceeds `hold_ms`; raise `hold_ms` or fix the slow path. (Formerly `reassembly_overflow`, still accepted as a serde ingest alias) |
 
 **Per-path fields** (one entry per leg):
 
 `id`, `name`, `transport`, `state` (`"alive"` or `"dead"`),
 `rtt_ms`, `jitter_us`, `loss_fraction`, `throughput_bps`,
+`delivered_bps` (what the receiver reports actually *arriving* on this
+leg — the gap against `throughput_bps` is loss / saturation),
+`capacity_bps` (the congestion controller's discovered usable capacity
+for this leg, which it fills toward — **not** the `bond_uplinks`
+`capacity_bps` config field, which is a hard per-NIC ceiling you set),
 `fec_throughput_bps` (proactive-FEC repair rate on this leg),
+`fec_recovered` (packets recovered by *this leg's* per-leg FEC —
+distinct from the bond-aggregate `gaps_recovered`),
 `wire_throughput_bps` (honest total wire load on this leg, media +
 FEC + AEAD — decomposes the send-direction load alongside
-`throughput_bps`), `queue_depth`, `packets_sent`, `bytes_sent`,
-`packets_received`, `bytes_received`, `nacks_sent`, `nacks_received`,
-`retransmits_sent`, `retransmits_received`, `keepalives_sent`,
-`keepalives_received`.
+`throughput_bps`), `relative_owd_us` (the equalizer's measured
+inter-leg skew: how much later this leg's packets land than the
+fastest eligible leg), `binding` (`"gateway"` / `"so_bindtodevice"` /
+`"ip_unicast_if"` / `"ip_bound_if"` / `"none"` — how this leg's egress
+is actually pinned), `interface` (the kernel netdev, interface-mode
+UDP legs only), `tunnel_id` (relay legs only — joins the leg to the
+relay's `udp_sessions[]` row forwarding it), `queue_depth`,
+`packets_sent`, `bytes_sent`, `packets_received`, `bytes_received`,
+`nacks_sent`, `nacks_received`, `retransmits_sent`,
+`retransmits_received`, `keepalives_sent`, `keepalives_received`,
+`rebuilds`.
 
-**Prometheus counters** (labels: `flow_id`, `output_id`, `leg_role`,
-`path_id`, `path_name`, `transport`):
+**Prometheus series.** The aggregate series carry the owner labels
+(`flow_id`, `leg_role`, plus `output_id` on an output-side bond); the
+per-path series add `path_id`, `path_name` and `transport`.
 
 ```
-bilbycast_edge_bond_rtt_ms
-bilbycast_edge_bond_loss_fraction
+# aggregate
+bilbycast_edge_bond_gaps_recovered
+bilbycast_edge_bond_gaps_lost
+bilbycast_edge_bond_packets_duplicated
+bilbycast_edge_bond_throughput_bps          (gauge)
+
+# per-path
+bilbycast_edge_bond_rtt_ms                  (gauge)
+bilbycast_edge_bond_loss_fraction           (gauge)
+bilbycast_edge_bond_path_dead               (gauge)
+bilbycast_edge_bond_path_throughput_bps     (gauge)
 bilbycast_edge_bond_path_packets_sent
 bilbycast_edge_bond_path_packets_received
 bilbycast_edge_bond_path_retransmits_sent
 bilbycast_edge_bond_path_nacks_sent
 bilbycast_edge_bond_path_nacks_received
 bilbycast_edge_bond_path_keepalives_sent
-bilbycast_edge_bond_path_dead
-bilbycast_edge_bond_gaps_recovered
-bilbycast_edge_bond_gaps_lost
-bilbycast_edge_bond_packets_duplicated
 ```
 
-**Events** — category `bond`, severity `info` / `warning` /
-`critical`. Path-up / path-down transitions fire as `info` /
-`warning`; bond-idle (no alive paths) fires as `critical`.
+Everything not marked a gauge is a counter.
+
+**Events** — most bonding events ride category `bond`, severity `info`
+/ `warning` / `critical`: path-up / path-down transitions fire as
+`info` / `warning`, and bond-idle (no alive paths) fires as
+`critical`. The full catalogue is
+[Events and alarms → Bonding](/edge/events-and-alarms/#bonding-bond).
+Two exceptions worth knowing before you build a filter:
+`bond_leg_admission_pressure`, `bond_leg_oversubscribed` and
+`bond_leg_oversubscribed_cleared` ride category `bonding`, and
+`bond_legs_unencrypted` rides `media` — so filtering on
+`category:bond` alone will not surface them.
 
 ## Tuning
 
@@ -715,10 +924,13 @@ bilbycast_edge_bond_packets_duplicated
   arrivals; too high and end-to-end latency grows.
 - **`nack_delay_ms`** — comparable to the *median* path RTT. Lower
   retries faster; higher gives natural reordering a chance.
-- **`retransmit_capacity`** — must exceed
-  `send_rate_pps × max_nack_round_trip_seconds`. At 10 kpps and a
-  worst-case 500 ms NACK round-trip that's ≥ 5000. The 8192 default
-  is fine for typical broadcast bitrates.
+- **`retransmit_capacity`** — leave it unset. The edge derives the
+  ring from the aggregate leg ceiling × `max_bonding_latency_ms` ÷ the
+  typical datagram size, clamped to `[8192, 262144]`, which is the
+  `send_rate_pps × max_nack_round_trip_seconds` rule applied with the
+  numbers it actually has. Set it only to override that — and if you
+  do, it must still exceed that product (at 10 kpps and a worst-case
+  500 ms NACK round-trip, ≥ 5000).
 - **`keepalive_ms`** — faster keepalives detect dead paths sooner
   but consume more bandwidth. 200 ms is a reasonable default.
 - **Scheduler choice** — `adaptive` is the right default for video
@@ -731,15 +943,24 @@ bilbycast_edge_bond_packets_duplicated
 
 ## Limitations
 
-- **SRT paths are deferred.** UDP / QUIC / RIST are supported today;
-  SRT as a per-leg transport (with libsrt's own ARQ and encryption
-  per-path) is planned but not yet shipped.
+- **SRT is deliberately not a bond leg.** Its TSBPD latency-window
+  delivery and TLPKTDROP fight the bond's own cross-leg reassembly and
+  ARQ, and it buys no third-party interop because the bond wire is
+  proprietary at both ends. This is a settled non-goal, not a deferred
+  item. For SRT bonding to a third-party receiver, use libsrt
+  socket-group bonding (Broadcast / Backup) on the SRT output. The leg
+  transports are UDP, QUIC and relayed (see
+  [Bonding over a relay](#bonding-over-a-relay-per-leg)); RIST is a
+  valid leg variant but is unidirectional at the bond layer, so it is
+  not a true aggregation leg.
 - **Confidentiality is per-path.** QUIC legs are TLS-encrypted; RIST
   legs are plaintext; UDP legs are plaintext **unless** you set
   `encryption_key` (per-datagram ChaCha20-Poly1305 AEAD, shared by
-  both ends). For a relayed leg the carrying tunnel adds its own
-  edge-to-edge encryption. Otherwise wrap an already-encrypted inner
-  protocol (SRT-encrypted TS).
+  both ends). A relayed leg is the exception: it is fail-closed and
+  can never be plaintext — validation requires exactly one of the
+  bond's `encryption_key` or the leg's `tunnel_encryption_key`.
+  Otherwise wrap an already-encrypted inner protocol (SRT-encrypted
+  TS).
 - **Topology view shows aggregate state only.** The Node Detail
   page has full per-path tables; the topology view only shows
   `up` / `degraded` / `idle`.

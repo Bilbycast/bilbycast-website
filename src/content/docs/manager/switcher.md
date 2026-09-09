@@ -46,7 +46,7 @@ Presets can be activated by [**Routines**](/manager/routines/) on a cron schedul
 A preset action is `(node_id, flow_id, input_id)` — *"make input Y the active input on flow X"*. The same shape covers three on-the-wire behaviours, depending on the target flow's `assembly` mode (set on the flow modal):
 
 - **Passthrough flow** — Take flips which input's bytes are forwarded byte-for-byte. Output PIDs follow the new active input; receivers see new PMT versions and re-tune. The continuity fixer cushions CC + PMT version + DI to keep cutover seamless.
-- **Assembled flow without Switch slots** — Take is a no-op for the data path. Every input contributes ES simultaneously; the assembly's slot list owns what's emitted regardless of which is "active".
+- **Assembled flow without Switch slots** — the manager translates the Take rather than passing it through. On a single-program (SPTS) assembly it becomes a `bus_route` swap that re-points that program's slots onto the target input's bus program, hot-applied as an `update_flow_assembly` with no flow restart. On a multi-program (MPTS) assembly it is refused as ambiguous (`pid_bus_activate_input_no_switch_slots`) and each program has to be re-pointed in the [Node Bus Matrix](/manager/node-bus/) instead. It is refused too when the target input has no PAT/PMT-observed program on the bus yet (`pid_bus_source_not_on_bus`), or when that source can't cover every slot of the destination program by stream kind (`pid_bus_take_slot_uncovered`) — a half-re-pointed program would ship video from one source and audio from another.
 - **Assembled flow with Switch slots** — Take flips the active leg of every Switch slot whose leg list contains the named input. **Output PIDs stay unified across switches** (each slot's `out_pid` is fixed); only the source leg flips. PMT version bumps mod 32 + DI=1 fires on the next PCR for the affected `out_pid` so receivers re-anchor STC without re-tuning. Slots without that input as a leg are silent.
 
 Operators build presets exactly as before in all three cases — there's no separate Switch-aware preset type. The flow modal's summary card deep-links into the [Node Bus Matrix](/manager/node-bus/) where the operator picks the mode (and, for the third case, builds the Switch slot's leg list); the Switcher then drives whichever mode the flow runs in.
@@ -59,7 +59,9 @@ For the third case above (assembled flow with Switch slots), the preset editor e
 
 ## Bus-route actions (Node Bus salvos)
 
-In addition to `activate_input`, presets can carry **`bus_route` actions** captured from the Node Bus Matrix's **Save salvo…** button. A `bus_route` action is `(node_id, dst_flow_id, dst_program_number, source_input_id, source_program_number)` — *"re-point program X on flow A to pull from program Y on input B"*. The Switcher executor reuses the same per-flow patch-build + cross-clock preflight + atomic `update_flow_assembly` pipeline as the matrix's `Apply (N)` button, so a salvo recalls the full routing snapshot in one click. See [Node Bus Matrix](/manager/node-bus/#save-salvo--capture-routing-as-a-switcher-preset).
+In addition to `activate_input`, presets can carry **`bus_route` actions**. A `bus_route` action is `(node_id, dst_flow_id, dst_program_number, source_input_id, source_program_number)` — *"re-point program X on flow A to pull from program Y on input B"*. They are authored directly in the preset editor: every node section carries a **Bus routes** block with cascading destination-flow and destination-program pickers, a source-input picker fed by that node's bus catalogue (with a **Custom…** fallback that takes a typed input id and program number for a source the catalogue hasn't seen yet), a source-program picker and an **+ Add** button — over a live coverage preview that dry-runs the same kind matching the manager applies on activate: uncovered slots and a source that isn't on the bus yet render amber, a flow or program that no longer exists renders red. There is one route per (flow, program), so re-adding replaces the existing chip. The Node Bus Matrix's **Save salvo…** button is the bulk-capture shortcut, stamping the same action shape from a matrix you've already wired. The Switcher executor reuses the same per-flow patch-build + cross-clock preflight + atomic `update_flow_assembly` pipeline as the matrix's `Apply (N)` button, so a salvo recalls the full routing snapshot in one click. See [Node Bus Matrix](/manager/node-bus/#save-salvo--capture-routing-as-a-switcher-preset).
+
+Traffic runs the other way too: an `activate_input` action aimed at an assembled single-program flow with no Switch slot is executed as a `bus_route` swap — see [Composes with Flow Assembly](#composes-with-flow-assembly--three-behaviours-of-active-input) above.
 
 ## Permissions
 
@@ -83,6 +85,6 @@ PVW is **not** a browser-local marker, though. Like PGM it is server-side state 
 
 ## Reference
 
-- Operator walk-through: [`USER_GUIDE.md`](https://github.com/Bilbycast/bilbycast-manager/blob/main/docs/USER_GUIDE.md) ("Live Switcher (PGM/PVW)").
-- Architecture, REST surface, drift handling: [`switcher.md`](https://github.com/Bilbycast/bilbycast-manager/blob/main/docs/switcher.md).
-- API reference: [`API.md`](https://github.com/Bilbycast/bilbycast-manager/blob/main/docs/API.md) ("Switcher (live PGM/PVW director console)").
+- Operator walk-through: the [Workflow](#workflow) section above.
+- REST surface (presets, pages, PGM / PVW state, Take): [API reference — Switcher](/manager/api-reference/#switcher).
+- Crosspoint authoring and salvo capture: [Node Bus Matrix](/manager/node-bus/).

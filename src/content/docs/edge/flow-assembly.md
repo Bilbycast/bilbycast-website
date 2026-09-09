@@ -17,7 +17,7 @@ Internally the mechanism is a per-flow **PID bus**: every referenced input demux
 |---|---|---|
 | Mix video from input A with audio from input B as one SPTS out | Required an external mux — the edge couldn't splice ES between inputs | `assembly.kind = spts` with two slots, one per input |
 | Build an MPTS carrying Studio 1 + Studio 2 from different sources | Had to pre-mux upstream and ingest the finished MPTS | `assembly.kind = mpts`, two programs each with their own slots |
-| Publish a single SPTS built from two redundant ingress legs | SMPTE 2022-7 at the transport layer only (RTP/SRT/RIST) | Pre-bus `Hitless` source with primary-preference and a 200 ms stall timer |
+| Publish a single SPTS built from two redundant ingress legs | SMPTE 2022-7 at the transport layer only (RTP/SRT/RIST) | Pre-bus `Hitless` source — primary-preference with a 200 ms stall timer, or `mode: "seq_aware"` for wire-sequence dedup on RTP / RIST legs |
 | Swap which PID / input feeds a given program's audio at runtime | Had to stop + restart the flow | `UpdateFlowAssembly` — unchanged slots keep running, PMT version bumps mod 32 |
 | Operator-driven multi-cam switching with **unified output PIDs** — receivers don't re-tune | Switching meant new PMT versions and re-tuning at the receiver | `Switch` slot — N legs, one `out_pid`, the manager Switcher's Take flips legs and the assembler bumps PMT version + DI=1 so receivers stay locked |
 
@@ -106,10 +106,21 @@ Every slot in a program's `streams[]` picks its source from one of four variants
 
 - **`"pid"`** — explicit PID off a named input: `{ "type": "pid", "input_id": "...", "source_pid": 256 }`. Use when the operator knows the exact upstream PID (from the input's live PSI catalogue, or a written spec).
 - **`"essence"`** — first elementary stream of a given kind off a named input: `{ "type": "essence", "input_id": "...", "kind": "video" | "audio" | "subtitle" | "data" }`. Useful when the upstream is single-program and the operator just wants "its video" / "its audio" without binding to a specific PID. Resolves at flow start against the input's PSI catalogue, and re-resolves on every `UpdateFlowAssembly`.
-- **`"hitless"`** — primary-preference pre-bus merger: `{ "type": "hitless", "primary": { <pid|essence> }, "backup": { <pid|essence> } }`. A merger task subscribes to both legs and forwards the primary verbatim; if no primary packet arrives for 200 ms it flips to the backup, and a short hold-off brings it back when primary traffic resumes. Either leg must itself be `pid` or `essence` — nested Hitless is rejected.
+- **`"hitless"`** — pre-bus merger of a redundant leg pair, primary-preference by default: `{ "type": "hitless", "primary": { <pid|essence> }, "backup": { <pid|essence> } }`. A merger task subscribes to both legs and forwards the primary verbatim; if no primary packet arrives for 200 ms it flips to the backup, and the first primary packet to arrive after that flips it straight back. Config validation accepts a `pid` or `essence` leg (and rejects a nested Hitless), but the runtime resolves `pid` legs only — an `essence` leg fails flow bring-up with `pid_bus_hitless_leg_not_pid`.
 - **`"switch"`** — operator-driven N-input switch (1..=64 legs): `{ "type": "switch", "legs": [ { "type": "pid"|"essence", "input_id": "...", ... } ], "initial_input_id": "..." }`. All legs subscribe concurrently (warm) so cutover is instant; the assembler forwards bytes only from the leg whose `input_id` matches the flow's currently-active input. The Switcher's `ActivateInput` (PGM/PVW/Take) flips every Switch slot whose leg list contains the named input — slots without that input as a leg are silent. **Output PIDs stay unified across switches** (the slot's fixed `out_pid`); PMT version bumps mod 32 and DI=1 fires on the next PCR for that `out_pid` so receivers stay locked without re-tuning. The active leg survives flow restart via `flow.active_input_id`; if the saved active input is no longer in the leg list, the slot silently falls back to `initial_input_id`.
 
-The `hitless` slot source is **not** SMPTE 2022-7 sequence-aware dedup — the PID bus today doesn't carry upstream RTP sequence numbers, so the merger compares on packet arrival timing rather than sequence. For byte-perfect dual-leg dedup use SMPTE 2022-7 at the input transport layer (RTP/SRT/RIST) — assembly can sit on top of that.
+The `hitless` slot source takes a `mode`. The default, `primary_preference`, is arrival-timing failover: forward the primary verbatim, flip to the backup once the stall timer expires. `seq_aware` is true SMPTE 2022-7 — the merger dedups and gap-fills against the upstream wire sequence number carried on each leg's packets, switching sub-frame instead of after a stall.
+
+`seq_aware` needs both legs to resolve to inputs that stamp an upstream sequence number, and today that means **RTP and RIST inputs only** — SRT, UDP, bonded, WebRTC and the synthetic inputs carry none. That pairing is *not* checked at config-save time: a `seq_aware` slot on legs that carry no sequence forwards the primary with a log warning and silently discards every backup packet. The edge advertises the `hitless_2022_7` capability when the mode is available, but no manager surface exposes it yet — today it is reachable only by editing the config JSON.
+
+| Field | Applies to | Range | Default | What it does |
+|---|---|---|---|---|
+| `mode` | both | `primary_preference` \| `seq_aware` | `primary_preference` | Failover algorithm. |
+| `stall_ms` | `primary_preference` | `20..=5000` ms | 200 | How long with no primary packet before the merger flips to the backup. Ignored in `seq_aware`. |
+| `path_differential_ms` | `seq_aware` | `5..=2000` ms | **none** | Skew-accommodation buffer. Set it and the merger holds every packet this long after first arrival before releasing it in sequence order — the slower leg gets its full window and a single-leg loss inside it is filled hitlessly. Omit it and the merger runs dedup-only: lower latency, no asymmetric-path protection. |
+| `reorder_window` | `seq_aware` | multiple of 64 in `64..=4096` | — | **Accepted and range-checked, but inert.** The configured value never reaches the merger, whose gap-fill window is fixed at 1024. |
+
+For dual-leg dedup on legs the bus cannot sequence — SRT, UDP, bonded — use the input's own SMPTE 2022-7 `redundancy` block instead: RTP, SRT and RIST inputs each carry one, and assembly sits on top of that unchanged.
 
 ### Switch slot example — three-camera multi-cam bus on a single video PID
 
@@ -163,7 +174,7 @@ Each Switch slot picks how `ActivateInput` lands on the wire:
 Every input referenced by any slot must either already produce MPEG-TS on the broadcast channel, or be configured so the runtime can wrap it into TS before publishing to the bus.
 
 **Inputs that produce TS natively (always eligible):**
-SRT, UDP, RTP (with `is_raw_ts: true`), RIST, RTMP (after the built-in FLV→TS muxer), RTSP, WebRTC WHIP/WHEP, ST 2110-20, ST 2110-23, Bonded, TestPattern.
+SRT, UDP, RTP (with `is_raw_ts: true`), RIST, RTMP (after the built-in FLV→TS muxer), RTSP, WebRTC WHIP/WHEP, ST 2110-20, ST 2110-23, Bonded, TestPattern, `media_player`, `replay`, `sdi`, `mxl_video`, and `mosaic` (the multiviewer wall canvas, on `multiviewer` builds).
 
 **PCM / AES3 inputs that become TS when `audio_encode` is set on the input:**
 
@@ -173,9 +184,11 @@ SRT, UDP, RTP (with `is_raw_ts: true`), RIST, RTMP (after the built-in FLV→TS 
 | `rtp_audio` (RFC 3551 PCM over RTP) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `s302m` |
 | ST 2110-31 (AES3 transparent — Dolby E, etc.) | `s302m` only (the 337M sub-frames ride through the 302M wrap bit-for-bit) |
 
-Without `audio_encode` set, an assembly referencing one of these inputs fails bring-up with `pid_bus_spts_input_needs_audio_encode`.
+Without `audio_encode` set, an assembly referencing one of these three inputs fails bring-up with `pid_bus_spts_input_needs_audio_encode`.
 
-**Inputs with no current path to TS:** ST 2110-40 (ancillary data) — wrapping ANC into TS is deferred; referencing one emits `pid_bus_spts_non_ts_input`.
+`mxl_audio` (Float32 PCM) has the same shape — the eligibility gate counts it as a TS carrier only when `audio_encode` is set — with two caveats. The MXL audio ingest does not yet encode or republish. With `audio_encode` set the input is admitted onto the bus and then publishes nothing at all — no event, no error — so a slot pointed at one stays silent. (Without it the input task does raise a Warning `mxl_audio_no_encode_set` at startup, but by then the assembly has already been refused at bring-up.) And an `mxl_audio` input with no `audio_encode` reports `pid_bus_spts_non_ts_input`, not `pid_bus_spts_input_needs_audio_encode` — only the three inputs in the table above raise the latter.
+
+**Inputs with no current path to TS:** ST 2110-40 and `mxl_anc` (both RFC 8331 ancillary data) — wrapping ANC into TS is deferred; referencing one emits `pid_bus_spts_non_ts_input`.
 
 **Codec support on the decoded-ES cache:** `aac_lc`, `he_aac_v1`, `he_aac_v2`, `s302m`. `mp2` and `ac3` parse and validate successfully but fail loudly at flow bring-up with `pid_bus_audio_encode_codec_not_supported_on_input` until the matching muxer wrappers land.
 
@@ -183,6 +196,7 @@ Without `audio_encode` set, an assembly referencing one of these inputs fails br
 
 - The assembler subscribes to the per-ES bus (`(input_id, source_pid) → EsPacket`), rewrites each 188-byte TS packet's PID to the configured `out_pid`, stamps a per-out-PID monotonic continuity counter, bundles 7 TS packets into MTU-safe 1316-byte RTP packets, and publishes them onto the flow's existing broadcast channel — exactly where a passthrough forwarder would.
 - PAT and PMT are **synthesised on a 100 ms cadence**. When the PAT set changes, `PAT.version_number` bumps mod 32. When a program's slot composition or `pcr_source` changes, that program's `PMT.version_number` bumps mod 32 — both counters advance monotonically across swaps to avoid phantom-version collisions.
+- Each slot's ES_info descriptor loop is **copied through** from its source PMT, re-resolved per input from the live PSI catalogue on every PSI tick. Only a whitelist survives — registration `0x05`, ISO-639 language `0x0A`, stream identifier `0x52`, teletext `0x56`, subtitling `0x59`, DVB AC-3 `0x6A`, E-AC-3 `0x7A`, DTS `0x7B`, AAC `0x7C`, extension `0x7F`; CA and network-private tags are stripped, because the assembled mux is not the source mux. A change to a slot's descriptor set bumps that program's `PMT.version_number`. The PMT is emitted as a single TS packet (`section_length` ≤ 180), so descriptor loops are admitted greedily in slot order and any slot whose loop would overflow emits `es_info_length = 0` rather than splitting the section.
 - PCR rides onto the TS byte-for-byte from the referenced slot's source packets.
 - A 10 ms safety-net flush keeps partially-filled bundles shipping during sparse periods (audio-only idle, keyframe gaps) so downstream sockets never see multi-second silence.
 - Backpressure: slot fan-ins are `broadcast::Receiver<EsPacket>`. Slow consumers drop rather than stall the demuxer — the same lock-free, never-block-the-data-path discipline used everywhere else in the edge.
@@ -198,6 +212,7 @@ The assembly plan is hot-swappable. A manager `UpdateFlowAssembly` WS command �
 - PSI is re-emitted immediately on swap so receivers see the new PMT before any packet lands on a new `out_pid`.
 - The new assembly is persisted to `config.json` only after the swap succeeds. A no-op swap (incoming plan deserialises byte-equal to current) is a silent short-circuit.
 - **Transitions across the passthrough boundary (passthrough ↔ spts/mpts) are rejected.** Those require a full `UpdateFlow` round-trip because the plumbing on the flow changes (bus + assembler spawn vs. direct broadcast).
+- **A cross-input `pcr_source` change is rejected while the flow's master clock is genlocked to it** (`source_pcr_pll` / `contribution`). The PLL sampler and the fallback watcher pin that input at flow start and cannot re-key in place, so the swap fails with Critical `pid_bus_pcr_source_change_requires_restart` (`details = { old_input_id, new_input_id, master_clock_kind }`). Re-issue the edit as a full `UpdateFlow` (restart), or set `master_clock.kind = "wallclock"` on the flow to make it hot-retargetable. Under wallclock / PTP / audio-master the re-point hot-swaps normally — the pinned `pcr_source` then only decides which slot *carries* PCR. Moving to a different PID **within the same input** always hot-swaps.
 
 ## Input-host flows — sharing an input across the node
 
@@ -209,7 +224,7 @@ When to use it:
 - A "compliance-only" recording stays on its own flow with no outputs but its input is the source of truth that a separate live-egress flow assembles from.
 - Mixed bilbycast-edge installs running on cloud infra where the same upstream SRT contribution feeds a redaction pod, a public distribution pod, and a compliance recorder — only one decoder runs.
 
-The shared-demuxer refcount is managed by the engine. When the host flow stops while sibling assemblies still reference its inputs, the affected slot fan-ins emit a Warning `pid_bus_slot_source_closed` with structured `{ source_input_id, source_pid, program_number, out_pid }` so the operator sees why the assembled output went silent. The bus channel re-arms automatically when the host flow restarts — no manual intervention needed.
+The shared-demuxer refcount is managed by the engine. When the host flow stops while sibling assemblies still reference its inputs, the node-wide ES bus keeps the channel armed (it is append-only) and the affected slots simply go quiet: each latches a Warning `pid_bus_slot_stalled` after ~5 s with no ES — structured `{ input_id, source_pid, program_number, out_pid, seconds_since_data }` — so the operator sees why the assembled output went silent, and an Info `pid_bus_slot_recovered` clears the latch when the host flow restarts. (The scan runs only on continuous-media `stream_type`s, with a 10 s grace after assembler start, so sparse essences never raise a false alarm. `pid_bus_slot_source_closed` is a defensive tripwire on the same fan-in that cannot fire while the bus holds its senders — don't wait for it.) No manual intervention is needed on restart.
 
 Cross-flow references are scoped to the same node. To share across nodes, use one of the IP transports (SRT, RIST, RTP, ST 2110) explicitly.
 
@@ -233,7 +248,7 @@ A running assembled flow exposes:
 - **Assembled Output section** on the flow card — one sub-table per program listing each slot's `out_pid`, `stream_type`, resolved kind, source label (or `Hitless(A/B)`), live bitrate, packets, CC errors, PCR discontinuity counters from `FlowStats.per_es[]`.
 - **Per-output PCR trust** — `p50 / p99` columns on the Outputs table, fed by `OutputStats.pcr_trust`. The sampler records `|ΔPCR_µs − Δwall_µs|` on successful sends of PCR-bearing TS packets into a rotating 4096-sample reservoir and exposes p50 / p95 / p99 / max.
 - **Flow-rollup PCR trust** — `FlowStats.pcr_trust_flow` (Samples, p50 / p95 / p99 / Max, window-p95) rendered at the bottom of the flow card.
-- **Events** — every `pid_bus_*` error code rides as a Critical event with structured `details` (`error_code`, `input_id`, `input_type`, `program_number`, …) so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. See [Events & Alarms — PID bus / Flow Assembly](/edge/events-and-alarms/).
+- **Events** — `pid_bus_*` and `pes_splice_*` codes ride as events at mixed severity: Critical for bring-up and hot-swap refusals, Warning for runtime degradation (`pid_bus_slot_stalled`, `pid_bus_stream_type_mismatch`, `pid_bus_pid_cap_reached`, `pes_splice_degraded`, `pes_splice_timeout`, `pes_splice_codec_param_mismatch`), Info for recovery (`pid_bus_slot_recovered`, `pes_splice_completed`). Each carries structured `details` (`error_code`, `input_id`, `input_type`, `program_number`, …) so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. See [Events & Alarms — PID bus / Flow Assembly](/edge/events-and-alarms/).
 
 ## Validation rules
 
@@ -242,7 +257,7 @@ All enforced at config-save time (plus belt-and-braces checks at flow bring-up).
 - `passthrough` must have empty `programs` and no `pcr_source`.
 - `spts` must have exactly one program.
 - `mpts` must have at least one program; all `program_number` values unique, all `pmt_pid` values unique.
-- Every referenced `input_id` must be in the flow's `input_ids`.
+- Every referenced `input_id` must name an input in the node's top-level `inputs` array — **not** necessarily one of this flow's own `input_ids`. Cross-flow references are legal; that is exactly what the Node Bus Matrix authors. An id that exists nowhere on the node is rejected on a whole-config push, but the `UpdateFlowAssembly` / `PUT /api/v1/flows/{flow_id}/assembly` hot-swap path does not re-run that node-wide existence check. A `pid` slot pointed at an input that exists nowhere simply stays silent (and latches `pid_bus_slot_stalled` after 5 s); an `essence` slot fails the swap after the 3 s resolution window with Critical `pid_bus_essence_no_catalogue`.
 - `program_number` must be `> 0` (0 is reserved for the NIT).
 - `pmt_pid` and every `out_pid` must be in `0x0010..=0x1FFE` (reserved PIDs and the NULL PID are refused).
 - Within a program, every `out_pid` must be unique and must not equal that program's `pmt_pid`.
@@ -251,7 +266,7 @@ All enforced at config-save time (plus belt-and-braces checks at flow bring-up).
 - MPTS: every program's effective `pcr_source` (own or flow-level fallback) must be set.
 - When `pcr_source` resolves concretely, it must hit one of that program's slots (Pid match) or one of its Essence-slot inputs.
 - Hitless nested inside another Hitless is rejected.
-- **Switch slot rules:** `legs.length` in `1..=64`; every leg's `input_id` must be in `flow.input_ids`; no two legs may share identity (`(input_id, source_pid)` for `pid` legs, `(input_id, kind)` for `essence` legs); `initial_input_id` must equal exactly one leg's `input_id`; when every leg is `essence`-typed, all `kind` values must agree; Switch nested inside Hitless is rejected; Switch nested inside Switch is type-system impossible.
+- **Switch slot rules:** `legs.length` in `1..=64`; no two legs may share identity (`(input_id, source_pid)` for `pid` legs, `(input_id, kind)` for `essence` legs); `initial_input_id` must match at least one leg's `input_id`; when every leg is `essence`-typed, all `kind` values must agree; Switch nested inside Hitless is rejected; Switch nested inside Switch is type-system impossible.
 - Non-TS inputs without a valid `audio_encode` are rejected at flow bring-up with a specific `pid_bus_*` error code.
 
 ## Related

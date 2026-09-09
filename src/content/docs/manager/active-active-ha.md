@@ -67,7 +67,7 @@ Three subcommands handle the lifecycle:
 |---|---|
 | `bilbycast-manager promote` | Flips this instance's `manager_instances.role` to `primary` and demotes peers atomically. Used after failover to mark which instance is now the writer-of-record. |
 | `bilbycast-manager rejoin` | Re-registers a row that the heartbeat reaper dropped during an outage. Used when restarting an instance after a long downtime. |
-| `bilbycast-manager upgrade [--drain-secs N]` | Writes the `BILBYCAST_DRAIN` signal file the running `serve` watches. The instance drains in-flight WS connections and exits 0 so systemd can swap the binary. The peer keeps serving the whole time. |
+| `bilbycast-manager upgrade [--drain-secs N]` | Writes the sentinel file `<data_dir>/upgrade.drain` that the running `serve` polls (every 5 s). The command also flips this instance's row to `standby`. On seeing the sentinel, `serve` raises a Warning `upgrade_drain` event, waits out the drain window, then deregisters its `manager_instances` row and exits 0 so systemd can swap the binary. The window is a timed wait, not a gate — nothing in `serve` refuses new WS connections while it runs — so size `--drain-secs` for how long clients need to rotate. The peer keeps serving the whole time. `--drain-secs` defaults to 60 and is written *into* the sentinel, so `serve` honours the number this invocation chose. The data directory resolves the same way `serve` resolves it: `--data-dir`, else `BILBYCAST_DATA_DIR`, else the relative default `data/`. |
 
 The runbook for DNS failover, region promotion, and rolling upgrades lives in [`DNS_FAILOVER.md`](https://github.com/Bilbycast/bilbycast-manager/blob/main/docs/DNS_FAILOVER.md).
 

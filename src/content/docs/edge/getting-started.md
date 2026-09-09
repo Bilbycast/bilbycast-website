@@ -33,7 +33,9 @@ cd bilbycast-edge-*
 ```
 
 :::note[Rockchip SBCs — use the `rockchip` build]
-On a Rockchip RK3568 / RK3588 board (NanoPi R5S/R6S, Orange Pi 5, Radxa Rock 5B…), `$(uname -m)` is `aarch64`, so the commands above fetch the generic `aarch64-linux-full` build — which has **no** RKMPP hardware encoder. To get RKMPP (`h264_rkmpp` / `hevc_rkmpp`), download `bilbycast-edge-aarch64-linux-rockchip.tar.gz` instead (swap `aarch64-linux-full` for `aarch64-linux-rockchip` above). It needs a Rockchip **BSP kernel** exposing `/dev/mpp_service` and the BSP's `librockchip_mpp.so`. See the [codec matrix](/edge/codec-matrix/) for what RKMPP encodes (8-bit 4:2:0; x264/x265 handle the rest). The manager's remote-upgrade path selects this build automatically once a node is running it.
+On a Rockchip RK3568 / RK3588 board (NanoPi R5S/R6S, Orange Pi 5, Radxa Rock 5B…), `$(uname -m)` is `aarch64`, so the commands above fetch the generic `aarch64-linux-full` build — which has **no** RKMPP hardware encoder. To get RKMPP (`h264_rkmpp` / `hevc_rkmpp`), download `bilbycast-edge-aarch64-linux-rockchip.tar.gz` instead (swap `aarch64-linux-full` for `aarch64-linux-rockchip` above). It needs a Rockchip **BSP kernel** exposing `/dev/mpp_service` and the BSP's `librockchip_mpp.so`. See the [codec matrix](/edge/codec-matrix/) for what RKMPP encodes (8-bit 4:2:0; x264/x265 handle the rest).
+
+**Don't run step 3 on a Rockchip board.** `install-edge.sh` cannot fetch this artefact — its `--variant` accepts only `default` or `full`, and it downloads from the signed `manifest.json` rather than from the tarball you just extracted, so it installs the generic `aarch64-linux-full` build and you silently lose RKMPP. Lay the Rockchip tarball down by hand instead: [Install Edge as a Linux Service](/edge/install-ubuntu-service/) walks through the same `versions/<version>/` + `current`-symlink layout the script would have created. Once the node is running the Rockchip binary the manager's remote-upgrade path selects this build automatically, because the binary reports its own `rockchip` variant.
 :::
 
 ### 2. Create the node in the manager
@@ -58,12 +60,19 @@ This single command does everything:
 - Creates the `bilbycast` service user.
 - Installs the binary under `/opt/bilbycast/edge/` with a `current` symlink (the layout the manager's remote-upgrade feature expects).
 - Writes `config.json` and `secrets.json` with the manager URL and registration token.
-- Installs `linuxptp` (`ptp4l`, `phc2sys`, `pmc`) for PTP / ST 2110 support.
+- Installs `linuxptp` (`ptp4l`, `phc2sys`, `pmc`) for PTP / ST 2110 support — on Debian/Ubuntu only, see below.
 - Installs and enables `bilbycast-ptp.service` (the PTP helper daemon, defaults to `mode=off`).
 - Installs and enables `bilbycast-edge.service` (auto-starts on boot, auto-restarts on crash).
 - Registers the node with the manager automatically — no setup wizard or browser needed.
 
-Works on x86_64 and aarch64 Linux. Uses `apt` on Debian/Ubuntu or `dnf` on RHEL/Fedora.
+Works on x86_64 and aarch64 Linux. Prerequisites are installed with `apt`, so **only Debian/Ubuntu hosts get them automatically** — the script has no `dnf` / `yum` path. On RHEL/Fedora it prints a warning and carries on, leaving `linuxptp` and (full variant) the VAAPI/QSV runtime libraries uninstalled, so install them yourself:
+
+```bash
+sudo dnf install -y linuxptp alsa-lib libva libdrm mesa-va-drivers
+sudo dnf install -y libvpl          # x86_64 only — Intel QSV
+```
+
+`curl`, `jq` and `sha256sum` must already be present on any distro — the script exits rather than installing them.
 
 **Optional flags:**
 
@@ -78,7 +87,7 @@ sudo bash packaging/install-edge.sh \
 |------|---------|
 | `--output-nics <nic1,nic2>` | Enable kernel-paced wire emission (SO_TXTIME) on the listed NICs. Installs a boot-persistent ETF qdisc on each NIC and sets `BILBYCAST_ENABLE_TXTIME=1` in the environment file. Each NIC must have >= 3 hardware tx queues (validated). Omit to stay on the default `clock_nanosleep` tier — fine for most deployments. See [ETF qdisc setup](/edge/install-ubuntu-service/#etf-qdisc-setup-opt-in-for-tier-1-pcr-accuracy-and-st-2110-21-narrow-profile) for when you need this. |
 | `--channel <name>` | Release channel (`stable` / `nightly` / `beta`). Default `stable`. |
-| `--variant <name>` | Binary variant (`default` / `full`). Default `full` on Linux. |
+| `--variant <name>` | Binary variant. Default `full`, and the only one the script can install — it accepts `default` or `full`, but no `default` artefact is published, so `--variant default` aborts with `No artefact for arch=… variant=default in manifest.` (`rockchip` is published, but it is not in the flag's allowlist — see the Rockchip note above.) Build a default-features binary from source with a bare `cargo build --release` if you need one. |
 | `--accept-self-signed` | Allow connecting to a manager with a self-signed certificate. |
 | `--upgrade-installer` | Refresh the service unit and install script without touching config or versions. |
 
@@ -162,12 +171,7 @@ sudo systemctl status bilbycast-edge
 
 ### Upgrading to a specific version
 
-By default the script installs the latest stable release. To pin a version:
-
-```bash
-curl -fsSL https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/install-edge.sh \
-  | sudo bash -s -- --upgrade-installer --target-version 0.92.1
-```
+The script has no version pin. It always fetches the manifest from `releases/latest/download` — `--channel` only cross-checks the channel recorded inside that manifest and aborts on a mismatch — and `--target-version` is not one of its arguments: passing it aborts with `Unknown argument: --target-version`. To land a specific version by hand, fetch that release's tarball, unpack it into `versions/<version>/` and swap the `current` symlink atomically: see [Upgrade manually (fallback)](/edge/install-ubuntu-service/#7-day-2-operations).
 
 ### Troubleshooting
 
@@ -176,7 +180,7 @@ curl -fsSL https://github.com/Bilbycast/bilbycast-edge/releases/latest/download/
 | `jq is required but not installed` | Missing prerequisite | `sudo apt install -y jq` |
 | Exit code 226/NAMESPACE after upgrade | The systemd unit has sandbox directives (`ProtectSystem`, `ProtectHome`, `PrivateTmp`, `LockPersonality`, `RestrictNamespaces`) that some kernels don't support (Raspberry Pi, minimal ARM boards, older kernels) | Strip the sandbox block: `sudo sed -i '/^ProtectSystem=/d; /^ReadWritePaths=/d; /^ProtectHome=/d; /^PrivateTmp=/d; /^LockPersonality=/d; /^RestrictNamespaces=/d' /etc/systemd/system/bilbycast-edge.service && sudo systemctl daemon-reload && sudo systemctl reset-failed bilbycast-edge && sudo systemctl start bilbycast-edge`. This is safe — the edge runs as an unprivileged user, which is the real security boundary. Newer versions of the install script ship a unit without these directives. |
 | Service running but manager UI still shows old version | Service wasn't restarted after the symlink swap | `sudo systemctl restart bilbycast-edge` |
-| Upgrade button missing in manager UI | Node predates the remote upgrade module (typically v0.58 and earlier) | Run the manual upgrade above. Once on a current version, the button appears and all future upgrades work from the UI. |
+| Upgrade button missing in manager UI | Node predates the remote upgrade module (v0.43.0 and earlier — v0.58.0 is the first tagged release that carries it) | Run the manual upgrade above. Once on a current version, the button appears and all future upgrades work from the UI. |
 
 After a successful manual upgrade, all future upgrades can be done from the manager UI — see [Remote Upgrade](/manager/remote-upgrade/).
 
@@ -201,14 +205,16 @@ the stable-SONAME system libraries:
 ```bash
 # Debian / Ubuntu (full variant)
 sudo apt update
-sudo apt install libdrm2 libasound2t64 libva2 libva-drm2
+sudo apt install libdrm2 libasound2t64 libva2 libva-drm2 va-driver-all
 sudo apt install libvpl2          # x86_64 only — Intel QSV
 
 # RHEL / Fedora
-sudo dnf install libdrm alsa-lib libva
+sudo dnf install libdrm alsa-lib libva mesa-va-drivers
 ```
 
 On Ubuntu 22.04 / Debian 12 the ALSA package is `libasound2` (not `libasound2t64`).
+
+`libva2` is only the VAAPI *loader*. Without a backend driver behind it, `av_hwdevice_ctx_create(VAAPI)` fails, the startup probe advertises no VAAPI capability, and both display output and transcode decode fall back to CPU. The only sign is a single `hw encoder family vaapi unavailable (…)` warning in the node's startup log — nothing on the flow itself reports it — which is why `install-edge.sh` pulls the drivers too. `va-driver-all` / `mesa-va-drivers` covers AMD (Mesa radeonsi); modern Intel additionally needs the iHD driver — `intel-media-va-driver`, or the `-non-free` build listed under [Hardware encoder runtime](#hardware-encoder-runtime-nvenc--qsv) below.
 
 ### 3. Create the node in the manager
 
@@ -217,13 +223,15 @@ Same as the [production step](#2-create-the-node-in-the-manager) above — creat
 ### 4. Run the edge and complete the setup wizard
 
 ```bash
-./bilbycast-edge --config config.json
+./bilbycast-edge --config config.json --bind-addrs '0.0.0.0,[::]'
 ```
 
 The config file doesn't have to exist yet — the edge creates it. Two things happen on first boot:
 
 - The edge prints a **setup token** to stdout (needed only when reaching the wizard from a different machine — loopback callers bypass it).
 - The REST API and setup wizard come up on **port 8080**.
+
+A freshly created `config.json` binds **loopback only** (`127.0.0.1` + `[::1]`), so `--bind-addrs` is what makes the wizard reachable from another machine — without it (or a `server.listen_addrs` entry in `config.json`) `http://EDGE-IP:8080/setup` is simply refused. Working on the node itself? Drop the flag and browse to `http://localhost:8080/setup`. Putting the API on the LAN also means turning on `server.auth`.
 
 Open the wizard in a browser:
 
@@ -238,19 +246,23 @@ The wizard guides you through:
 - **Registration token** — paste the value you copied from the manager.
 - **Accept self-signed certificate** — tick this only if your manager uses a self-signed cert.
 
-Click **Save**. The wizard writes `config.json` and `secrets.json`, registers the node with the manager, and auto-disables itself.
-
-If you ticked the self-signed-cert option, also set `BILBYCAST_ALLOW_INSECURE=1` before re-launching:
+Click **Save**. The wizard validates the settings, writes `config.json` and `secrets.json`, and tells you to restart. Registration with the manager happens on the **next start**, not on submit — the manager client is spawned once at boot from the config read at process start — and the wizard disables itself only after that registration succeeds. So restart the edge now — the wizard's own **Listen Addresses** field defaults to `0.0.0.0,[::]`, so keep the flag unless you narrowed it there:
 
 ```bash
-BILBYCAST_ALLOW_INSECURE=1 ./bilbycast-edge --config config.json
+./bilbycast-edge --config config.json --bind-addrs '0.0.0.0,[::]'
+```
+
+If you ticked the self-signed-cert option, `BILBYCAST_ALLOW_INSECURE=1` has to be set as well — the edge honours `accept_self_signed_cert` only when both halves are present:
+
+```bash
+BILBYCAST_ALLOW_INSECURE=1 ./bilbycast-edge --config config.json --bind-addrs '0.0.0.0,[::]'
 ```
 
 ### 5. Verify
 
 - The edge log shows `manager: connected`.
 - The node appears online in the manager at **Admin → Nodes**.
-- `curl http://localhost:8080/health` returns `{"status":"healthy"}`.
+- `curl http://localhost:8080/health` returns `{"status":"ok", ...}` — the field is literally `ok`, so a monitoring probe must not match on `healthy`. Full body: [API reference → GET /health](/edge/api-reference/#get-health).
 
 ### Moving to production later
 
@@ -390,10 +402,12 @@ CLI flags:
 |------|---------|
 | `-c, --config <PATH>` | Path to config (default `./config.json`) |
 | `-p, --port <PORT>` | Override REST API listen port |
-| `-b, --bind <ADDR>` | Override REST API listen address |
+| `-b, --bind <ADDR>` | Override REST API listen address (legacy single-address form — ignored whenever `server.listen_addrs` is set, which it is in a freshly created config) |
+| `--bind-addrs <ADDRS>` | Comma-separated dual-stack listeners, e.g. `0.0.0.0,[::]`. Takes precedence over `--bind` and over `server.listen_addr` / `server.listen_addrs` |
 | `--monitor-port <PORT>` | Override embedded dashboard port (default 9090) |
 | `-l, --log-level <LEVEL>` | `trace` / `debug` / `info` / `warn` / `error` |
 | `--print-setup-token` | Print the first-boot setup token without launching |
+| `--print-capabilities` | Print the compiled-in `feature <name>` and advertised `capability <name>` lines and exit — loads no config, opens no socket |
 
 Environment variables:
 

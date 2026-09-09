@@ -35,8 +35,9 @@ operation, WAN transport, and compressed-audio egress.
 > variant with no PTP requirement, SMPTE 302M LPCM-in-MPEG-TS over
 > SRT / UDP / RTP/MP2T, an in-process AAC decode bridge (FDK AAC) for
 > compressed contribution audio, and an audio encoder for RTMP / HLS /
-> WebRTC compressed egress (in-process FDK AAC for AAC codecs, ffmpeg
-> subprocess for Opus / MP2 / AC-3).
+> WebRTC compressed egress (in-process FDK AAC for AAC codecs,
+> in-process libavcodec + libopus for Opus / MP2 / AC-3 — an ffmpeg
+> subprocess only when those features are compiled out).
 
 ---
 
@@ -53,7 +54,7 @@ operation, WAN transport, and compressed-audio egress.
 | Send 24-bit LPCM to a hardware decoder that expects MPEG-TS over UDP | UDP output with `transport_mode: "audio_302m"` |
 | Send 24-bit LPCM to a hardware decoder that expects RTP/MP2T (RFC 2250) | `rtp_audio` output with `transport_mode: "audio_302m"` |
 | Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; symphonia fallback: AAC-LC mono/stereo) |
-| Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, Opus, MP2, AC-3) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `media-codecs` build (ffmpeg subprocess fallback otherwise) |
+| Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, MP2, AC-3; Opus on `webrtc` only) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `media-codecs` build (ffmpeg subprocess fallback otherwise) |
 | Deliver an AAC contribution to browsers as Opus in one hop | Combined Phase A + Phase B chain — RTMP AAC input → WebRTC WHEP Opus output |
 
 ---
@@ -122,6 +123,17 @@ byte-identical passthrough path — no allocation, no signal processing,
 zero overhead. The transcoder only ever runs when the operator opts in
 on a specific output.
 
+The same three outputs also accept an optional `audio_track_index`
+(`0`..=`15`). When the upstream input carries MPEG-TS (SRT, RTP, UDP,
+RTMP, RTSP), it selects which audio elementary stream in the PMT is
+de-embedded to PCM — `0` is the first audio track, `1` the second, and
+so on. Unset takes the first audio track, and the field is ignored when
+the input is already a native audio essence (ST 2110-30/-31,
+`rtp_audio`). An index past the last audio track in the PMT is clamped
+to the last one silently — no event is raised — so check the demuxer's
+`TS demux: … audio PID` log line if a language selection lands on the
+wrong track.
+
 ### Allowed values
 
 ```json
@@ -146,19 +158,20 @@ on a specific output.
 | `bit_depth` | `16`, `20`, `24` | input bit depth | L20 is carried as L24 with the bottom 4 bits zero per RFC 3190 §4.5 |
 | `channels` | `1`..=`16` | input channel count | Must agree with `channel_map` length |
 | `channel_map` | `[[in_ch, ...], ...]` | identity (or auto-promote) | One row per output channel; each row lists input channel indices to sum (unity gain) |
-| `channel_map_preset` | one of the named presets | none | Mutually exclusive with `channel_map` |
+| `channel_map_with_gain` | `[[[in_ch, gain], ...], ...]` | none | Same shape as `channel_map` but each entry carries a linear gain: `1.0` = unity, `0.7071` ≈ −3 dB, `10.0` = +20 dB (the ceiling) |
+| `channel_map_preset` | one of the named presets | none | Mutually exclusive with `channel_map` and `channel_map_with_gain` |
 | `packet_time_us` | `125`, `250`, `333`, `500`, `1000`, `4000` | `1000` | 4 ms is a sensible default for talkback / WAN |
 | `payload_type` | `96`..=`127` | `97` | RTP dynamic payload type |
 | `src_quality` | `"high"`, `"fast"` | `"high"` | High = `rubato::SincFixedIn` (sinc, broadcast quality). Fast = `rubato::FastFixedIn` (polynomial, lower latency). |
 | `dither` | `"tpdf"`, `"none"` | `"tpdf"` | TPDF triangular dither on bit-depth downconversion. `"none"` truncates. |
 
-`channel_map` and `channel_map_preset` are mutually exclusive. If both
-are absent and the input/output channel counts agree, the matrix
-defaults to identity. If they differ by exactly mono→stereo (1→2) or
-stereo→mono (2→1), a sensible default preset is auto-applied. Any other
-shape mismatch must be specified explicitly via `channel_map` or
-`channel_map_preset` — the validator rejects ambiguous configs at config
-load time.
+`channel_map`, `channel_map_with_gain` and `channel_map_preset` are
+mutually exclusive — specify at most one. If all three are absent and
+the input/output channel counts agree, the matrix defaults to identity.
+If they differ by exactly mono→stereo (1→2) or stereo→mono (2→1), a
+sensible default preset is auto-applied. Any other shape mismatch must
+be specified explicitly via one of the three fields — the validator
+rejects ambiguous configs at config load time.
 
 ### Channel routing presets
 
@@ -179,10 +192,15 @@ output ch1 = (in1 + in3):
 "channel_map": [[0, 2], [1, 3]]
 ```
 
-The current schema treats every routed input as unity gain. If you need
-non-unity gains in a custom matrix today, use one of the named presets
-(which apply −3 dB / −6 dB internally) — first-class JSON support for
-per-entry gains is on the roadmap.
+`channel_map` treats every routed input as unity gain. For a custom
+matrix with per-entry gains, use `channel_map_with_gain` instead — each
+entry is `[in_ch, gain]`, the gain is linear (`1.0` = unity, `0.7071`
+≈ −3 dB) and bounded `0.0`..=`10.0` (+20 dB). This swaps L/R and
+attenuates the right channel by 3 dB:
+
+```json
+"channel_map_with_gain": [[[1, 1.0]], [[0, 0.7071]]]
+```
 
 ### SRC quality and dither
 
@@ -459,13 +477,17 @@ gaps:
    because Opus is the only realistic WebRTC audio codec and there
    was no decode/encode bridge.
 
-The `audio_encode` block, available on the RTMP, HLS, WebRTC, SRT,
-RIST, UDP, and RTP output types (TS outputs use the streaming
+The `audio_encode` block, available on the RTMP, HLS, CMAF, WebRTC,
+SRT, RIST, UDP, and RTP output types (TS outputs use the streaming
 `engine::ts_audio_replace::TsAudioReplacer`, which rewrites the PMT
 stream_type in place and leaves video / other PIDs untouched), fills
-both gaps. When set, the output decodes the input AAC in-process via
-the Phase A `engine::audio_decode::AacDecoder`, then re-encodes via
-Phase B's `engine::audio_encode::AudioEncoder`.
+both gaps. When set, the output decodes the source audio in-process and
+re-encodes via Phase B's `engine::audio_encode::AudioEncoder`. AAC
+sources (stream_type `0x0F`) decode through the Phase A FDK AAC bridge;
+on the default `media-codecs` build MP2 (`0x03` / `0x04`), AC-3
+(`0x80` / `0x81` / `0xC1`), E-AC-3 (`0x87` / `0xC2`) and AAC-LATM
+(`0x11`) decode through the in-process libavcodec bridge
+(`engine::audio_decode::ff_codec_for_stream_type`) instead.
 
 **Default build (`fdk-aac` + `media-codecs`, both on by default):**
 all codecs encode in-process. AAC codecs (AAC-LC, HE-AAC v1, HE-AAC
@@ -495,8 +517,9 @@ an ffmpeg subprocess for the affected codecs. Outputs without
 |---|---|---|---|
 | `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. |
 | `hls` | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | HLS-TS supports MP2 (stream type 0x04) and AC-3 (private_stream_1) so long as the consumer's player does. |
+| `cmaf` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | AAC family only — MP2 / AC-3 / Opus are rejected. A `transcode` block on a CMAF output is rejected unless `audio_encode` is also set. Full field table: [CMAF Output](/edge/configuration/#cmaf-output). |
 | `webrtc` | `opus` | `opus` | WebRTC realistically only does Opus. Validation also rejects `audio_encode` + `video_only=true` (an audio MID must be negotiated in SDP). |
-| `srt`, `rist`, `udp`, `rtp` (TS outputs) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `opus`, `mp2`, `ac3` | `aac_lc` | `TsAudioReplacer` rewrites the PMT stream_type in place and leaves video / other PIDs untouched. Mutually exclusive with `transport_mode: audio_302m`. |
+| `srt`, `rist`, `udp`, `rtp` (TS outputs) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | `TsAudioReplacer` rewrites the PMT stream_type in place and leaves video / other PIDs untouched. Mutually exclusive with `transport_mode: audio_302m`. **Opus is not in the allowed set on any of the four** — the validator refuses `codec: "opus"` on a TS output; use a `webrtc` output for Opus egress. |
 
 The validator enforces this matrix at config load time and on every
 `update_config` manager command — invalid combinations are rejected
@@ -516,7 +539,33 @@ without touching the running flows.
 If `sample_rate` is unset, the encoder uses the input PCM sample rate.
 **Opus is always carried at 48 kHz on the wire** regardless of
 `sample_rate`, per RFC 7587. If `channels` is unset, the encoder uses
-the input channel count (1 or 2).
+the input channel count; when set, the ceiling is per codec (see the
+[validation quick reference](#validation-rules-quick-reference)).
+
+### Other `audio_encode` fields
+
+Beyond `codec` / `bitrate_kbps` / `sample_rate` / `channels`, the block
+carries:
+
+| Field | Meaning |
+|---|---|
+| `source_audio_pid` | Pin the transcoder to a specific audio PID (`0x0010`..=`0x1FFE`). Unset locks onto the **first** audio elementary stream in the active program's PMT. A configured PID that is absent from the live PMT falls back to that first-match behaviour and logs `audio_source_pid_not_found` rather than failing. The in-place transcoder is single-program, so producing two language variants needs one output per track, each with its own `program_number` filter and `source_audio_pid`. |
+| `silent_fallback` | Inject a continuous zero-filled PCM track whenever the source has no audio PID, or stops delivering audio mid-stream. Default `false`. Required by ingest services that gate their live-preview thumbnailer on the presence of audio, and by segmenters (WebRTC / CMAF-LL) that expect monotonic audio timestamps per segment. |
+| `opus_vbr_mode` | `"vbr"` (constrained VBR) or `"cbr"`. Unset uses libopus's default (VBR). Opus only. |
+| `opus_fec` | In-band forward error correction for the previous frame. Default off. Opus only. |
+| `opus_dtx` | Discontinuous transmission — skip frames during silence. Default off. Opus only. |
+| `opus_frame_duration_ms` | `5`, `10`, `20` (default), `40` or `60`. Opus only. |
+
+The four `opus_*` knobs are **rejected at config load** on any codec
+other than `opus`, so a stray setting surfaces as a validation error
+instead of running with default Opus behaviour.
+
+One caveat on those four: they only reach libopus through the **ffmpeg
+subprocess** backend, where they become `-vbr` / `-fec` / `-dtx` /
+`-frame_duration` arguments. The in-process libavcodec encoder a
+default build uses for Opus is opened with codec / sample rate /
+channels / bitrate only, so on every published release artefact the
+`opus_*` fields validate but change nothing.
 
 ### Same-codec passthrough fast path (RTMP only)
 
@@ -540,27 +589,35 @@ always AAC, the sink is always Opus, so passthrough is impossible.
 The encoder is opt-in and fails fast with a clear `audio_encode`
 category event to the manager (Critical severity) when:
 
-- **ffmpeg is missing in `PATH`** (non-AAC codecs, or AAC without
-  `fdk-aac` feature): outputs with `audio_encode` set refuse to start
-  (HLS) or drop audio for the rest of the output's lifetime after
-  logging once (RTMP / WebRTC). AAC codecs with the `fdk-aac` feature
-  (default) do not require ffmpeg. Outputs without `audio_encode` keep
-  working without ffmpeg installed.
-- **Input audio is unsupported**: with the default `fdk-aac` feature,
-  the decoder supports AAC-LC, HE-AAC v1/v2, and multichannel up to
-  7.1. Without `fdk-aac`, the symphonia fallback supports AAC-LC
-  mono/stereo only — other profiles are rejected. The output drops
-  audio and emits the failure event so the operator sees the problem.
+- **ffmpeg is missing in `PATH`** — **only on a build with `fdk-aac`
+  and/or `media-codecs` compiled out.** On a default build (and on all
+  three published release artefacts) no `audio_encode` codec touches
+  ffmpeg at all. Where the subprocess backend is in play, outputs with
+  `audio_encode` set refuse to start (HLS) or drop audio for the rest
+  of the output's lifetime after logging once (RTMP / WebRTC).
+- **Input audio is unsupported**: on a default build the decoder
+  handles AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1, via FDK
+  AAC) plus MP2, AC-3, E-AC-3 and AAC-LATM via the libavcodec bridge.
+  Without `media-codecs`, only the AAC family decodes; without
+  `fdk-aac` as well, the symphonia fallback narrows that to AAC-LC
+  mono/stereo. Two per-output exceptions hold on every build: an RTMP
+  output discards an Opus source outright, and HLS refuses
+  `codec: opus` as a target. The output drops audio
+  and emits the failure event so the operator sees the problem.
 - **`compressed_audio_input` is false**: the flow input cannot carry
   TS audio (e.g. ST 2110-30, `rtp_audio` are PCM-only). The output
   drops audio.
-- **Encoder configuration error**: the in-process FDK AAC encoder or
-  ffmpeg subprocess rejects the codec/profile combination.
+- **Encoder configuration error**: the in-process FDK AAC or
+  libavcodec encoder (or, on a feature-stripped build, the ffmpeg
+  subprocess) rejects the codec/profile combination. The in-process
+  backends return the error straight to the caller — there is no
+  silent fall-through to ffmpeg.
 - **Restart cap exhausted** (ffmpeg backend only): the
   `engine::audio_encode` supervisor restarts ffmpeg with exponential
   backoff up to 5 times in any 60-second window. After that it gives
-  up and emits the Critical event. The in-process FDK AAC backend does
-  not use a subprocess and has no restart budget.
+  up and emits the Critical event. The in-process backends use no
+  subprocess and have no restart budget, so on a default build this
+  mode cannot occur.
 
 The supervisor also emits **`audio_encode` Info** when the encoder
 starts successfully (with codec / bitrate / SR / channels in the
@@ -572,8 +629,8 @@ the restart counter).
 The biggest single use case for `audio_encode` is the Phase A + Phase
 B end-to-end chain: AAC contribution comes in via RTMP / SRT / RTSP /
 UDP-TS (decoded by Phase A's `AacDecoder`), runs through Phase B's
-`AudioEncoder` libopus subprocess, and is distributed via WebRTC WHEP
-or WHIP — all inside one bilbycast-edge process with no external
+in-process libavcodec + libopus encoder, and is distributed via WebRTC
+WHEP or WHIP — all inside one bilbycast-edge process with no external
 transcoder.
 
 ```jsonc
@@ -599,19 +656,39 @@ transcoder.
 
 ### Performance
 
-- **One persistent ffmpeg per encoded RTMP / WebRTC output.** Each
-  long-lived subprocess has three concurrent driver tasks: stdin
-  writer (PCM in via a bounded(64) channel, drop-on-full so a slow
-  encoder never cascades backpressure into the input), stdout reader
-  + per-codec framer, stderr drainer (must always run or ffmpeg
-  deadlocks on a full pipe).
-- **HLS forks ffmpeg per segment** instead. The per-codec encoder +
-  a Rust TS muxer would require adding MP2 / AC-3 PES framing to
-  `engine/rtmp/ts_mux.rs`, which was disproportionate work for v1.
-  Per-segment fork is acceptable because HLS segments are typically
-  2-6 s and ffmpeg startup is small relative to that.
-- **Drop-on-full** is by design. Slow ffmpeg → `OutputStatsAccumulator.
-  packets_dropped` increments. The data path is never blocked.
+On the default build — and on all three published release artefacts —
+every `audio_encode` codec runs **in-process**:
+
+- **No subprocess on RTMP / WebRTC.** `AudioEncoder::spawn` dispatches
+  AAC-LC / HE-AAC v1 / HE-AAC v2 to FDK AAC and Opus / MP2 / AC-3 to
+  libavcodec (+ libopus) before it ever reaches the ffmpeg backend.
+  Both encode synchronously inside `submit_planar`: samples are
+  accumulated to the codec's frame size and encoded on the caller's
+  task — no pipes, no driver tasks, no stderr drainer. Neither
+  in-process backend falls back to ffmpeg on failure; it returns the
+  error.
+- **libavcodec + rubato for rate conversion.** When the source rate
+  differs from the target (e.g. 44.1 kHz AAC in → 48 kHz Opus out),
+  the libavcodec backend builds a `rubato` resampler ahead of the
+  encoder — the in-process equivalent of ffmpeg's `-ar`.
+- **HLS re-encodes per segment, in-process.** `remux_segment_audio`
+  runs `remux_ts_audio_inprocess` on a `spawn_blocking` thread (the C
+  codec calls are synchronous): decode every audio PES to PCM,
+  re-encode, re-packetise the result onto the same audio PID, and
+  rewrite that PID's `stream_type` in the PMT. Per-segment work is
+  acceptable because HLS segments are typically 2-6 s.
+
+**Builds without `media-codecs` / `fdk-aac`** fall through to the
+ffmpeg subprocess backend for the affected codecs, and only there does
+the original architecture apply: one persistent ffmpeg per encoded
+RTMP / WebRTC output with three concurrent driver tasks — stdin writer
+(PCM in via a bounded(64) channel, **drop-on-full** so a slow encoder
+never cascades backpressure into the input; drops land on
+`OutputStatsAccumulator.packets_dropped`), stdout reader + per-codec
+framer, and a stderr drainer that must always run or ffmpeg deadlocks
+on a full pipe. HLS's per-segment ffmpeg fork returns only when
+`media-codecs` specifically is off — its in-process remuxer is gated on
+that feature alone. The data path is never blocked either way.
 
 ---
 
@@ -674,8 +751,11 @@ the running flows.
 | `transcode.channels` | 1..=16 |
 | `transcode.channel_map.length` | must equal `transcode.channels` |
 | `transcode.channel_map[i][j]` | must be `< input.channels` |
+| `transcode.channel_map_with_gain.length` | must equal `transcode.channels` |
+| `transcode.channel_map_with_gain[i][j][0]` | non-negative integer, `< input.channels` |
+| `transcode.channel_map_with_gain[i][j][1]` | `0.0`..=`10.0` linear gain (`1.0` = unity, `0.7071` ≈ −3 dB, `10.0` = +20 dB) |
 | `transcode.channel_map_preset` | `mono_to_stereo`, `stereo_to_mono_3db`, `stereo_to_mono_6db`, `5_1_to_stereo_bs775`, `7_1_to_stereo_bs775`, `4ch_to_stereo_lt_rt` |
-| `transcode.channel_map` + `transcode.channel_map_preset` | mutually exclusive |
+| `transcode.channel_map` + `transcode.channel_map_with_gain` + `transcode.channel_map_preset` | mutually exclusive — at most one |
 | `transcode.packet_time_us` | 125, 250, 333, 500, 1000, 4000 |
 | `transcode.payload_type` | 96..=127 |
 | `transcode.src_quality` | `"high"`, `"fast"` |
@@ -690,10 +770,15 @@ the running flows.
 | SMPTE 302M channel count (when 302M mode active) | 2, 4, 6, 8 (auto-promote mono → stereo) |
 | `audio_encode.codec` (RTMP) | `aac_lc`, `he_aac_v1`, `he_aac_v2` |
 | `audio_encode.codec` (HLS) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` |
+| `audio_encode.codec` (CMAF) | `aac_lc`, `he_aac_v1`, `he_aac_v2` |
 | `audio_encode.codec` (WebRTC) | `opus` |
+| `audio_encode.codec` (SRT / RIST / UDP / RTP) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` |
 | `audio_encode.bitrate_kbps` | 16..=512 |
 | `audio_encode.sample_rate` | 8000, 16000, 22050, 24000, 32000, 44100, 48000 |
-| `audio_encode.channels` | 1 or 2 |
+| `audio_encode.channels` | per codec: `aac_lc` 1..=8; `ac3` 1..=6; `he_aac_v1` / `opus` / `mp2` 1..=2; `he_aac_v2` exactly 2 (Parametric Stereo — mono is rejected); `s302m` (accepted only on a PCM **input**'s `audio_encode`) 2, 4, 6 or 8 |
+| `audio_encode.source_audio_pid` | `0x0010`..=`0x1FFE` |
+| `audio_encode.opus_vbr_mode` | `"vbr"`, `"cbr"` (rejected on a non-Opus codec, as are the other three `opus_*` fields) |
+| `audio_encode.opus_frame_duration_ms` | 5, 10, 20, 40, 60 |
 | `audio_encode` on WebRTC + `video_only=true` | rejected (audio MID required in SDP) |
 
 ---
@@ -743,13 +828,7 @@ cases in this guide that are marked READY.
    that fallback, HE-AAC v1/v2 and multichannel AAC are rejected with
    an `audio_decode` Critical event.
 
-5. **Custom channel-map gains in JSON.** The `transcode.channel_map`
-   field currently treats every routed input as unity gain. For
-   non-unity routing today, use one of the named presets (which apply
-   −3 dB / −6 dB internally). First-class JSON support for per-entry
-   gains (`[[in_ch, gain], ...]`) is on the roadmap.
-
-6. **L20 wire format.** L20 is accepted by the validator and the
+5. **L20 wire format.** L20 is accepted by the validator and the
    transcoder; it's serialized on the wire as L24 with the bottom 4
    bits zeroed per RFC 3190 §4.5. If you specifically need L20-aware
    receivers to advertise L20 in their SDP, the on-the-wire bytes are

@@ -26,7 +26,7 @@ The gateway:
 
 ## Supported Commands
 
-The command handler ships **73 distinct action arms**. The most commonly used are:
+The command handler ships **76 distinct action arms**. The most commonly used are:
 
 | Command | Description |
 |---------|-------------|
@@ -39,7 +39,7 @@ The command handler ships **73 distinct action arms**. The most commonly used ar
 | `set_ip_input` | Configure an IP input |
 | `set_ip_output` | Configure an IP output |
 
-Beyond these, the handler also covers PTP and system-time status, licensing (`install_license`), redundancy groups, DPI / ESAM SCTE-35 config, audio profiles, coder and multi-service management, HIP encoders / decoders, SRT / PID / lock / PSI status, IP connections, card allocations, pool config, and `clear_all_counters` — 73 action types in total.
+Beyond these, the handler also covers PTP and system-time status, licensing (`install_license`), redundancy groups, DPI / ESAM SCTE-35 config, audio profiles, coder and multi-service management, HIP encoders / decoders, SRT / PID / lock / PSI status, IP connections, card allocations, pool config, alarm history and alarm overrides, chassis inventory (`get_features_info`, `get_hardware_id`, `get_images`), physical / virtual port and trigger enumeration, and `clear_all_counters` — 76 action types in total.
 
 ## Quick Start
 

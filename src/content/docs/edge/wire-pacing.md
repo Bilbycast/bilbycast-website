@@ -1,11 +1,13 @@
 ---
 title: Wire-Time Precision (PCR_AC)
-description: How bilbycast-edge paces UDP / RTP / SRT / RIST / ST 2110 outputs to the wire. The default `clock_nanosleep` path needs no special setup; the kernel-paced `SO_TXTIME` + ETF qdisc tier is an opt-in upgrade for sub-µs PCR_AC.
+description: How bilbycast-edge paces UDP / RTP / ST 2110 outputs to the wire. The default `clock_nanosleep` path needs no special setup; the kernel-paced `SO_TXTIME` + ETF qdisc tier is an opt-in upgrade for sub-µs PCR_AC.
 sidebar:
   order: 10
 ---
 
-Every TS-bearing output on bilbycast-edge — UDP / RTP / SRT / RIST / RTP audio / 302M, plus ST 2110-20 / -23 / -30 / -31 / -40 — runs each datagram through a dedicated **wire-emit thread** that schedules the packet's release against a target wallclock instant. The closer that release lands to the spec-correct instant, the lower the **PCR accuracy** error (`PCR_AC` in T-STD terms — `|ΔPCR_µs − Δwall_µs|`) seen at the receiver.
+Every output that paces its own datagrams onto the wire — UDP (including SMPTE 302M), RTP (single-leg, FEC, 2022-7 dual-leg), plus ST 2110-20 / -23 / -30 / -31 / -40 — runs each datagram through a dedicated **wire-emit thread** that schedules the packet's release against a target wallclock instant. The closer that release lands to the spec-correct instant, the lower the **PCR accuracy** error (`PCR_AC` in T-STD terms — `|ΔPCR_µs − Δwall_µs|`) seen at the receiver.
+
+SRT, RIST, RTP audio, RTMP, HLS, CMAF and WebRTC are out of scope — they pace inside their own protocol stacks, carry no wire-emit thread, and report no `wire_pacing_tier` at all. Don't go looking for a tier on one of those outputs; the field is simply absent.
 
 This page covers the two release paths, when each one applies, and how to enable the kernel-paced upgrade when you need it.
 
@@ -68,7 +70,15 @@ You only need to touch `LimitRTPRIO` in three cases:
 - **Running the binary directly without systemd** (`cargo run`, `./target/release/bilbycast-edge`): grant `CAP_SYS_NICE` once via `sudo setcap cap_sys_nice,cap_net_admin+ep <binary>` (the cap survives reboots but is wiped on every rebuild), or just run as root.
 - **Containerised deployments**: the container runtime needs to permit RT scheduling. Docker: `--ulimit rtprio=99 --cap-add=sys_nice`. Kubernetes: `securityContext.capabilities.add: ["SYS_NICE"]` plus a node-level `rtprio` ulimit. Without these the wire-emit `sched_setscheduler` call returns `EPERM` and threads stay on `SCHED_OTHER`.
 
-The output's startup log line tells you whether the grant landed: `wire-emit '<id>': starting (anchor=…, tier=clock_nanosleep_fifo)` is tier 4 (the `_fifo` suffix confirms the `SCHED_FIFO` grant got through); `tier=clock_nanosleep` (no suffix) is tier 5. Same data is on `OutputStats.wire_pacing_tier` for every UDP-socket-owning output.
+The output's startup log line tells you whether the grant landed — it prints the answer outright:
+
+```text
+wire-emit '<id>': starting (anchor=Pcr, tier=clock_nanosleep_fifo, sched_fifo=true, pinned_cpu=None)
+```
+
+`sched_fifo=true` is the grant; `sched_fifo=false` (and the matching `tier=clock_nanosleep`, no `_fifo` suffix) is tier 5. Same tier value is on `OutputStats.wire_pacing_tier` for every output that has a wire-emit thread.
+
+**Confirming it without the logs.** Every health tick carries `HealthPayload.scheduling_status` with `sched_fifo_granted`, `sched_fifo_failed`, `rlimit_rtprio_max` and `mlockall`, so a node running degraded at `SCHED_OTHER` states it on every beat rather than only in its own journal. No manager screen renders the block today — it arrives inside the node's raw health payload.
 
 ### What tier do I actually need?
 
@@ -109,8 +119,10 @@ tc -s qdisc show dev enp1s0       # look for `etf` in output, zero drops once tr
 
 The script installs `mqprio` + `etf` with `clockid CLOCK_TAI` and `skip_sock_check on`. By default it uses **software ETF** (no HW offload, ~1–10 µs jitter, no PTP required). For sub-µs jitter (tier 1), set `BILBYCAST_ETF_OFFLOAD=1` — but only after PTP is running (`ptp4l` + `phc2sys` in TAI domain). Without PHC sync, HW offload silently drops every packet.
 
-:::caution[`skip_sock_check on` is non-negotiable]
-Without `skip_sock_check`, ETF refuses any packet whose socket lacks `SO_TXTIME` and drops it at the qdisc — **including kernel-issued ARP solicitations, DHCP, ssh, and every default UDP socket on the host**. Symptoms: `ip neigh show <peer>` reports `INCOMPLETE`, every `sendmsg` returns `ENETUNREACH` (errno 101), `tc -s qdisc show` reports 100 % drops on the etf class with zero packets sent. The shipped `setup-etf-qdisc.sh` always sets the flag — don't second-guess it.
+:::caution[The priomap is the safety mechanism, not `skip_sock_check`]
+`skip_sock_check` skips only the per-**socket** validation (the `SOCK_TXTIME` flag / clockid / deadline-mode match). It does **not** exempt a packet from the per-packet launch-time check: a packet carrying no timestamp — ARP, DHCP, ICMP, IGMP, ssh, every unmarked socket — has `skb->tstamp == 0`, which etf reads as a launch time already long past, and drops it on enqueue. Symptoms: `ip neigh show <peer>` reports `INCOMPLETE`, every `sendmsg` returns `ENETUNREACH` (errno 101), `tc -s qdisc show` reports 100 % drops on the etf class with zero packets sent.
+
+What actually keeps that traffic alive is the **mqprio priomap**: `setup-etf-qdisc.sh` installs `map 1 1 1 1 1 0 1 1 2 2 2 2 1 1 1 1`, so socket priority **5** is the only one reaching the etf class and everything else — priority 0 included — goes to `fq_codel`. The script pairs that with a `clsact` egress filter rewriting PTP (udp/319, udp/320, which carry no `SO_TXTIME`) onto a non-etf priority, and the edge separately pins compressed outputs to `SO_PRIORITY=4` whenever `BILBYCAST_ENABLE_TXTIME=1`. Use the shipped script; a hand-written qdisc that maps priority 0 into etf will blackhole the NIC no matter what `skip_sock_check` is set to.
 :::
 
 ### Pick a NIC with hardware TX timestamping (tier 1 only)
@@ -195,15 +207,18 @@ sudo MEDIA_IFACE=enp1s0 bash /opt/bilbycast/edge/current/packaging/provision-edg
 
 ## Enabling the SO_TXTIME tier on the edge
 
-After the qdisc is in place + PTP is running, opt in to the SO_TXTIME release path by setting this env var on the edge process:
+After the qdisc is in place + PTP is running, opt in to the SO_TXTIME release path by setting **two** env vars on the edge process:
 
 ```
 BILBYCAST_ENABLE_TXTIME=1
+BILBYCAST_ETF_SO_PRIORITY=5
 ```
+
+The second one is not optional on a host prepared by the shipped `setup-etf-qdisc.sh`. The edge defaults `BILBYCAST_ETF_SO_PRIORITY` to **0**, but that script's priomap deliberately routes only socket priority **5** to the etf class and sends priority 0 to `fq_codel` (see the caution box under [Installing ETF qdisc](#installing-etf-qdisc)). Leave it unset and the `setsockopt` still succeeds, the tier still reports `so_txtime`, and every packet rides the non-etf class with no launch-time pacing at all. Full detail on the row for [`BILBYCAST_ETF_SO_PRIORITY`](/reference/environment-variables/).
 
 `BILBYCAST_ENABLE_SO_TXTIME` was an accepted alias for the same switch and has been **removed**. A host that still sets it opts in to nothing — every output stays on the `clock_nanosleep` tier — so the edge reports the stale variable at startup as a Warning `deprecated_env_var` event rather than letting a unit file state an intent that is not being applied.
 
-The installer's default `/etc/bilbycast/edge.env` ships with the variable commented out — uncomment it after the qdisc + PTP prerequisites are confirmed:
+The installer's default `/etc/bilbycast/edge.env` ships with `BILBYCAST_ENABLE_TXTIME` commented out — uncomment it after the qdisc + PTP prerequisites are confirmed. `install-edge.sh` never writes the priority line at all, so add it by hand:
 
 ```bash
 # /etc/bilbycast/edge.env
@@ -211,12 +226,15 @@ BILBYCAST_MLOCKALL=1
 # Opt in to kernel-paced wire emission via SO_TXTIME. Requires the ETF
 # qdisc on the egress NIC and ptp4l + phc2sys for tier-1 precision.
 BILBYCAST_ENABLE_TXTIME=1
+# The shipped setup-etf-qdisc.sh priomap reaches the etf class only via
+# socket priority 5; the edge's own default is 0, which is fq_codel.
+BILBYCAST_ETF_SO_PRIORITY=5
 ```
 
 After `sudo systemctl restart bilbycast-edge`, the edge log shows `tier=so_txtime` on each output start:
 
 ```text
-wire-emit '<id>': starting (anchor=Pcr, tier=so_txtime)
+wire-emit '<id>': starting (anchor=Pcr, tier=so_txtime, sched_fifo=true, pinned_cpu=None)
 ```
 
 If the log shows `tier=clock_nanosleep` despite setting the env var, the setsockopt probe failed — typically because `CAP_NET_ADMIN` isn't granted. See [CAP_NET_ADMIN grant](#cap_net_admin-grant) below.
@@ -228,7 +246,7 @@ Mainline Linux 6.x — and every recent Ubuntu / Debian / RHEL backport — rest
 Without the cap, when `BILBYCAST_ENABLE_TXTIME=1` is set:
 
 - The probe fails with `EPERM`. The edge logs `wire-emit: SO_TXTIME(clockid=11) setsockopt failed: Operation not permitted (kernel requires CAP_NET_ADMIN…) — falling back to clock_nanosleep tier` and degrades to tier 4.
-- On any host where the etf qdisc has `skip_sock_check off` (the kernel default — not what the shipped script does, but worth knowing), tier-4 packets are then **also** dropped at the qdisc because they don't carry SO_TXTIME. Always keep `skip_sock_check on` — see [Installing ETF qdisc](#installing-etf-qdisc).
+- If the qdisc was hand-installed with a priomap that routes default-priority traffic into the etf class, those unstamped tier-4 packets are then **also** dropped at the qdisc — `skip_sock_check` does not save them. Use the shipped `setup-etf-qdisc.sh`, whose priomap keeps priority-0 traffic off etf entirely — see [Installing ETF qdisc](#installing-etf-qdisc).
 
 The capability does **not** let the edge install qdiscs (that path stays operator-side, in `setup-etf-qdisc.sh`). It only unlocks the per-socket setsockopt.
 
@@ -268,18 +286,33 @@ The wire emitter records PCR_AC samples on every successful send. Read it via th
 
 ```text
 output.pcr_trust:
-  samples: 4096        # ring buffer depth
-  p50_us: 0.4          # tier-1 production target
-  p95_us: 0.8
-  p99_us: 1.2
-  max_us: 5.7          # outliers
+  samples: 4096              # reservoir depth (caps at 4096)
+  cumulative_samples: 918204 # PCR pairs seen over the flow's lifetime
+  avg_us: 0                  # lifetime mean absolute drift
+  p50_us: 0                  # every *_us field is a whole-microsecond integer,
+  p95_us: 1                  # so a genuine tier-1 result reads 0
+  p99_us: 1
+  max_us: 6                  # outliers
+  window_samples: 256        # short recent window (≤ 256 samples)
+  window_p95_us: 1           # vs p95_us — "is this spike current or baseline?"
 output.wire_pacing_tier: "so_txtime"      # or "clock_nanosleep" on the default tier
 output.wire_pacing_late: 0
+output.wire_short_write: 0
+output.wire_pacing_pinned_cpu: 3          # absent entirely when unpinned
+output.egress_shed: 0
 ```
+
+Every `pcr_trust` figure is a whole-microsecond integer — there is no sub-µs resolution in the field, so the tier-1 target of ≤ 500 ns simply reads `0`. `window_p95_us` against `p95_us` is the "is this spike current or baseline" comparison.
 
 **`wire_pacing_late`** is the kernel's count of packets that missed their TX deadline (drained from the socket error queue). Always 0 on the userspace-sleep tier (no errqueue). On the SO_TXTIME tier this stays at zero on a healthy production setup. Non-zero values mean the kernel had to drop or send late — investigate scheduler contention, IRQ pinning, or kernel preemption configuration.
 
 **`wire_pacing_tier`** confirms which release path is actually live. If you enabled `BILBYCAST_ENABLE_TXTIME=1` but tier still shows `clock_nanosleep`, the SO_TXTIME setsockopt failed — check `dmesg` for `tc-etf` rejections, verify the qdisc is on the correct interface, confirm `CAP_NET_ADMIN` is granted, and confirm the kernel is ≥ 4.19.
+
+**`wire_short_write`** counts datagrams left unsent by a partial `sendmmsg` — transient socket-buffer pressure (`ENOBUFS`) on the batch send path. The un-sent tail is dropped, so on a no-ARQ output this is a real loss signal. Kept separate from `wire_pacing_late` deliberately, so backpressure on the default release path isn't misread as SO_TXTIME lateness.
+
+**`wire_pacing_pinned_cpu`** is the CPU index the wire-emit thread was pinned to at spawn, from `BILBYCAST_WIRE_EMIT_CPUS`. The field is omitted altogether when the thread is unpinned — the scheduler floats it, which is where contention with Tokio workers shows up under load.
+
+**`egress_shed`** counts datagrams dropped by the egress de-jitter residence cap on compressed outputs — non-zero means the release-rate servo hit its authority ceiling and the buffer was trimmed to stay inside the receiver's T-STD. Always 0 on ST 2110 and on the protocol-paced outputs.
 
 ### Acceptance targets per tier
 
@@ -318,8 +351,8 @@ Without PTP, both pieces drift independently per box — multi-edge hitless will
 |---|---|---|
 | Tier reports `clock_nanosleep` on a freshly installed edge | This is the default and is correct for almost every deployment | No action needed. Verify against [What tier do I actually need?](#what-tier-do-i-actually-need) before chasing tier 1. |
 | Set `BILBYCAST_ENABLE_TXTIME=1` but tier still reports `clock_nanosleep` + log shows `SO_TXTIME … Operation not permitted` | Process lacks `CAP_NET_ADMIN` (kernel ≥ 6.x policy on non-MONOTONIC clockids) | systemd: `AmbientCapabilities=CAP_NET_ADMIN`. Standalone: `sudo setcap cap_net_admin,cap_sys_nice+ep <binary>`. See [CAP_NET_ADMIN grant](#cap_net_admin-grant). |
-| Set `BILBYCAST_ENABLE_TXTIME=1`, tier reports `so_txtime` but PCR_AC is no better than tier 4 | Kernel accepts SO_TXTIME setsockopt but no `etf` qdisc is honouring it | Install `etf` qdisc with `clockid CLOCK_TAI` via `setup-etf-qdisc.sh`. See [Installing ETF qdisc](#installing-etf-qdisc). |
-| `tc -s qdisc show` shows etf with 100 % drops, zero sent; `ip neigh` is `INCOMPLETE`; sends return `ENETUNREACH` | Etf qdisc installed with `skip_sock_check off` and the priomap routes priority-0 (ARP, default UDP) into the etf class | Re-install etf with `skip_sock_check` flag — the shipped `setup-etf-qdisc.sh` does this. |
+| Set `BILBYCAST_ENABLE_TXTIME=1`, tier reports `so_txtime` but PCR_AC is no better than tier 4; `tc -s qdisc show` shows the etf class with `Sent 0` | `SO_PRIORITY` is still 0, so the packets ride `fq_codel` — the shipped priomap reaches etf only via priority 5 | Set `BILBYCAST_ETF_SO_PRIORITY=5` alongside `BILBYCAST_ENABLE_TXTIME=1` and restart. See [Enabling the SO_TXTIME tier](#enabling-the-so_txtime-tier-on-the-edge). Secondary cause: no `etf` qdisc installed at all — run `setup-etf-qdisc.sh`. |
+| `tc -s qdisc show` shows etf with 100 % drops, zero sent; `ip neigh` is `INCOMPLETE`; sends return `ENETUNREACH` | A hand-written priomap routes priority-0 traffic (ARP, DHCP, default UDP) into the etf class, where unstamped packets are dropped on enqueue — `skip_sock_check on` does not exempt them | Re-install with the shipped `setup-etf-qdisc.sh`; its priomap keeps priority-0 traffic off the etf class entirely. See [Installing ETF qdisc](#installing-etf-qdisc). |
 | Tier reports `so_txtime`, etf shows 100 % drops, but `getcap` shows `cap_net_admin` is set | NIC PHC drifts ≥ 1–4 s from CLOCK_TAI — hardware launch register overflow | Verify `phc2sys` uses `-w` (not `-O 0`). `phc2sys -O 0` while kernel `tai_offset=37s` puts CLOCK_TAI 37 s ahead of the PHC and the NIC rejects every launch time. |
 | `wire_pacing_late` is non-zero on tier 1 | Scheduler missed wire-emit deadlines | CPU isolation, IRQ pinning, `PREEMPT_RT` kernel |
 | Tier-4 p99 above ~30 ms on a contended box | Too many transcoded outputs competing for CPU; SCHED_FIFO grant absent | Verify systemd unit has `LimitRTPRIO=99`. Consider scaling out before reaching for tier 2. |

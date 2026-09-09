@@ -60,6 +60,7 @@ Authoring affordances inside the matrix:
 - **`+ Add program`** button at the bottom of every assembled-output row. Auto-picks the next free `program_number` and PMT PID; PCR source defaults to `auto`; `streams` starts empty.
 - **`+ Add slot`** button inside each program block. Auto-picks the next free `out_pid` and defaults `stream_type` to H.264.
 - **`+ Convert to assembled`** button on passthrough rows. Confirms, then POSTs a minimal SPTS shell via the full `update_flow` path (passthrough ↔ assembled can't be hot-swapped, so the flow restarts; the matrix surfaces this in the confirmation modal).
+- **`↩ Convert to passthrough`** button on assembled rows — the reverse. Confirms, then PUTs the *whole* flow with its `assembly` block deleted down the same full `update_flow` path: the synthesised PAT/PMT and every program / slot definition is discarded and the flow forwards its active input's bytes unchanged, so it restarts too. Any pending (unapplied) assembly staged for that flow is dropped on success, so a later Apply can't silently revert the conversion.
 
 ### Inspector pane
 
@@ -96,7 +97,7 @@ The page is gated on the edge advertising `node_bus` on `HealthPayload.capabilit
 
 - **View** the matrix and PSI catalogue — Viewer+ in the node's owner group.
 - **Wire** routes and Apply changes — Operator+ on every flow the matrix touches.
-- **Add programs / Add slots / Convert to assembled** — Operator+ on the destination flow.
+- **Add programs / Add slots / Convert to assembled / Convert to passthrough** — Operator+ on the destination flow.
 - **Save salvo** — Operator+ in the preset's owner group, plus Operator on every action's target node.
 
 Permissions are enforced server-side; the matrix UI surfaces a permission-denied chip on cells the operator can wire-preview but not commit.

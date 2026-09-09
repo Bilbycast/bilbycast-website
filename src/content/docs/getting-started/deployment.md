@@ -50,9 +50,13 @@ If you'd rather build from source instead of using the pre-built tarballs, see [
 | Edge embedded monitor dashboard | 9090 | HTTP | Override via `--monitor-port`. Config field `monitor.listen_addrs` for dual-stack. |
 | Edge Prometheus `/metrics` | 8080 | HTTP / HTTPS | Same listener as REST API |
 | Edge media-protocol bind ports | _per-flow_ | varies | Set per input / output (SRT, RIST, RTP, UDP, RTMP, RTSP, HLS, WebRTC, ST 2110). Each accepts v4 or v6 via the per-input `bind_addr`. |
+| PTP (IEEE 1588) | 319, 320 | UDP | Edge host, in **and** out. Only for ST 2110 or PTP-disciplined wire pacing. Carried by `ptp4l` / `phc2sys` on the host, not by the edge process. |
+| NMOS mDNS-SD discovery | 5353 | UDP (multicast) | Edge host, only in NMOS environments. Discovery only — the IS-04 / IS-05 / IS-08 APIs themselves ride the 8080 listener under `/x-nmos/**`. |
 | Relay QUIC | 4433 | QUIC / UDP (TLS 1.3) | Override via `--quic-addr` (legacy) or `--quic-addrs` (comma-separated). Config field `quic_addrs` defaults dual-stack. |
 | Relay native-UDP carrier | 4434 | UDP (plain) | Plain-UDP data plane for native SRT/RIST + bond legs over relay; on by default. Override via `--udp-relay-addrs`; disable via `--no-udp-relay`. Config field `udp_relay_addrs` defaults dual-stack. |
 | Relay REST API | 4480 | HTTP | Override via `--api-addr` / `--api-addrs`. Config field `api_addrs` defaults dual-stack. |
+| Relay viewer-distribution HTTP | 4485 | TCP / HTTP | `viewer-distribution` builds only, but **on by default** there — `distribution.enabled` defaults `true` and an omitted `distribution` block falls through to that default. Carries WHEP + WHIP signaling, the `/watch` and `/dvr` player pages, and the LL-HLS / CMAF origin. Config field `distribution.http_addrs` defaults dual-stack. |
+| Relay distribution QUIC ingest | 4486 | QUIC / UDP | Same builds, same default-on rule. ALPN `bilbycast-distribution`. Config field `distribution.ingest_addrs` defaults dual-stack. |
 
 **Dual-stack (IPv4 + IPv6) is on by default** across the manager, edge, and relay binaries. Each listener binds `0.0.0.0` and `[::]` simultaneously, with `IPV6_V6ONLY=1` on the v6 socket so the two families coexist on the same port. Operators with v6 connectivity get it automatically — point an AAAA record at the box alongside the A record. To restrict, set the relevant env var / config field to just `0.0.0.0` (v4 only), `[::]` (v6 only), or a specific interface address.
 
@@ -61,8 +65,8 @@ If you'd rather build from source instead of using the pre-built tarballs, see [
 Open these in your firewall:
 
 - **Manager host** — TCP 8443 inbound from operators' browsers and from every edge / relay site. TCP 80 inbound from the public internet only when using ACME.
-- **Relay host** — UDP 4433 inbound from every edge that pairs through it; UDP 4434 inbound too if edges carry native SRT/RIST or bond legs over this relay. TCP 4480 only if you query its REST stats from the manager or your monitoring host.
-- **Edge host** — typically only outbound: TCP 8443 to the manager and UDP 4433 (plus UDP 4434 for the native-UDP carrier) to the relay. **Inbound** is needed only for media protocols you've configured as listeners (SRT listener, RTSP server, WHIP server, etc.).
+- **Relay host** — UDP 4433 inbound from every edge that pairs through it; UDP 4434 inbound too if edges carry native SRT/RIST or bond legs over this relay. TCP 4480 only if you query its REST stats from the manager or your monitoring host. On a `viewer-distribution` build, also TCP 4485 — that one is inbound from **public viewers or your CDN**, not just from edges, so terminate TLS in front of it — and UDP 4486 if an edge pushes essence in over the QUIC ingest. See [Viewer distribution](/relay/viewer-distribution/).
+- **Edge host** — typically only outbound: TCP 8443 to the manager and UDP 4433 (plus UDP 4434 for the native-UDP carrier) to the relay. **Inbound** is needed only for media protocols you've configured as listeners (SRT listener, RTSP server, WHIP server, etc.). Two more are easy to miss because nothing in the edge's own config names them: PTP needs UDP 319 + 320 in both directions on any [ST 2110](/edge/st2110/) or [PTP-disciplined](/edge/ptp/) host, and [NMOS](/edge/nmos/) discovery needs UDP 5353 multicast.
 
 ## Verifying the stack end-to-end
 

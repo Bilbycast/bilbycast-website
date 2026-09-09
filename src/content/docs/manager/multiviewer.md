@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-A **wall** is a mosaic of live signals, composited by an edge unit and published as an ordinary flow. The manager holds the wall — the furniture, which signal sits in which tile, and which unit draws it — and deploys it to that unit. In phase 1 that authoring happens over the **REST API**: the browser's Multiviewer Walls page is a read-only view plus Deploy, Redeploy and Undeploy. From the moment a wall is deployed it is a flow like any other: attach an SRT, UDP, RTP or WebRTC output to it and the wall goes wherever you send it.
+A **wall** is a mosaic of live signals, composited by an edge unit and published as an ordinary flow. The manager holds the wall — the furniture, which signal sits in which tile, and which unit draws it — and deploys it to that unit. You author all of that in the browser, on the **Multiviewer Walls** page: create the wall, draw its furniture on the layout stage, name the signals it shows, point it at a head, route the tiles, save and recall salvos, and deploy. Every one of those actions is also a REST endpoint, listed below, for anyone scripting a fleet. From the moment a wall is deployed it is a flow like any other: attach an SRT, UDP, RTP or WebRTC output to it and the wall goes wherever you send it.
 
 :::note[Two sidebar entries, similar names, different things]
 **Multiview** is a grid of flow thumbnails the manager assembles by itself. It needs nothing from any unit and shows still frames.
@@ -59,11 +59,32 @@ A **head** is a rendering output that a unit advertises. You never create one.
 
 ## What the browser gives you today
 
-The **Multiviewer Walls** page is a read-only list of your walls plus the deploy controls — **Deploy** (which reads **Redeploy** once the wall is up) and **Undeploy**. Each card shows where the wall is deployed, its state badge, everything the head will not honour, the compiled tile list, and a **Show what will be sent** disclosure containing the exact input body a deploy would post — byte for byte the same body, so you can compare it against the unit's own Input dialog rather than taking the button on trust.
+The **Multiviewer Walls** page is where a wall is built. The list creates walls and opens them; an open wall gives you the layout stage, the signal rail beside it, the tile inspector, salvo save and recall, the wall's own settings and **Delete**, and the deploy controls — **Deploy** (which reads **Redeploy** once the wall is up) and **Undeploy**. The open wall shows where it is deployed, its state badge, everything the head will not honour, and a **Show what will be sent** disclosure containing the exact input body a deploy would post, compiled tiles and all — byte for byte the same body, so you can compare it against the unit's own Input dialog rather than taking the button on trust.
 
-:::caution[There is no layout editor yet]
-Creating signals, layouts and walls, routing tiles, recalling salvos and pointing a wall at a head are **REST calls** in phase 1. The endpoints, permissions, refusals and audit trail below are all real and shipped; the screens for them are not built. The only authoring the browser does today is Deploy, Redeploy and Undeploy.
-:::
+Create a wall without picking a layout and one is minted for you — 1920x1080 at 25 fps, four tiles in a 2x2 — because "which furniture?" is a question nobody can answer before they have seen a wall. Reshape it on the stage. The wall's settings dialog is also where you point it at a head; heads that cannot draw it are listed with the reason rather than hidden.
+
+### The layout stage
+
+Tiles are dragged to move and pulled by their handles to resize, on a canvas drawn to scale.
+
+- **Snapping** catches the canvas edges and centre plus every other tile's near edge, far edge and centre. Its tolerance is measured in screen pixels, so it behaves the same at any zoom. Hold **Alt** through a drag or a resize to suspend it; hold **Shift** while resizing to hold the canvas's aspect.
+- **Keyboard.** Tab moves between tiles, arrows nudge by 1 and Shift+arrow by 10, `]` and `[` raise and lower draw order, Enter picks a signal for the selected tile and Delete removes the tile. A held-down arrow is coalesced into one write rather than one per key repeat.
+- **`+ Tile`** adds one. The **2x2 / 3x3 / 4x4 / 1+7 / 1+12** templates re-seed the whole set — they reshape the existing tiles in order so the first *n* keep what they are showing, and the confirmation counts the tiles they will delete and how many of those are routed.
+- **`Canvas…`** edits the layout's size, rate and name; **`Swap layout…`** runs different furniture, behind the discards-your-routing warning.
+
+Tile geometry is layout furniture, so moving, resizing or deleting a tile needs **Admin** of the owning group. An operator without that role sees the stage's layout and template controls replaced by a read-only notice, and can still route the wall.
+
+### Routing a tile
+
+The signal rail lists the signals you can see, split by unit: the ones local to the head's unit are draggable, and the ones elsewhere are shown greyed with the reason, because a tile can only show an input local to the unit drawing the wall. Drag one onto a tile, or select a tile and use the rail's arrow button or the inspector's **Shows** dropdown. **`+ Add`** reads a unit's own inputs — the head's unit to begin with, though any unit you can see is selectable — and ticking them makes one signal per input, each named after the input it binds to.
+
+### Live pictures
+
+The stage toolbar carries a **Live pictures** checkbox, on by default. With it on, every tile polls the thumbnail of the input it shows every **5 seconds** and paints the frame into the tile, which is what answers "which camera is this" while the wall is still being built. A source that has not produced a frame yet leaves the tile blank rather than showing a broken-image glyph, because the frames are fetched rather than pointed at by an `<img>`, and polling stops entirely while the browser tab is in the background.
+
+### The REST surface
+
+Every action above is also an endpoint, which is the surface to script a fleet against:
 
 | What | Endpoints |
 |---|---|
@@ -74,6 +95,7 @@ Creating signals, layouts and walls, routing tiles, recalling salvos and pointin
 | Head allocation | `PUT /api/v1/mv/walls/{id}/head` |
 | Which layout a wall runs | `PUT /api/v1/mv/walls/{id}/layout` |
 | Tile routing | `GET /api/v1/mv/walls/{id}/routing`, `PUT`/`DELETE .../routing/{tile_id}` |
+| Salvo save | `POST /api/v1/mv/walls/{id}/routing/save` |
 | Salvo recall | `POST /api/v1/mv/walls/{id}/routing/recall` |
 | Saved salvos | `POST /api/v1/mv/routings`, `DELETE /api/v1/mv/routings/{id}` |
 | Preview / deploy / undeploy | `GET`/`POST`/`DELETE /api/v1/mv/walls/{id}/deploy` |
@@ -85,6 +107,12 @@ Routing a tile, clearing a tile and recalling a salvo are database writes. Nothi
 
 This is deliberate rather than unfinished. Every configuration change a unit accepts rewrites its configuration file and re-encrypts its secrets file, so pushing on every drag would mean a disk write and a re-encrypt per drag. Live, frame-accurate re-routing is a later phase.
 :::
+
+### Salvos
+
+**Save routing as salvo…** in the stage footer freezes what the wall is showing right now into a named salvo — `POST /api/v1/mv/walls/{id}/routing/save`, a copy of the wall's live routing under a new name. It is **Operate** on the wall's group, matching recall rather than create: naming what is already on screen is show work, not authoring. A wall with nothing routed yet is refused `routing_empty` rather than handed a salvo of nothing.
+
+Recall is that same copy run the other way, and it is absolute: **every tile the salvo does not name is cleared**, so the wall shows exactly what the salvo says and nothing else. The one way to still arrive at an empty salvo is to mint one directly with `POST /api/v1/mv/routings`, which creates it against a layout with no entries in it — recall that and the wall goes black.
 
 ## Deploying a wall
 
@@ -166,7 +194,8 @@ It means nothing that had an answer came back wrong — not that the head can co
 | See walls, layouts, salvos and signals | Membership of the owning group |
 | Create, rename or delete a wall, layout, salvo or signal | **Admin** of the owning group |
 | Change which layout a wall runs (discards its live routing) | **Admin** of the owning group |
-| Route a tile, clear a tile, recall a salvo | **Operate** on the wall's group |
+| Move, resize or delete a tile on the layout stage | **Admin** of the layout's group |
+| Route a tile, clear a tile, save a salvo, recall a salvo | **Operate** on the wall's group |
 | Point a wall at a head, or release it | **Operate** on the wall's group **and** on the head's unit |
 | Preview what a deploy would send | Membership of the wall's group **and** **Operate** on the head's unit |
 | Deploy a wall | **Operate** on the wall's group **and** on the target unit |
@@ -207,8 +236,7 @@ Use Multiview to answer "is everything up". Use a wall when you need a multiview
 
 ## Current limitations
 
-- **No browser authoring yet** — signals, layouts, walls, tile routing and salvos are REST-only.
-- **A salvo cannot be filled yet.** A saved routing is created against a layout and starts empty, and phase 1 exposes no call that copies a wall's live routing into one. Recall is wired end to end, but there is nothing to put in a salvo — and because a recall clears every tile the salvo does not name, recalling an empty one clears the wall.
+- **A salvo minted directly by `POST /api/v1/mv/routings` starts empty**, and a recall clears every tile the salvo does not name — so recalling one of those clears the wall. Build salvos with **Save routing as salvo…** instead, which copies a wall's live routing and refuses an unrouted wall.
 - **Canvas is capped at 1920x1080, and 64 tiles.** The ceiling is the head's own advertised maximum, which is 1920x1080 on a phase-1 stream head. An oversized layout **saves, with a warning**, and it is the **deploy** that is refused, naming that ceiling. (A mosaic written straight into a unit's configuration file never reaches this path — the unit refuses it when that configuration is validated.)
 - **Whole frames per second only.** 29.97 and 59.94 canvases are refused.
 - **One wall per head, one head per wall.** Head pooling is phase 2.

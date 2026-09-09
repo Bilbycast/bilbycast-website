@@ -77,9 +77,11 @@ socket.send(b"Hello SRT!").await?;
 ### Encryption
 
 ```rust
+use srt_protocol::config::{CryptoModeConfig, KeySize};
+
 let socket = SrtSocket::builder()
     .latency(Duration::from_millis(120))
-    .passphrase("my-secret-passphrase")
+    .encryption("my-secret-passphrase", KeySize::AES256)
     .crypto_mode(CryptoModeConfig::AesGcm)  // or AesCtr (default)
     .connect(addr)
     .await?;
@@ -90,14 +92,14 @@ let socket = SrtSocket::builder()
 ```rust
 // Caller sends a Stream ID
 let socket = SrtSocket::builder()
-    .stream_id("my-stream-name")
+    .stream_id("my-stream-name".to_string())
     .connect(addr)
     .await?;
 
 // Listener filters by Stream ID
 let listener = SrtListener::builder()
     .access_control_fn(|info| {
-        if info.stream_id() == Some("allowed-stream") {
+        if info.stream_id == "allowed-stream" {
             Ok(())
         } else {
             Err(RejectReason::Rogue)
@@ -111,7 +113,7 @@ let listener = SrtListener::builder()
 
 ```rust
 let socket = SrtSocket::builder()
-    .packet_filter("fec,cols:10,rows:5,layout:staircase,arq:onreq")
+    .packet_filter("fec,cols:10,rows:5,layout:staircase,arq:onreq".to_string())
     .connect(addr)
     .await?;
 ```

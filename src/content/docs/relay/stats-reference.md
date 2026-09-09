@@ -86,4 +86,70 @@ curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
 
 ## Prometheus equivalent
 
-Every field on this endpoint has a Prometheus counter or gauge on `GET /metrics`. Use the structured endpoint for one-off scripts and the Prometheus endpoint for time-series storage. Both read from the same atomics, so the numbers always agree.
+The two endpoints overlap, but they are not a field-for-field mirror. Use the structured endpoint for one-off scripts and the Prometheus endpoint for time-series storage — with three differences to know about:
+
+- **`total_bandwidth_bps` is JSON-only.** No Prometheus family carries it. It is computed inside the stats handler as a sliding-window rate over the bytes-forwarded total, and it is not an atomic read: it takes a lock, divides the byte delta by the time since the *last* call, and then overwrites that sample. Its value therefore depends on when the endpoint was last polled, and two consecutive readers see different numbers. In Prometheus, derive it instead: `rate(bilbycast_relay_bytes_forwarded_total[1m]) * 8`.
+- **`manager` is not mirrored as an object.** It surfaces as two separately named gauges, `bilbycast_relay_manager_connected` and `bilbycast_relay_manager_disconnected_seconds`.
+- **The per-tunnel series are Prometheus-only.** The JSON equivalent is the separate `GET /api/v1/tunnels` response.
+
+Every other field maps to a counter or gauge of the obvious name, and those do read the same atomics.
+
+### Series catalogue
+
+31 metric families, in the order `/metrics` emits them.
+
+**Relay-level — always emitted**
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bilbycast_relay_info` | gauge | Always 1; carries the build version on a `version` label |
+| `bilbycast_relay_uptime_seconds` | gauge | Seconds since the relay process started |
+| `bilbycast_relay_edges_connected` | gauge | Edges currently connected |
+| `bilbycast_relay_tunnels_total` | gauge | Tunnels currently tracked (active + pending) |
+| `bilbycast_relay_tunnels_active` | gauge | Tunnels currently bound on both legs |
+| `bilbycast_relay_bytes_forwarded_total` | counter | Ingress + egress bytes across all tunnels |
+| `bilbycast_relay_bytes_ingress_total` | counter | Bytes received from ingress edges |
+| `bilbycast_relay_bytes_egress_total` | counter | Bytes sent to egress edges |
+| `bilbycast_relay_tcp_streams_total` | counter | TCP streams forwarded since startup |
+| `bilbycast_relay_tcp_streams_active` | gauge | TCP streams currently being forwarded |
+| `bilbycast_relay_udp_datagrams_total` | counter | UDP datagrams forwarded over tunnels |
+| `bilbycast_relay_connections_total` | counter | QUIC connections accepted since startup |
+| `bilbycast_relay_peak_tunnels` | gauge | Peak simultaneous active tunnels |
+| `bilbycast_relay_peak_edges` | gauge | Peak simultaneous connected edges |
+
+**Native plain-UDP carrier** — the SRT/RIST and bond-leg plane that runs without QUIC. Always emitted; they read zero when nothing uses that plane.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bilbycast_relay_udp_sessions_total` | gauge | Native plain-UDP sessions (active + waiting) |
+| `bilbycast_relay_udp_sessions_active` | gauge | Sessions with both sides latched |
+| `bilbycast_relay_udp_bytes_forwarded_total` | counter | Bytes forwarded over the native plain-UDP relay |
+| `bilbycast_relay_udp_datagrams_forwarded_total` | counter | Datagrams forwarded over the native plain-UDP relay |
+
+**Viewer distribution** — `-distribution` builds only, and only once the subsystem has published a sample. A plain forwarder build exposes none of them, so treat their absence as "not running", not as zero.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bilbycast_relay_distribution_streams` | gauge | Streams currently published to the hub |
+| `bilbycast_relay_distribution_viewers` | gauge | Connected WHEP viewers across all streams |
+| `bilbycast_relay_distribution_bytes_out_total` | counter | Media bytes fanned out to viewers |
+| `bilbycast_relay_distribution_origin_bytes` | gauge | Bytes currently held in the LL-HLS origin cache |
+| `bilbycast_relay_distribution_offpath_sessions` | counter | WHEP sessions that had a datagram refused by the media source pin — a spoofed ICE reflection attempt, or a viewer whose IP changed mid-session. Counted once per session |
+
+**Manager link** — emitted only when a manager is configured.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bilbycast_relay_manager_connected` | gauge | 1 while the manager WebSocket link is up, 0 while down or reconnecting |
+| `bilbycast_relay_manager_disconnected_seconds` | gauge | Seconds since the link went down (0 while connected) |
+
+**Per-tunnel** — emitted only while at least one tunnel exists, each labelled `tunnel_id` and `protocol`.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `bilbycast_relay_tunnel_bytes_ingress` | counter | Bytes received for this tunnel |
+| `bilbycast_relay_tunnel_bytes_egress` | counter | Bytes sent for this tunnel |
+| `bilbycast_relay_tunnel_tcp_streams_total` | counter | TCP streams forwarded for this tunnel |
+| `bilbycast_relay_tunnel_tcp_streams_active` | gauge | TCP streams currently active on this tunnel |
+| `bilbycast_relay_tunnel_udp_datagrams_total` | counter | UDP datagrams forwarded for this tunnel |
+| `bilbycast_relay_tunnel_uptime_seconds` | gauge | Seconds since this tunnel was created |

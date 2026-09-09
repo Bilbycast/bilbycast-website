@@ -24,18 +24,24 @@ Every manager-initiated change to a node is tracked in the database with a **pus
 | Table | Column(s) | Tracks |
 |---|---|---|
 | `managed_flows` | `push_status` | Per-flow create/update/delete |
+| `managed_inputs` | `push_status` | Per-input create/update/delete |
+| `managed_outputs` | `push_status` | Per-output create/update/delete |
 | `tunnels` | `ingress_push_status` | The ingress edge's leg of the tunnel |
 | `tunnels` | `egress_push_status` | The egress edge's leg |
 | `tunnels` | `relay_push_status` | The relay's leg (relay-mode tunnels only) |
+| `tunnels` | `secondary_relay_push_status` | The backup relay's leg (dual-relay tunnels only) |
+| `flow_groups` | `push_status` | ST 2110 essence groups. Reset on disconnect, then re-pushed by the 30 s retry task rather than by the reconnect replay below |
+| `service_steps` | `push_status` | One row per step of a deployed service |
 
 Each column moves through these states:
 
 | State | Meaning |
 |---|---|
 | `pending` | Manager has recorded the desired state but has not yet pushed it (or the node was offline at push time) |
-| `pushing` | Push is in flight |
 | `pushed` | Push succeeded; the node acknowledged it |
 | `failed` | Push failed; the manager has the error in `push_error` and will retry on the next reconnect |
+
+There is no in-flight state — a push is `pending` until the node answers, then `pushed` or `failed`. When a node disconnects the manager resets that node's `managed_flows`, `managed_inputs`, `managed_outputs` and `flow_groups` rows from `pushed` back to `pending`, and its tunnel legs back to `pending` from whatever they held, so a reconnect always re-asserts the manager's view; `service_steps` rows are left where they are. `service_steps` is also the one table with a fourth value, `drifted`, written by the services reconciler when a step that was pushed no longer matches the node's config.
 
 The UI shows these states as small badges next to each flow/tunnel so operators can see at a glance whether the manager's view matches reality.
 
@@ -43,9 +49,9 @@ The UI shows these states as small badges next to each flow/tunnel so operators 
 
 When a node reconnects to the manager (after a network blip, restart, or first-ever connection), the manager runs the reconciliation pipeline:
 
-1. **Replay pending pushes** — every `managed_flows` row and tunnel-leg with `push_status = "pending"` or `"failed"` is re-pushed. Successes flip to `pushed`; persistent failures stay in `failed` and surface as an event.
+1. **Replay pending pushes** — every `managed_flows`, `managed_inputs` and `managed_outputs` row and every tunnel leg with `push_status = "pending"` or `"failed"` is re-pushed. Successes flip to `pushed`; persistent failures stay in `failed` and surface as an event. Flow groups are not part of this replay — the 30 s retry task re-pushes every `pending` or `failed` group instead.
 2. **Wait a settle delay** (~5 s) — gives the node time to apply the pushes and stabilise.
-3. **Fetch the node's actual config** — the manager calls `get_config` on the node. The response has infrastructure secrets stripped (see [Manager Protocol — secret stripping contract](/edge/manager-protocol/#get_config--secret-stripping-contract)).
+3. **Fetch the node's actual config** — the manager calls `get_config` on the node. The response has infrastructure secrets stripped (see [Manager Protocol — secret boundaries](/edge/manager-protocol/#secret-boundaries)).
 4. **Compare against the database** — the manager diffs the returned config against its `managed_flows` and `tunnels` tables.
 5. **Detect and report drift** — anything in the database that isn't in the config (or vice versa) becomes a drift event.
 
@@ -62,9 +68,13 @@ Sometimes a manager-pushed flow ends up in a state that nobody wants:
 
 These are **ghost entries**: rows in the manager DB that don't correspond to anything on the node and aren't progressing. The reconciliation pipeline cleans them up automatically:
 
-> **Ghost rule**: any `managed_flows` or tunnel-leg row in `push_status = "failed"` for **5 minutes or more**, where the target node is currently online, is auto-deleted.
+> **Ghost rule (flows, inputs, outputs, flow groups)**: a `managed_flows`, `managed_inputs`, `managed_outputs` or `flow_groups` row in `push_status = "failed"` and untouched for **5 minutes or more**, where the target node is currently online, is auto-deleted. The retry path rewrites `updated_at`, so the countdown restarts on every retry — only a row that stops progressing dies. An input or output still referenced by a managed flow on the same node is skipped: that is user data the flow needs, not a ghost.
 
-The auto-delete is logged as a `config_sync` event so operators have a record of what happened.
+> **Ghost rule (tunnels)**: a `tunnels` row is deleted only when **both** `ingress_push_status` and `egress_push_status` are `failed`, the row has been untouched for **5 minutes or more**, its `status` is `pending` or `active`, and **both** the ingress and egress nodes are currently connected. One failed leg, or one node offline, is not enough.
+
+Tunnel ghost cleanup does not stop at the database row. Dropping the row alone would leave a stale half in each edge's `config.json` and a stale bind on the relays, so the manager also enqueues a durable teardown: `delete_tunnel` to both edges, and `revoke_tunnel` + `close_tunnel` to the primary and secondary relays. Targets that are offline keep their teardown queued until they reconnect; anything still undelivered after 24 hours is purged.
+
+Every auto-delete is logged as a `config_sync` event so operators have a record of what happened.
 
 ## Drift detection
 
@@ -82,20 +92,16 @@ Drift is **logged but not automatically corrected**. Auto-correcting drift would
 - Ingest the local change into the manager DB (preserves it)
 - Delete the offending resource from one side or the other
 
+Two writes do happen, and both are worth knowing about. Neither rewrites the node from a drift finding, and neither ingests a node-side value into the manager's tables:
+
+- **`missing` demotes the manager's own row.** A flow, input, output, tunnel leg or flow group the DB holds as `pushed` but which is absent from the node is written back to `failed` with `push_error = "… not found in node config during reconciliation"`. That demotion is exactly what arms the 5-minute ghost-cleanup countdown above, so a resource that stays missing eventually has its manager record deleted.
+- **`extraneous` tunnels can be torn down, if you opt in.** The `tunnel_orphan_auto_cleanup` setting **defaults to off**, and with it off an untracked tunnel found on a node is only an Info event. Turn it on and the same finding queues a `delete_tunnel` teardown against that edge, removing the orphaned half from its `config.json`.
+
 ## `config_sync` events
 
-Reconciliation activity is reported via `config_sync` operational events on the manager's events stream. Categories:
+Reconciliation activity is reported via `config_sync` operational events on the manager's events stream. There are no sub-kinds: every one of these events is filed under the single flat category `config_sync`, and the specific condition — ghost deleted, resource missing from the node, untracked tunnel found, tunnel edited locally — is carried in the free-text message. The Events page therefore filters on `category = config_sync` and nothing finer.
 
-| Category | When |
-|---|---|
-| `config_sync.push_succeeded` | A pending push was applied successfully on reconnect |
-| `config_sync.push_failed` | A push failed; includes the error message |
-| `config_sync.ghost_cleanup` | A ghost row was auto-deleted |
-| `config_sync.drift_extraneous` | Found a flow/tunnel on the node not in the DB |
-| `config_sync.drift_missing` | Expected flow/tunnel missing from the node |
-| `config_sync.drift_mismatched` | Field-level mismatch between DB and node |
-
-All `config_sync` events carry the affected `node_id` and `flow_id` (or `tunnel_id`) so operators can filter the Events page to a single resource and see its full reconciliation history.
+Every `config_sync` event carries the affected `node_id`. Some also carry a resource id: flow-added and flow-removed drift and a failed group bundle set `flow_id`, and a stale audio-PID override sets `input_id`. Tunnel drift and every ghost-cleanup event carry none, and the `events` table has no `tunnel_id` column at all — so tunnel events cannot be narrowed to a single tunnel from the Events page.
 
 ## Operator workflow
 
@@ -111,8 +117,8 @@ In the failure cases:
 |---|---|
 | Flow stuck on `pending` for a long time | Node is offline; will retry on reconnect |
 | Flow shows `failed` with an error message | Push reached the node but the node rejected it (validation error, conflict) — read the error and edit the flow |
-| Flow disappears with a `ghost_cleanup` event | Manager auto-deleted a ghost; this is normal cleanup |
-| New flow appears with a `drift_extraneous` tag | Someone created it directly on the node — decide whether to ingest or delete |
+| Flow disappears, with a `config_sync` event reading "Ghost flow … deleted" | Manager auto-deleted a ghost; this is normal cleanup |
+| New flow appears, with a `config_sync` event reading "New flow … detected on node" | Someone created it directly on the node — decide whether to ingest or delete |
 
 ## Implementation references
 

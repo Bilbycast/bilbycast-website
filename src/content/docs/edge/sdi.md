@@ -208,10 +208,12 @@ Nothing in bilbycast-edge changes.
 Only applies if you run the edge from the packaged systemd service. That unit is
 hardened with `DevicePolicy=closed`, so device access is deny-by-default.
 
-Skipping this produces a distinctive and confusing symptom: the node
-**advertises SDI but enumerates zero cards**. The API probe succeeds because it
-only needs `libDeckLinkAPI.so`, which loads fine — but every device open is
-denied by the sandbox.
+Skipping this makes an SDI-capable node look exactly like a host with no card.
+The API probe succeeds — it only needs `libDeckLinkAPI.so`, which loads fine —
+but the sandbox denies the DeckLink device nodes, so enumeration returns zero
+cards. The `sdi-decklink` capability is gated on that live device list, so the
+node **never advertises SDI at all** and the manager hides the SDI input and
+output types, exactly as it would for a card-less host.
 
 1. **See what your card exposes:**
 
@@ -240,6 +242,42 @@ denied by the sandbox.
 
 4. **Confirm** the node's per-port SDI hardware status is now populated.
 
+## Ad markers — SCTE-104 ↔ SCTE-35
+
+Both directions are off by default and are a single boolean each. They are
+the reason to take SDI natively rather than through a converter: an ad marker
+that only lives in VANC is lost the moment a converter re-frames the signal.
+
+**Capture** — set `scte35_extraction: true` on an `sdi` input. Generic VANC is
+copied before the SDK frame is released, the packets carrying DID/SDID
+`0x41/0x07` are picked out, and the message is decoded — both the
+`single_operation_message` and the `multiple_operation_message` framing, the
+latter being what real ad-splice inserters emit. Splice start, splice end and
+cancel become a SCTE-35 `splice_insert()` section muxed straight into the
+egress TS — PID `0x01FC`, advertised in the PMT as stream type `0x86`;
+anything else is ignored.
+Pre-roll, break duration and auto-return survive the translation; zero pre-roll
+becomes an immediate splice. Each translated cue raises an Info
+`sdi_scte35_emitted` event carrying the splice event ID and opcode, and bumps
+`InputStats.sdi_stats.scte35_cues_emitted`.
+
+**Playout** — set `scte35_injection: true` on an `sdi` output. The selected
+program's SCTE-35 PID is section-reassembled, CRC-valid `splice_insert()` cues
+are decoded back into SCTE-104 — a `multiple_operation_message` carrying one
+splice operation — and the packet is attached as DID/SDID
+`0x41/0x07` VANC to the next **three** successfully scheduled frames (receiver
+reliability; line number `0` lets the SDK place it). Component splices,
+encrypted sections and non-`splice_insert` commands are ignored.
+`OutputStats.sdi_stats.scte35_cues_injected` counts once per cue, not once per
+frame carrying it.
+
+:::note[Verification status]
+The binary codec, CRC validation, section demux and TS carriage are
+round-trip unit-verified, and VANC attachment on playout is hardware-verified
+at 1080i50. Capture plumbing still wants a live SCTE-104 inserter, and a full
+TS cue → SDI → extraction loop remains the outstanding system-level test.
+:::
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -248,8 +286,9 @@ denied by the sandbox.
 | `missing …/DeckLinkAPI.h — DECKLINK_SDK_DIR does not look like the SDK's Linux/include` | Pointing at the SDK root, not `Linux/include` | Point one level deeper |
 | Compile errors about `IDeckLinkVideoBuffer` / `StartAccess` | SDK older than 16 | Download SDK 16 or newer |
 | `sdi_no_media_codecs` at flow start | Built with `media-codecs` disabled | Rebuild with default features |
-| Node advertises SDI but lists **zero** devices | systemd sandbox blocking device nodes | Checklist C |
-| Node does not advertise SDI at all | Desktop Video missing, or binary built without the feature | Install Desktop Video; confirm the feature was enabled |
+| Node does not advertise SDI, and `ls /dev/blackmagic/` **does** list nodes | systemd sandbox denying the device nodes — enumeration returns zero cards, so the capability is withheld | Checklist C |
+| Node does not advertise SDI; boot log `sdi.decklink` says *"the DeckLink API is unreachable"* | Desktop Video missing, or binary built without the feature | Install Desktop Video; confirm the feature was enabled |
+| Node does not advertise SDI; boot log `sdi.decklink` says *"no devices enumerated"* | Either the sandbox above or no card fitted — the log line alone cannot tell them apart | `ls /dev/blackmagic/`: nodes listed → Checklist C; nothing listed → seat/fit the card |
 | Released binary has no SDI | A `*-rockchip` artefact (never carries it), or a `*-full` artefact from v0.102.0 or earlier. Confirm with `--print-capabilities \| grep '^feature sdi-decklink'` | Upgrade to v0.103.0+ for `*-full`; otherwise Checklist A, or Checklist B then re-release |
 | CI logs *"SDI compile gate skipped"* | No SDK credential visible to that run | Expected on fork PRs; otherwise recheck the secret name |
 

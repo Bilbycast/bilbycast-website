@@ -19,6 +19,13 @@ bilbycast-manager is the centralized control plane for bilbycast. It provides a 
 - **[Visual Flow Editor](/manager/visual-flow-editor/)** — Build a node's configuration by drawing it on a canvas, with a draft → validate → preview → deploy cycle and a snapshot taken before every change. **Master graphs** put several units on one canvas and wire cross-unit transport between them.
 - **[Aligned Output](/manager/aligned-output/)** — Put two nodes forwarding the same feed on one shared timeline, so a downstream switcher can cut between them without a timing jump.
 - **[Routines](/manager/routines/)** — Cron-scheduled named target state across flows, DST-correct via IANA timezones, with manual activation, skip-next-fire, and partial/failed/missed events.
+- **[Multiviewer Walls](/manager/multiviewer/)** — Author a wall in the browser — layout stage, tile routing, salvo save and recall — then deploy it to a unit that composites it and publishes it as an ordinary flow. Needs an edge advertising `mv-compositor`.
+- **Multiview** — A grid of flow thumbnails the manager assembles by itself (2×2, 3×3, 4×4, or auto-fit up to 64 tiles), polled from the per-flow thumbnail endpoint. Still frames, and no edge capability gates the page — but a flow with thumbnails switched off reads **Thumbnails off** rather than a picture. A different surface from Multiviewer Walls above.
+- **[Replay](/manager/replay/)** — Per-flow JKL scrub timeline, clip library, sport-tagging profiles, and one-click push-to-air on top of the edge replay server.
+- **[Address Pools](/manager/address-pools/)** — Declared ranges of ports and multicast groups the manager allocates cross-unit connections from, with a record of who holds what.
+- **Services** — Named, declarative, multi-device pipelines: pick a wizard, fill the form, Apply. The plan is executed step by step and rolled back in reverse on the first failure, and a background reconciler raises `service_drift` when a device stops matching. Endpoints in the [API Reference](/manager/api-reference/).
+- **DVR Sessions** — One browser-viewable, seekable feed per session: a source flow on an edge (a playback rendition plus a low-resolution all-intra proxy for jog and shuttle) bound to a relay that holds both for the length of the retention window. Every feed is gated — a revocable link for a one-off guest, a portal login for staff. The relay half is [Viewer Distribution](/relay/viewer-distribution/).
+- **Events & alarms** — Every event raised by every managed node in one filterable log: severity, category, node, free-text search, date range, and a display timezone.
 - **[Multi-tenant Groups](/manager/multi-tenant-groups/)** — Per-tenant users, nodes, tunnels, switcher pages, routines, audit trail, quotas, and per-tenant logo + brand-colour theming. Access-control boundary only.
 - **[On-edge Media Library](/manager/media-library/)** — Browser upload + delete of slates, loops, and emergency-fallback content for the edge `media_player` input, with quota enforcement.
 - **AI assistant** — AI-assisted flow configuration with support for multiple LLM providers (OpenAI, Anthropic, Gemini).
@@ -34,7 +41,7 @@ bilbycast-manager is the centralized control plane for bilbycast. It provides a 
 The manager is a full-stack Rust application:
 
 - **Backend** — Axum REST/WebSocket server backed by **Postgres 18**.
-- **Frontend** — Embedded static HTML + vanilla JavaScript (Tailwind CSS dark theme).
+- **Frontend** — Embedded static HTML + vanilla JavaScript with hand-written CSS (`shared.css`), served same-origin under an enforcing Content-Security-Policy (`script-src 'self'`). The Visual Flow Editor and Master Graphs pages additionally load a bundled React + xyflow canvas; there is no CSS framework.
 - **Communication** — All nodes connect outbound to the manager via WebSocket, enabling management of devices behind firewalls and NAT.
 
 ### Device Driver Pattern

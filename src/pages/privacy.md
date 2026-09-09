@@ -24,7 +24,7 @@ This policy applies to:
 - Customers and prospective customers who contact us, request a quote, or sign an Order for any Bilbycast product.
 - Licensees of bilbycast-manager, bilbycast-edge, bilbycast-relay, or associated tooling (together, the "**Software**"), in relation to operational telemetry reported by the Software.
 
-This policy does **not** apply to the operational data you process through the Software itself. When you install the Software on your own infrastructure, you control that data and you act as the data controller with respect to it. We do not have access to operational streams, device credentials, or audit logs stored within your instance of the Software.
+This policy does **not** apply to the operational data you process through the Software itself. When you install the Software on your own infrastructure, you control that data and you act as the data controller with respect to it. We do not have access to operational streams, device credentials, audit logs, or viewer records stored within your instance of the Software, including the viewer records created by the optional DVR viewer portal described in Section 2.
 
 ## 2. Information we collect
 
@@ -33,6 +33,8 @@ This policy does **not** apply to the operational data you process through the S
 **Information collected automatically when you visit our website.** Our web hosting provider logs standard access information including IP address, approximate geographic location (derived from IP), user-agent string, referring URL, and pages visited. We may use privacy-respecting analytics to understand aggregate traffic patterns; where analytics cookies are used, they are disclosed through our cookie notice.
 
 **Licence and telemetry information from the Software.** When you install and use bilbycast-manager with a Licence Key, the Software may report operational telemetry to us, including: software version, active feature set, Node Limit, number of Managed Nodes in use, Licence Key identifier, and the IP address of the outbound connection. This telemetry is described in Section 5.3 of the bilbycast-manager End-User Licence Agreement. Open-source components (bilbycast-edge, bilbycast-relay) do not report telemetry to us.
+
+**Viewer records created by the DVR viewer portal.** Where you enable the optional DVR viewer portal, the Software stores — inside your own deployment — the viewers you authorise: the username your identity provider asserts for each viewer, an optional display name, and the streams that viewer is entitled to watch. Where you issue an access link instead, it is stored as a label of your choosing, a hash of the link key (the key itself is shown once and never stored), an optional expiry, and when the link was last used and how many times; revoked links are retained so the record of who could watch a feed, and until when, stays readable. bilbycast-manager mints short-lived viewer tokens from these records so that bilbycast-relay can serve an authorised viewer. None of this reaches us: it is created, held, and deleted entirely within your infrastructure, it is not part of the telemetry described above, and you are the controller for it as set out in Section 1.
 
 We do **not** knowingly collect personal information from children. The Software is not intended for individual consumer use.
 

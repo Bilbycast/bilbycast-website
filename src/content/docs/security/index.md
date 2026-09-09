@@ -11,10 +11,10 @@ This document describes the security model, cryptographic choices, and threat mi
 
 Bilbycast uses defense-in-depth with multiple independent security layers:
 
-- **TLS 1.3** (Rustls) for all manager connections — no legacy cipher suites
+- **TLS 1.3 or TLS 1.2** (Rustls) for all manager connections — no legacy protocol versions, no weak cipher suites
 - **End-to-end encryption** (ChaCha20-Poly1305) for tunnel traffic — relay is zero-knowledge
 - **Encryption at rest** (AES-256-GCM) for all secrets on manager and edge nodes
-- **Role-based access control** (4-level RBAC) on the manager
+- **Role-based access control** on the manager — a two-value platform role plus per-group member roles
 - **Audit logging** for all security-relevant operations
 - **Certificate pinning** to protect against compromised CAs
 - **Secret rotation** for node authentication credentials
@@ -23,13 +23,13 @@ Bilbycast uses defense-in-depth with multiple independent security layers:
 
 ### TLS Enforcement
 
-Edge and relay nodes **enforce `wss://`** (TLS) for all manager connections. Plaintext `ws://` URLs are rejected at connection time. The TLS implementation uses Rustls with TLS 1.3 only — no fallback to older protocols or weak cipher suites.
+Edge and relay nodes **enforce `wss://`** (TLS) for all manager connections. Plaintext `ws://` URLs are rejected at connection time. The TLS implementation uses Rustls, which negotiates TLS 1.3 or TLS 1.2 — rustls implements neither TLS 1.0/1.1 nor any weak cipher suite, so there is no fallback below that. QUIC tunnels are TLS 1.3 by construction.
 
 ### Manager TLS Modes
 
 | Mode | Config | Description |
 |------|--------|-------------|
-| **Direct** (default) | `BILBYCAST_TLS_MODE=direct` | Manager handles TLS. Requires `BILBYCAST_TLS_CERT` and `BILBYCAST_TLS_KEY`. Sets `Secure` cookie flag and sends HSTS headers. |
+| **Direct** (default) | `BILBYCAST_TLS_MODE=direct` | Manager handles TLS. Three cert sources, tried in that order: an ACME/Let's Encrypt certificate (`BILBYCAST_ACME_ENABLED=true` + `BILBYCAST_ACME_DOMAIN`, recommended), a file-based pair (`BILBYCAST_TLS_CERT` + `BILBYCAST_TLS_KEY`), or a self-signed fallback generated while ACME is still issuing. Sets `Secure` cookie flag and sends HSTS headers. See [TLS deployment](/manager/tls-deployment/). |
 | **Behind Proxy** | `BILBYCAST_TLS_MODE=behind_proxy` | Load balancer terminates TLS. Manager listens on plain HTTP. Omits `Secure` flag and HSTS (LB handles these). Only safe on trusted networks between LB and manager. |
 
 ### Certificate Pinning
@@ -67,7 +67,7 @@ This prevents accidental production use when the flag is left in a config file f
 | **Session tokens** | JWT with HMAC-SHA256, 24-hour expiry |
 | **JWT claims** | `sub` (user ID), `role`, `jti` (session ID), `iat`, `exp`, `iss` ("bilbycast-manager") |
 | **Session delivery** | `HttpOnly` + `Secure` + `SameSite=Lax` cookie |
-| **Session revocation** | Logout inserts `jti` into `revoked_sessions` table; checked on every request |
+| **Session revocation** | Logout inserts `jti` into `revoked_sessions`, evicts the session-cache entry on the serving instance, and broadcasts `SESSION_INVALIDATE` to peer instances. Authenticated requests are served from a 5-minute session cache, so the table is re-read on a cache miss and whenever a cached entry has aged past `session_cache_freshness_secs` (Settings → Advanced, default 60 s; `0` disables the floor). If an HA peer misses the broadcast, that floor bounds how long the revoked session stays live there |
 | **CSRF protection** | Double-submit cookie pattern with constant-time comparison; header-only fallback for self-signed cert environments |
 | **Timing safety** | Dummy Argon2id hash computed on unknown usernames to prevent user enumeration |
 
@@ -103,18 +103,26 @@ OAuth 2.0 `client_credentials` grant at `/oauth/token`. Returns JWT (HMAC-SHA256
 
 All sensitive data is encrypted before storage using **AES-256-GCM**:
 
-| Data | DB Column | Algorithm |
-|------|-----------|-----------|
-| Node auth secrets | `auth_client_secret_enc` | AES-256-GCM |
-| Tunnel encryption keys | `tunnel_key_enc` | AES-256-GCM |
-| Tunnel bind secrets | `tunnel_bind_secret_enc` | AES-256-GCM |
-| Tunnel PSKs | `tunnel_psk_enc` | AES-256-GCM |
-| AI API keys | `api_key_enc` | AES-256-GCM |
-| Registration tokens | `registration_token` | HMAC-SHA256 hash (one-way) |
+| Data | DB Column | Algorithm | KEK domain |
+|------|-----------|-----------|------------|
+| Node auth secrets | `auth_client_secret_enc` | AES-256-GCM | `kek:node-secret` |
+| Tunnel encryption keys | `tunnel_key_enc` | AES-256-GCM | `kek:tunnel` |
+| Tunnel bind secrets | `tunnel_bind_secret_enc` | AES-256-GCM | `kek:tunnel` |
+| Tunnel PSKs | `tunnel_psk_enc` | AES-256-GCM | `kek:tunnel` |
+| AI API keys | `api_key_enc` | AES-256-GCM | `kek:ai-key` |
+| MFA TOTP secrets | `totp_secret_enc` | AES-256-GCM | `kek:user-mfa` |
+| MFA recovery codes | `mfa_recovery_codes_enc` | AES-256-GCM | `kek:user-mfa` |
+| Node config snapshots (config history) | `config_json_enc` | AES-256-GCM | `kek:config-history` |
+| Visual-editor draft base configs | `base_config_enc` | AES-256-GCM | `kek:config-history` |
+| Visual-editor deployment configs | `desired_config_enc` | AES-256-GCM | `kek:config-history` |
+| AI Configurator thread messages | `content_json_enc` | AES-256-GCM | `kek:ai-thread` |
+| Registration tokens | `registration_token` | HMAC-SHA256 hash (one-way) | `hmac:registration-token` |
+
+The three `kek:config-history` blobs each hold a captured node configuration, which carries flow credentials (SRT passphrases, RTSP/RTMP credentials) inside the blob — that is what the domain is for.
 
 **Envelope encryption**: Each secret is encrypted with a random 32-byte Data Encryption Key (DEK) using AES-256-GCM. The DEK is then wrapped with a domain-specific Key Encryption Key (KEK), also via AES-256-GCM. This limits the blast radius if any single key is compromised.
 
-**Domain separation**: KEKs are derived via HKDF-SHA256 from `BILBYCAST_MASTER_KEY` (salt: `"bilbycast-manager-master-key-v1"`) with domain-specific info strings: `kek:node-secret`, `kek:ai-key`, `kek:tunnel`, `hmac:registration-token`. A compromised key in one domain does not affect others.
+**Domain separation**: KEKs are derived via HKDF-SHA256 from `BILBYCAST_MASTER_KEY` (salt: `"bilbycast-manager-master-key-v1"`) with domain-specific info strings — seven of them: `kek:node-secret`, `kek:ai-key`, `kek:tunnel`, `hmac:registration-token`, `kek:user-mfa`, `kek:config-history`, `kek:ai-thread`. A compromised key in one domain does not affect others.
 
 **Key versioning**: Ciphertext is prefixed with `"v1:"` to identify the envelope format. Legacy blobs (no prefix) from pre-envelope versions are decrypted transparently using an undifferentiated legacy key.
 
@@ -206,16 +214,23 @@ BILBYCAST_NEW_MASTER_KEY=$(openssl rand -hex 32) bilbycast-manager rotate-master
 
 ### Role-Based Access Control (RBAC)
 
-4-level permission hierarchy:
+Access control runs on two orthogonal axes, not one ladder.
+
+**Platform role** is global and has exactly two values. `super_admin` is the company running the manager: it bypasses every group filter and is the only role allowed to touch platform-only chokepoints (creating and deleting groups, user accounts, TLS, SSO, licensing, backup export/import, master-key rotation). `user` is every other account and confers no intrinsic rights — all authority comes from its group memberships. This is the value carried in the JWT `role` claim.
+
+**Member role** is held per group membership, in ascending order:
 
 | Role | Level | Capabilities |
 |------|-------|-------------|
-| **Viewer** | 0 | Read-only access to dashboards and node status |
-| **Operator** | 1 | Viewer + manage flows, send commands to nodes |
-| **Admin** | 2 | Operator + manage nodes, users, and system settings |
-| **SuperAdmin** | 3 | Admin + manage other admins, full system control |
+| `viewer` | 0 | Read-only access to dashboards and node status |
+| `operator` | 1 | Create, edit and delete flows, inputs and outputs; start/stop flows; activate inputs; acknowledge events |
+| `admin` | 2 | Operator + create, edit and delete nodes, and manage the group's membership |
 
-Each user can optionally have an `allowed_node_ids` list restricting access to specific nodes. If null/empty, the user can access all nodes within their role permissions.
+One user can hold different member roles in different groups — Admin in one, Viewer in another.
+
+A membership can optionally carry an `allowed_node_ids` list restricting *that* membership to specific nodes. Unset means the membership reaches every node in its group; an empty list admits none. The list lives on `group_members`, not on the user.
+
+Full detail: [Manager security](/manager/security/) and [Multi-tenant Groups](/manager/multi-tenant-groups/).
 
 ## Rate Limiting
 
@@ -225,9 +240,9 @@ Each user can optionally have an `allowed_node_ids` list restricting access to s
 | Node auth attempts | 5 failures | 60 seconds | node_id or token prefix | WebSocket auth error + lockout message |
 | MFA (TOTP) verification | 5 failures | 60 seconds | user ID | HTTP 429 |
 
-The login and node-auth limiters use in-memory sliding windows (DashMap); their windows expire automatically after the cooldown period.
+All three limiters keep their sliding windows in Postgres — login in `login_auth_failures`, node auth in `node_auth_failures`, MFA in `user_mfa_attempts` — so a lockout survives a restart and applies across every instance sharing that database. A brute-forcer cannot multiply the budget by round-robining instances.
 
-The MFA limiter is different in kind. It is persisted per user in the database rather than held in memory, so it survives a restart and applies across every instance sharing that database, and it **fails closed** — if the lookup errors the attempt is refused, rather than being treated as zero recent failures. It is the only brute-force brake on the second factor: `/api/v1/auth/mfa/verify` is the step that completes a login and so is reachable without a session, where the per-IP login limiter does not cover it, and a wrong TOTP code does not increment the account's failed-login count.
+What differs is the failure mode when Postgres itself is unreachable. The login and node-auth limiters **fail open**: the attempt is allowed, or the identifier is treated as not locked out, so a database blip cannot brick the auth path. On the login side the per-account backstop (`users.failed_login_count` + `locked_until`) still applies on the slower path. The MFA limiter **fails closed** — if the lookup errors the attempt is refused, rather than being treated as zero recent failures. It is the only brute-force brake on the second factor: `/api/v1/auth/mfa/verify` is the step that completes a login and so is reachable without a session, where the per-IP login limiter does not cover it, and a wrong TOTP code does not increment the account's failed-login count.
 
 ## Security Headers
 
@@ -269,19 +284,28 @@ All security-relevant mutations are logged to the `audit_log` table:
 
 Each entry records: timestamp, user ID, action, target type, target ID, optional details, and IP address.
 
+## Release integrity
+
+Binaries are trusted by **Sigstore keyless signing**, not by a long-lived signing key. The release workflow signs each `manifest.json` — which binds `(version, channel, sequence)` to a `(arch, variant) → url + sha256` table — with an ephemeral key; a Fulcio certificate binds that signature to the workflow run, and the signing event is recorded in the public Rekor transparency log.
+
+Before installing anything, a node chains the certificate to a Fulcio root, checks the Rekor inclusion proof, matches the certificate's workflow identity against its own compiled-in `ALLOWED_SIGNERS` allowlist (per binary, so one product's release workflow cannot sign another's), verifies the signature over the manifest bytes, and only then downloads the tarball and rechecks the SHA-256 the verified manifest names. A fully compromised manager can schedule an upgrade but cannot choose what code runs.
+
+See [Remote upgrade — trust model](/manager/remote-upgrade/) for the full chain, and [Verify the Sigstore signature](/edge/getting-started/#verify-the-sigstore-signature-optional) for the manual `cosign verify-blob` recipe.
+
 ## Threat Model
 
 | Threat | Mitigation | Status |
 |--------|-----------|--------|
-| Network MITM (standard) | TLS 1.3 via Rustls on all connections | Protected |
+| Network MITM (standard) | TLS 1.3 or 1.2 via Rustls on all connections (QUIC tunnels are TLS 1.3) | Protected |
 | Compromised CA | Certificate pinning (`cert_fingerprint`) | Protected (when configured) |
 | Stolen DB backup | All secrets encrypted with AES-256-GCM | Protected |
 | Compromised edge host | `secrets.json` encrypted at rest with machine-specific key | Protected |
 | Compromised relay | Zero-knowledge — ChaCha20-Poly1305 E2E encryption | Protected |
 | Token replay | Registration tokens are single-use, consumed on first auth | Protected |
+| Tampered or substituted release binary | Sigstore keyless manifest signature verified against the per-binary compiled-in `ALLOWED_SIGNERS` allowlist (Fulcio workflow identity + Rekor inclusion), then the SHA-256 taken from the signed manifest | Protected |
 | Brute force login | Argon2id + rate limiting (5/60s) + lockout | Protected |
 | Brute force node auth | Rate limiting (5/60s) + lockout per node_id | Protected |
-| Session hijacking | HttpOnly+Secure cookies, CSRF double-submit, JWT revocation | Protected |
+| Session hijacking | HttpOnly+Secure cookies, CSRF double-submit, JWT revocation | Protected (revocation is immediate on the serving instance; an HA peer that misses the broadcast is bounded by `session_cache_freshness_secs`) |
 | User enumeration | Constant-time dummy hash on unknown usernames | Protected |
 | Stale credentials | Secret rotation API (`rotate-secret`) | Mitigatable |
 | Self-signed cert MITM | `BILBYCAST_ALLOW_INSECURE=1` env var guard + startup warning | Guarded |
@@ -300,9 +324,10 @@ Each entry records: timestamp, user ID, action, target type, target ID, optional
 - [ ] Use `direct` TLS mode unless behind a trusted load balancer
 - [ ] Rotate node secrets periodically via `POST /api/v1/nodes/{id}/rotate-secret`
 - [ ] Set node expiry times (`expires_at`) for temporary deployments
+- [ ] Verify the release manifest signature with `cosign` before a manual install
 - [ ] Review audit logs regularly (`GET /api/v1/audit-log`, or the Audit Log page at `/admin/audit-log`)
 - [ ] Restrict user permissions with appropriate RBAC roles
-- [ ] Use `allowed_node_ids` to limit operator access to relevant nodes only
+- [ ] Use a group membership's `allowed_node_ids` to limit operator access to relevant nodes only
 
 ## Environment Variables
 
@@ -310,8 +335,8 @@ Each entry records: timestamp, user ID, action, target type, target ID, optional
 |----------|----------|-------------|
 | `BILBYCAST_JWT_SECRET` | Yes (manager) | 64-char hex string for JWT HMAC-SHA256 signing |
 | `BILBYCAST_MASTER_KEY` | Yes (manager) | 64-char hex string for AES-256-GCM encryption at rest |
-| `BILBYCAST_TLS_CERT` | Yes (direct mode) | Path to TLS certificate PEM file |
-| `BILBYCAST_TLS_KEY` | Yes (direct mode) | Path to TLS private key PEM file |
+| `BILBYCAST_TLS_CERT` | Conditional (direct mode, file-based certs only) | Path to TLS certificate PEM file. Must be set together with `BILBYCAST_TLS_KEY` — half a pair is refused at startup. Not needed when ACME is enabled |
+| `BILBYCAST_TLS_KEY` | Conditional (direct mode, file-based certs only) | Path to TLS private key PEM file. Must be set together with `BILBYCAST_TLS_CERT` |
 | `BILBYCAST_TLS_MODE` | No | `"direct"` (default) or `"behind_proxy"` |
 | `BILBYCAST_ALLOW_INSECURE` | No | Set to `"1"` to allow `accept_self_signed_cert` (dev/testing only) |
 | `BILBYCAST_PORT` | No | Override manager listen port (default 8443) |

@@ -57,6 +57,40 @@ Closing the upload modal mid-stream cancels the chunk loop and tells the manager
 
 Aborts are advisory; the edge cleans up its staging files via a 1-hour TTL reaper.
 
+## Playlist compatibility planning
+
+The same input modal builds the playlist: an ordered list of sources, **Loop playback** (on by default — the shape fallback duty wants), **Shuffle** (a fresh random order at start and again on every loop wrap), an optional paced-bitrate override for TS files that carry no PCR, and the output datagram size.
+
+Before anything is saved, the manager asks the edge to classify **every adjacent boundary** of the proposed playlist — including the loop wrap from the last item back to the first — and renders the answer as a chip between the rows:
+
+| Chip | Meaning |
+|---|---|
+| **Seamless** | PSI stable, timestamps continue, no decoder reset. |
+| **Signalled cut** | Playable natively, but the player signals a discontinuity across the join. |
+| **Needs transcode** | The join can only be played after normalising the assets. |
+| **Incompatible** | The join cannot be played as configured. |
+
+Each chip's tooltip names the reason in operator language — resolution changes, frame rate changes, audio codec changes, video disappears, decoder needs a reset. A playlist the edge marks unplayable — an *Incompatible* or *Needs transcode* boundary, or an item that isn't ready on that node — blocks **Save** and names the offending item number, so an incompatible splice surfaces at edit time instead of as an on-air glitch. A *Signalled cut* is a legitimate playlist and stays saveable.
+
+## Transport control (the Next button)
+
+On a node's detail page, a flow whose active input is a `media_player` grows a transport strip inside its flow card: the current item with its elapsed / total clock, the playout state, a **Next:** line naming the upcoming item, and a **Next** button that skips to it.
+
+- The button renders only when the node advertises the `media-player-control-v1` capability, and only for operators with Operate permission on that node.
+- The **Next:** line turns red with *⚠ not ready* when the upcoming item can't be opened. Pressing Next there would cut to dead air, so the edge refuses.
+- The click carries the transport's generation counter, so a press that races the playlist advancing on its own is answered with a generation conflict and retried once against the current generation rather than skipping an extra item.
+- An accepted skip is written to the audit log as `media_player.next`. A press that changed nothing — playlist exhausted, not playing yet, a skip already pending — is not: the audit trail records on-air skips, not refused clicks.
+- An input pinned to the legacy loop (below) advertises the node-wide capability anyway, so the first press there is answered `media_player_control_unavailable` and the button removes itself.
+
+## Rollback levers
+
+Two knobs exist so a single misbehaving node can be put back on the previous behaviour without rolling back a release. Both default **on** and should stay there.
+
+- **Operator transport control** — runs playout through the transition state machine that the **Next** button drives. Node-wide at **Configure → Tuning → Media Player** (the section is gated on the edge's `media_player_tuning` capability); turning it off there withdraws `media-player-control-v1`, so Next disappears from every media-player flow on the node rather than being offered and refused. To pin one player to the legacy loop instead, set that input's **Transport control** to *Legacy loop — no Next button*.
+- **PCR-anchored playout pacing** — paces TS playout on deadlines taken from the asset's own PCR rather than an estimated byte rate, which drifts without bound on variable-bitrate assets. Node-wide on the same Tuning section; per input it is the `pcr_deadlines` config field, which has no modal control.
+
+A per-input setting always wins over the node-wide one. Both layers are re-read when a media-player input next starts, so restarting the flow applies a change — no node restart.
+
 ## Worked example
 
 A regional broadcaster keeps the same content on every edge:

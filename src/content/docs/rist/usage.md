@@ -88,7 +88,9 @@ async fn run_receiver() -> anyhow::Result<()> {
 Receiver behaviour:
 
 - Binds to even port P (RTP) and P+1 (RTCP)
-- Learns the sender's address from the first received RTP packet
+- Learns the sender's address from the first received RTP packet, then holds that slot
+- A later source that differs only in **port** (a NAT rebind) is always accepted; one with a different **IP** is refused until the slot has been silent for 12 s (`PEER_TAKEOVER_GRACE`). The RTCP slot inherits RTP liveness, so media flowing from a host also protects its control slot, and the sender applies the same rule to inbound RTCP. Simple Profile has no authentication, so this *bounds* a mid-flight takeover rather than preventing one — a challenger that wins the race before the real sender's first packet, or that arrives during a genuine 12 s-or-longer outage, still takes the slot
+- Setting `remote_addr` pins the accepted source IP outright: datagrams from any other IP are dropped on both the RTP and RTCP paths, with no grace period
 - Detects gaps in the sequence-number stream
 - Sends NACKs after RTT/2 (or a 20 ms floor when RTT is unknown or smaller)
 - Retries up to `max_nack_retries` times per lost packet
@@ -109,7 +111,13 @@ pub struct RistSocketConfig {
     /// Local address to bind (RTP port, must be even).
     pub local_addr: SocketAddr,
 
-    /// Remote address (for sender: receiver's RTP port).
+    /// Remote address. Sender: the receiver's RTP port. Receiver: an
+    /// enforced source-IP pin — only the IP is compared (a sender's source
+    /// port is its own ephemeral bound port, so pinning the port would
+    /// reject legitimate peers), and datagrams from any other IP are dropped
+    /// on both the RTP and RTCP paths before reaching the reorder buffer.
+    /// Leave `None` to latch the first source that arrives; a latched source
+    /// that is still live then holds its IP for a 12 s grace window.
     pub remote_addr: Option<SocketAddr>,
 
     /// Receiver buffer size (how long to wait for retransmissions).
@@ -146,6 +154,7 @@ Defaults:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `local_addr` | `0.0.0.0:5000` | Local RTP bind address (must be even port) |
+| `remote_addr` | `None` | Sender: the receiver's RTP address. Receiver: optional source-IP pin; `None` latches the first source heard |
 | `buffer_size` | 1000 ms | Receiver buffer for retransmission recovery |
 | `max_nack_retries` | 10 | Max NACK attempts per lost packet before giving up |
 | `rtcp_interval` | 100 ms | RTCP compound packet emission interval (TR-06-1 limit) |

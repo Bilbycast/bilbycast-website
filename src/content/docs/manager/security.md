@@ -85,9 +85,13 @@ Authenticated users can change their own password via the "My Account" page. The
 
 In addition to the per-IP rate limiter, each user account has its own failed-login counter: 5 consecutive failed password attempts trigger a 15-minute lockout. While locked, login is rejected with identical response timing to a normal failure, so the lock status is not observable to attackers.
 
+Both numbers are compile-time constants. The **Max Login Attempts** field under Settings → Security is stored and range-validated but read by nothing, so editing it does not move the lockout threshold.
+
 ### JWT Session Tokens
 
 After successful login, the server issues a JWT signed with HMAC-SHA256. The token is delivered **exclusively** via an `HttpOnly; Secure; SameSite=Lax` cookie — never in the response body. A separate non-httpOnly `csrf_token` cookie is set alongside it for CSRF protection.
+
+Every session token is minted with a fixed **24-hour** expiry — local login, MFA completion and SSO callback alike. The **Session Lifetime (hours)** field under Settings → Security is likewise stored and validated but not yet read, so changing it neither shortens nor extends a session.
 
 ### Session Revocation
 
@@ -157,7 +161,7 @@ The flow is:
 4. Strict provisioning — the manager **does not auto-create users from SSO**. An admin must pre-create a local user whose email matches the IdP's verified email claim; the first SSO login binds the IdP identity to that user row.
 5. On success, the same session cookie + CSRF cookie used by local login are issued.
 
-Optional role sync maps IdP group claims onto local roles on every login.
+Optional role sync maps IdP group claims onto local roles — but only when the IdP actually sends a **non-empty** group claim. Removing a user from every IdP group sends an empty (or absent) claim, which skips the sync entirely: the user keeps the platform role and every manager group membership they already had. Revoke access by deactivating or deleting the local user, or by moving them into a mapped lower-privilege group — not by removing them from their IdP groups.
 
 ---
 
@@ -175,10 +179,10 @@ Signing-key handling, token format, and tamper-detection mechanics are intention
 
 Encrypted backup and restore is available under the `backup` commercial feature.
 
-- **Full fidelity.** Every persisted table round-trips, including users, nodes, tunnels, managed flows, AI keys, settings, audit logs, events, topology positions, and UI preferences.
+- **Broad, but not total.** Fifty persisted tables round-trip — users, nodes, tunnels, managed flows, AI keys, settings, audit logs, events, topology positions and UI preferences, plus master graphs, address pools, multiviewer, replay and DVR. Seventeen live tables are carried by neither the export nor the restore, among them the whole Services feature, switcher preset actions, managed inputs and outputs, and AI threads; [Encrypted Backup & Restore](/manager/backup/) lists them table by table.
 - **Cross-machine portable.** Secrets are unsealed on the source and resealed on the destination so the backup file is bound only to the operator-supplied passphrase, not to any one machine.
 - **Confidential at rest.** Sealed with authenticated encryption and a memory-hard key derivation function applied to the operator-supplied passphrase. Passphrases must be at least 12 characters; lost passphrases mean lost data.
-- **Safe restore.** Runs in a single atomic transaction — any failure leaves the destination untouched. Refuses a non-empty destination by default.
+- **Safe restore.** Runs in a single atomic transaction — any failure leaves the destination untouched. The REST import (`POST /api/v1/import`) refuses a populated destination unless the request opts in with `force`; the `bilbycast-manager import` CLI always overwrites, gated on a typed `YES` confirmation at the terminal instead.
 
 Ephemeral runtime state (sessions, PTP cache, OIDC login state, etc.) is intentionally never exported.
 

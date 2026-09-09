@@ -19,18 +19,20 @@ Three workloads collapse onto the same surface:
 
 | Concept | What it is |
 |---|---|
-| **Group** | A tenant / workspace. Every managed resource (node, tunnel, switcher page, switcher preset, routine, user membership) belongs to exactly one. Every fresh install seeds a `grp_default` group that every pre-multi-tenant resource lives in until the operator creates a second group. |
+| **Group** | A tenant / workspace. Almost every managed resource — nodes, tunnels, switcher pages and presets, routines, replay clips and recording sync groups, services and service templates, transcode profiles, master graphs, unit links, group-scoped address pools, multiviewer monitoring objects / layouts / walls / routings, and DVR sessions and portal users — carries an `owner_group_id` and belongs to exactly one group, as do user memberships. (Multiviewer *heads* are the deliberate exception: a head's tenancy is its node's.) Every fresh install seeds a `grp_default` group that every pre-multi-tenant resource lives in until the operator creates a second group. |
 | **Platform role** | Set on the user. `user` (everyone — sees only their groups) or `super_admin` (the company running the manager — bypasses every group filter, the only role that can create groups, change quotas, or land in "All groups" aggregate view). |
 | **Member role** | Set per-group via membership. `viewer` (read), `operator` (start/stop, activate, ack), or `admin` (CRUD users + resources). A user can be Admin in one group and Viewer in another. |
-| **Share** | Grants a non-owner group view / operate / manage permission on a single shared node, with an optional expiry. Used for cross-tenant tunnels and contractor access. |
+| **Share** | Grants a non-owner group view / operate / manage permission on a single shared resource — a node, a tunnel, or a service template (`resource_shares.resource_type`) — with an optional expiry. Used for cross-tenant tunnels, contractor access, and publishing a service template to another tenant. Node shares are managed at `PUT`/`DELETE /api/v1/nodes/{id}/shares/{group_id}` and template shares at `GET /api/v1/service-templates/{id}/shares` + `PUT`/`DELETE …/shares/{group_id}`; tunnel shares have no REST route — the manager inserts them itself when a cross-group tunnel is created. |
 | **Quota** | Per-group caps on nodes / tunnels / users. Optional. Stack beneath the licence-wide node limit. |
+| **Status** | `active` / `archived` / `suspended`, set by SuperAdmin only via `PUT /api/v1/groups/{id}`. A non-active group is refused as the owner or destination of new nodes, tunnels, switcher pages and presets, routines, and transcode profiles with HTTP 409 — the node and tunnel paths carry `error_code: "group_not_active"`. |
 | **Theming** | Per-group `logo_url` and `brand_color`. Apply to the active tenant's UI in place of the bilbycast defaults. |
+| **Contact + billing reference** | `contact_email` is editable by a group Admin or SuperAdmin; the opaque `billing_ref` is SuperAdmin-only to set. `billing_ref` is blanked for non-SuperAdmin callers on `GET /api/v1/groups` and `GET /api/v1/groups/{id}`, but not on the `PUT /api/v1/groups/{id}` response — treat it as visible to a group's Admins rather than as a secret. |
 
 ## Per-tenant theming
 
 Two optional fields on each group drive the per-tenant UI:
 
-- `logo_url` — a public HTTPS image used in place of the bilbycast sidebar logo.
+- `logo_url` — an image URL (`http://` or `https://`, max 2048 characters) used in place of the bilbycast sidebar logo. It has to resolve to the manager's own origin: the enforcing CSP is `img-src 'self' data: blob:`, so an image hosted anywhere else — an external CDN, HTTPS or not — is blocked by the browser and the sidebar renders the group name as alt text instead of a logo. In practice that means serving the file from the same host, through the proxy in front of the manager. The URL is validated on `PUT /api/v1/groups/{id}` only — `POST /api/v1/groups` does not check it.
 - `brand_color` — a hex colour used to drive the active nav-item, top-bar focus, primary buttons, and link hovers via CSS `color-mix`. Both a strong and a tinted variant are derived automatically.
 
 When an operator's active group is *Acme Media*, the manager looks like it was built for Acme Media. When they switch the nav selector to *Globex Broadcasting*, the same browser tab re-themes to Globex's palette. SuperAdmin in "All groups" mode falls back to bilbycast defaults, so the operations team always sees they're in the platform-aggregate view.
@@ -93,7 +95,7 @@ The caller must be the native owner in the source group AND Admin in the destina
 }
 ```
 
-With `BILBYCAST_OIDC_GROUP_SYNC=true` the manager idempotently replaces the user's `group_members` rows from the IdP claim on every login. Unknown group slugs are dropped with a single `auth.sso_unknown_group` audit event — there's no JIT group creation, so an IdP misconfiguration can never silently provision a new tenant.
+With `BILBYCAST_OIDC_GROUP_SYNC=true` the manager idempotently replaces the user's `group_members` rows from the IdP claim on every login. An **empty** groups claim is treated as "no information", not as "no groups" — the sync block is skipped entirely and the user keeps every existing membership and their current platform role. Removing a user from all mapped IdP groups therefore does **not** revoke their access; de-provision by disabling or deleting the user in the IdP, or by removing the membership in the manager. Unknown group slugs are dropped with a single `auth.sso_unknown_group` audit event — there's no JIT group creation, so an IdP misconfiguration can never silently provision a new tenant.
 
 ## Worked example: a managed service provider
 

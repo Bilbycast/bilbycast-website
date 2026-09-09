@@ -150,7 +150,7 @@ use srt_protocol::error::RejectReason;
 struct MyAcl;
 
 impl AccessControl for MyAcl {
-    fn check(&self, info: &HandshakeInfo) -> Result<(), RejectReason> {
+    fn on_accept(&self, info: &HandshakeInfo) -> Result<(), RejectReason> {
         if info.stream_id.is_empty() {
             Err(RejectReason::Rogue)
         } else if info.stream_id.contains("u=alice") {
@@ -221,10 +221,12 @@ Recent fixes worth knowing about:
 - **TSBPD `base_time` calibration** — refined on the first data packet (rather than only at handshake time) so high-latency links no longer report negative inter-arrival times in the first second.
 - **ISN handling for rendezvous** — the initial sequence number negotiation for rendezvous mode was tightened to match libsrt's behaviour. Older bilbycast-srt builds occasionally failed to interop with libsrt rendezvous peers; this is fixed.
 
-For currently-known issues (notably some FEC C++ interop edge cases — Rust↔Rust FEC is fully functional), see `KNOWN_ISSUES.md` in the repository.
+FEC has open interop *and* under-loss issues — a lossy Rust↔Rust link produces phantom recoveries too, not just a C++ peer. Read `KNOWN_ISSUES.md` in the repository before enabling FEC on a path that actually drops packets.
 
 ## C FFI status
 
-The `srt-ffi` crate exposes a C API matching `srt.h`. **It is currently work-in-progress**: the core protocol and transport are fully functional via Rust, but the FFI surface still has a number of unimplemented functions. If you specifically need C interop, check the source for the current set of exported symbols, or open an issue requesting the functions you need.
+The `srt-ffi` crate exposes a C API matching `srt.h`, but it is **scaffolding, not a working C path to an SRT session**: 18 of its 27 exported functions have a `// TODO: implement` body, and only `srt_startup`, `srt_cleanup` and `srt_getversion` do any real work. Every function that opens a socket or moves a byte is a stub.
+
+Some of those stubs fail silently, so a clean return proves nothing: `srt_close` returns `0` (success), `srt_getsockstate` returns `1` (`SRTS_INIT`) for any socket, `srt_getlasterror` always returns `0` (no error), `srt_strerror` returns the constant string `"SRT error"`, and `srt_clearlasterror` / `srt_setloglevel` are empty. Inspecting the exported symbols will not tell you which are real — all 27 are present and link either way. If you need C interop, open an issue requesting the functions you need.
 
 For Rust-native consumers, prefer `srt-transport` directly — there's no overhead from going through the FFI layer.

@@ -42,7 +42,7 @@ The install root holds the binary tree (`versions/<v>/` + `current` symlink, the
 ```bash
 # Pick the version you extracted in step 1 — listed at the top of the tarball
 # path or in the binary itself (`./bilbycast-edge --version`).
-VERSION=0.58.0
+VERSION=0.108.0
 
 sudo mkdir -p /opt/bilbycast/edge/versions/${VERSION}
 sudo mkdir -p /var/lib/bilbycast/edge/replay
@@ -76,8 +76,8 @@ Verify the symlink resolves:
 
 ```bash
 ls -la /opt/bilbycast/edge/current/bilbycast-edge
-# → /opt/bilbycast/edge/current -> versions/0.58.0
-# → versions/0.58.0/bilbycast-edge (executable)
+# → /opt/bilbycast/edge/current -> versions/0.108.0
+# → versions/0.108.0/bilbycast-edge (executable)
 ```
 
 The `packaging/` scripts referenced later (`provision-edge-node.sh`, `setup-etf-qdisc.sh`) land under `/opt/bilbycast/edge/current/packaging/` automatically.
@@ -149,7 +149,7 @@ LimitNOFILE=65536
 RestrictRealtime=false
 LimitRTPRIO=99
 
-# Permits BILBYCAST_MLOCKALL=1 in /etc/bilbycast/edge.env — see below.
+# Permits BILBYCAST_MLOCKALL=1 in /etc/bilbycast/edge.env — see step 5a.
 LimitMEMLOCK=infinity
 
 # CAP_NET_ADMIN — required by mainline kernel ≥ 6.x (and every recent
@@ -175,6 +175,12 @@ AmbientCapabilities=CAP_NET_ADMIN
 Environment=RUST_LOG=info
 Environment=BILBYCAST_REPLAY_DIR=/var/lib/bilbycast/edge/replay
 Environment=BILBYCAST_MEDIA_DIR=/var/lib/bilbycast/edge/media
+
+# Per-host tuning that shouldn't live in the unit — BILBYCAST_MLOCKALL,
+# BILBYCAST_ENABLE_TXTIME, BILBYCAST_WIRE_EMIT_CPUS. The leading `-`
+# tolerates the file being absent. Created in step 5a below; this is
+# the same file install-edge.sh seeds.
+EnvironmentFile=-/etc/bilbycast/edge.env
 
 # Uncomment if your manager uses a self-signed certificate:
 # Environment=BILBYCAST_ALLOW_INSECURE=1
@@ -231,6 +237,33 @@ PCR_AC. **The default `clock_nanosleep` tier is the right choice unless
 you have a measured reason to upgrade**; enabling SO_TXTIME without the
 full prerequisite stack produces *silent degradation* worse than the
 default.
+
+## 5a. Create the environment file
+
+The unit's `EnvironmentFile=` line is where per-host tuning lives, so it can be
+changed without editing the unit. `install-edge.sh` creates and seeds this file;
+on the manual path you create it yourself. Everything in it is optional — the
+leading `-` on `EnvironmentFile=` means the service still starts without it.
+
+```bash
+sudo install -d -m 0755 /etc/bilbycast
+sudo tee /etc/bilbycast/edge.env > /dev/null <<'EOF'
+# Lock all current + future pages into RAM at startup via
+# mlockall(MCL_CURRENT | MCL_FUTURE), eliminating major-page-fault stalls
+# on the data-plane hot path. Pairs with LimitMEMLOCK=infinity in the unit
+# above. Recommended on production hosts; safe to leave on.
+BILBYCAST_MLOCKALL=1
+
+# Uncomment ONLY after the ETF qdisc (and, for tier 1, PTP) are in place —
+# see the ETF qdisc section at the bottom of this page.
+# BILBYCAST_ENABLE_TXTIME=1
+EOF
+sudo chmod 0640 /etc/bilbycast/edge.env
+```
+
+`install-edge.sh` seeds a longer version of this same file, with these two knobs
+set the same way: `BILBYCAST_MLOCKALL=1` on, `BILBYCAST_ENABLE_TXTIME=1` left
+commented unless `--output-nics` was passed.
 
 ## 5b. Hardware-encoder runtime (only if you'll use NVENC or QSV)
 
@@ -326,6 +359,23 @@ sudo install -d -o bilbycast -g bilbycast -m 0755 /var/log/bilbycast-ptp
 sudo install -d -m 0755 /etc/linuxptp
 ```
 
+**Install log rotation for the PTP daemons:**
+
+`bilbycast-ptp-gm.sh` starts `ptp4l` and `phc2sys` with `nohup … >>`, appending
+to plain files under `/var/log/bilbycast-ptp/` that grow without bound. (The
+edge, relay and gateway services log to journald and need nothing.) Install the
+shipped config — `install-edge.sh` does this for you:
+
+```bash
+sudo install -m 0644 \
+  /opt/bilbycast/edge/current/packaging/bilbycast-ptp.logrotate \
+  /etc/logrotate.d/bilbycast-ptp
+```
+
+It rotates daily, keeps 7, and uses `copytruncate` — both daemons hold the log
+open in append mode with no log-reopen signal, so a rename-based rotation would
+leave them writing to the rotated inode.
+
 **Install the systemd unit:**
 
 ```bash
@@ -344,6 +394,42 @@ if [ -d /etc/apparmor.d/local ] && [ -f /opt/bilbycast/edge/current/packaging/ap
   sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.ptp4l 2>/dev/null || true
 fi
 ```
+
+## 5d. Kernel socket-buffer ceilings
+
+`install-edge.sh` installs the shipped `/etc/sysctl.d/90-bilbycast-edge.conf`;
+on the manual path you install it yourself. Every raw UDP / RTP socket the edge
+opens itself asks for a 4 MiB `SO_SNDBUF` / `SO_RCVBUF`, reads the value back,
+and warns once per process per direction when the kernel clamped it — naming the
+sysctl and the exact command:
+
+```
+SO_SNDBUF clamped by the kernel: requested 4194304 bytes, got 212992.
+Raise net.core.wmem_max (e.g. `sysctl -w net.core.wmem_max=4194304`). ...
+```
+
+The distro default for both ceilings is 212992 bytes, so on a stock host that
+fires as soon as a UDP output starts. Undersized buffers surface as bursty loss
+under load rather than as an error, and ST 2110-20 ingest needs far more headroom
+still — it raises its own receive buffer to 64 MB per leg, because even a 4 MiB
+one holds barely 8 ms of 2160p50 (~8.3 Gbps) video:
+
+```bash
+sudo install -m 0644 \
+  /opt/bilbycast/edge/current/packaging/90-bilbycast-edge.conf \
+  /etc/sysctl.d/90-bilbycast-edge.conf
+
+# The shipped file sets only rmem_max — add the matching send-side ceiling.
+echo 'net.core.wmem_max = 67108864' \
+  | sudo tee -a /etc/sysctl.d/90-bilbycast-edge.conf > /dev/null
+
+sudo sysctl --system
+```
+
+Both ceilings end up at 67108864 (64 MB). These are ceilings, not allocations —
+sockets only consume what they actually queue, so this is harmless on non-2110
+deployments. SRT, RIST and QUIC sockets are opened by their own stacks, never
+emit this warning, and still benefit from the raised ceilings.
 
 ## 6. Enable and start
 
@@ -412,7 +498,7 @@ See [Remote Upgrade](/manager/remote-upgrade/) for the full operator runbook (pe
 If you can't reach the manager UI, or you're upgrading the very first edge before the manager-driven path is wired up, you can still upgrade by hand. Drop the new binary next to the old one under `versions/`, then atomically swap the `current` symlink:
 
 ```bash
-NEW_VERSION=0.59.0   # the version you just downloaded
+NEW_VERSION=0.109.0   # the version you just downloaded
 
 # Re-run step 1 of "Install an edge node" to fetch + extract the new tarball.
 
@@ -429,7 +515,7 @@ sudo mv -Tf /opt/bilbycast/edge/current.tmp /opt/bilbycast/edge/current
 sudo systemctl start bilbycast-edge
 
 # Rollback (if the new version misbehaves): point current at the old version dir.
-#   sudo ln -sfn versions/0.58.0 /opt/bilbycast/edge/current.tmp
+#   sudo ln -sfn versions/0.108.0 /opt/bilbycast/edge/current.tmp
 #   sudo mv -Tf /opt/bilbycast/edge/current.tmp /opt/bilbycast/edge/current
 #   sudo systemctl restart bilbycast-edge
 ```
@@ -591,7 +677,7 @@ EOF
 sudo systemctl restart bilbycast-edge
 ```
 
-(Use whichever env-file mechanism your unit uses — `EnvironmentFile=/etc/bilbycast/edge.env` if you adopted `install-edge.sh`, otherwise inline `Environment=BILBYCAST_ENABLE_TXTIME=1` in the unit's `[Service]` block.)
+(This is the file the unit reads via `EnvironmentFile=-/etc/bilbycast/edge.env` — see [step 5a](#5a-create-the-environment-file). If your unit has no `EnvironmentFile=` line, add `Environment=BILBYCAST_ENABLE_TXTIME=1` to its `[Service]` block instead.)
 
 ### Step 5: confirm the active tier on the edge
 
@@ -604,8 +690,12 @@ You should see a line like `wire-emit '<output-id>': starting (anchor=Pcr, tier=
 You can also check via the manager UI's per-output card or directly:
 
 ```bash
-curl -k https://<edge>:8080/api/v1/stats | jq '.data.flows[].outputs[] | {id: .output_id, tier: .wire_pacing_tier, late: .wire_pacing_late}'
+curl http://<edge>:8080/api/v1/stats | jq '.data.flows[].outputs[] | {id: .output_id, tier: .wire_pacing_tier, late: .wire_pacing_late}'
 ```
+
+The API is plain HTTP unless `config.json` carries a `server.tls` block
+(`cert_path` + `key_path`) — there is no default certificate, so `https://` here
+fails the handshake rather than being rescued by `-k`.
 
 `wire_pacing_late` should stay at 0 — non-zero means the kernel rejected datagrams as "target tx time in the past", typically because of a transient host-clock or scheduling stall.
 

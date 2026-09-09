@@ -13,7 +13,7 @@ const features = [
   {
     icon: 'VID',
     title: 'Video Transcoding',
-    description: 'In-process H.264 / HEVC transcoding on SRT, RIST, UDP, RTP, RTMP, and WebRTC outputs via libx264, libx265, or hardware encoders — NVIDIA NVENC, Intel QSV, AMD/Intel VAAPI, and Rockchip RKMPP. TS outputs use a streaming PMT rewriter that preserves non-video PIDs. WebRTC auto-transcodes HEVC sources to H.264 so every browser can play. Shipped bundled in the release binary as an AGPL-3.0-or-later combined work under the GPL portions.',
+    description: 'In-process H.264 / HEVC transcoding on SRT, RIST, UDP, RTP, RTMP, CMAF, and WebRTC outputs via libx264, libx265, or hardware encoders — NVIDIA NVENC, Intel QSV, AMD/Intel VAAPI, and Rockchip RKMPP. CMAF is the one output that needs an explicit backend named: it does not resolve the h264_auto / hevc_auto aliases. TS outputs use a streaming PMT rewriter that preserves non-video PIDs. WebRTC auto-transcodes HEVC sources to H.264 so every browser can play. Shipped bundled in the release binary as an AGPL-3.0-or-later combined work under the GPL portions.',
   },
   {
     icon: '\u266B',
@@ -68,7 +68,7 @@ const features = [
   {
     icon: 'MPTS',
     title: 'MPTS / SPTS Handling',
-    description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, RIST, and HLS. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow.',
+    description: 'Full MPEG-TS multi-program passthrough on UDP, RTP, SRT, RIST, bonded, HLS, and CMAF. Per-output program_number filter rewrites the PAT and drops unrelated PIDs — fan one MPTS input out as a full MPTS plus several filtered SPTS outputs from the same flow. Non-TS outputs (RTMP, WebRTC, display, SDI) take the same program_number to choose which program of an MPTS input to demux and decode.',
   },
   {
     icon: 'PID',
@@ -83,7 +83,7 @@ const features = [
   {
     icon: 'MV',
     title: 'Multiviewer — the wall is a flow',
-    description: 'Composite node-local inputs onto one 1080p canvas and publish it as ordinary MPEG-TS — so the wall restreams over SRT, RTP, UDP, WebRTC, or CMAF, records, nests inside another wall, and produces thumbnails, with no separate wall processor and no new output code. Every tile carries its own x/y/width/height and paint order, so overlapping them is how a PiP is built. A source that stops keeps its last picture under an amber NO SIGNAL badge; a tile nobody patched reads UNASSIGNED — two badges because "the feed died" and "nobody routed this" send an operator to different places. Layouts, routings and head allocation are authored in the manager and deployed to whichever unit draws the wall. Nothing the wall does can apply backpressure to the feeds it is watching. Compositing is an opt-in build feature and every published release binary carries it — but the wall is CPU work in this first phase: each tile is its own single-threaded software decode and scale, and the canvas encodes on the processor even on a host with a spare GPU. The 64-tile limit is a configuration ceiling, not a sizing guide — size the wall to the host.',
+    description: 'Composite node-local inputs onto one 1080p canvas and publish it as ordinary MPEG-TS — so the wall restreams over SRT, RTP, UDP, WebRTC, or CMAF, records, nests inside another wall, and produces thumbnails, with no separate wall processor and no new output code. Every tile carries its own x/y/width/height and paint order, so overlapping them is how a PiP is built. A source that stops keeps its last picture under an amber NO SIGNAL badge; a tile nobody patched reads UNASSIGNED — two badges because "the feed died" and "nobody routed this" send an operator to different places. Layouts, routings and head allocation are authored in the manager and deployed to whichever unit draws the wall. Nothing the wall does can apply backpressure to the feeds it is watching. Compositing is an opt-in build feature and every published release binary carries it — but the wall’s tiles are still CPU work in this first phase: each tile is its own single-threaded software decode and scale, while the canvas encodes on whichever backend the host can actually open (RKMPP, NVENC, QuickSync or VAAPI, with libx264 as the fallback). The 64-tile limit is a configuration ceiling, not a sizing guide — size the wall to the host.',
   },
   {
     icon: 'PES',

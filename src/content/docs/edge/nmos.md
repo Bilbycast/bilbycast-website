@@ -17,6 +17,15 @@ uncompressed-video subsets of the AMWA NMOS specifications:
 | BCP-004 | embedded in IS-04 receiver caps | constraint_sets for ST 2110 audio, data, and video inputs |
 | mDNS-SD | `_nmos-node._tcp` | best-effort registration via the `mdns-sd` crate |
 
+**Known gap**: IS-04 sender resources are published with an empty
+`manifest_href` and an empty `interface_bindings` list — nothing in the
+node ever fills either field. A controller therefore gets no transport
+file (SDP) and no NIC binding, so the usual "connect this sender to that
+receiver" flow has nothing to hand the receiver — and the receiver's
+staged `PATCH` body has no `transport_file` field to accept one either.
+Activating a sender or receiver with explicit transport parameters is
+unaffected; see **IS-05 activation refusals** below.
+
 ## Format detection
 
 Each flow's input is classified at IS-04 list time:
@@ -71,6 +80,26 @@ reference this clock by name. The `locked` field is reported as `false`
 until live PTP integration lands; the manager UI uses
 `FlowStats.ptp_state.lock_state` for the real view — see
 [ST 2110](/edge/st2110/#ptp-integration) for the PTP architecture.
+
+## IS-05 activation refusals
+
+A `PATCH` to `/single/senders/{id}/staged` or
+`/single/receivers/{id}/staged` carrying `activation.mode:
+"activate_immediate"` is validated **before** the runtime is touched.
+The patched entity runs through the same `validate_output` /
+`validate_input_definition` checks a config push would face, then a
+cross-entity check rejects a rewritten local port that would collide
+with another input, output or tunnel on this node. Either failure
+returns `400 Bad Request` and the running flow is left alone — a
+controller that stages `"not-an-ip:5004"` as `destination_ip` cannot
+seed a config that refuses to boot.
+
+IS-05 has no error body for this, so the reason is only visible on the
+node that refused it: a Warning event on category `nmos` with
+`details.error_code: "invalid_transport_params"`, alongside
+`subsystem: "is-05"`, `action: "sender_activation_refused"` or
+`"receiver_activation_refused"`, `resource_id`, `entity_id` and the
+validator's `error` string.
 
 ## IS-08 audio channel mapping
 
@@ -192,8 +221,9 @@ available in the test lab:
   Expected pass matrix:
   - IS-04: pass on `test_01` (resources have valid UUIDs / formats /
     transports) through `test_19` (clocks).
-  - IS-05: pass on staged/active round-trip for sender + receiver,
-    with transport-file SDP advertisement for ST 2110 senders.
+  - IS-05: pass on staged/active round-trip for sender + receiver.
+    Transport-file (SDP) advertisement is not expected to pass while
+    `manifest_href` is empty — see the known gap above.
   - IS-08: pass on `io`, `map/active`, `map/staged`, `map/activate`
     happy paths.
   - BCP-004: pass on receiver caps containing `media_types` plus a

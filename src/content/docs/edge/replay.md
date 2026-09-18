@@ -30,7 +30,11 @@ Each recording lives at `<replay_root>/<recording_id>/`:
 
 ```
 000000.ts  000001.ts  ...  NNNNNN.ts
-recording.json   ← created_at, segment_seconds, schema_version
+recording.json   ← schema_version, recording_id, created_at_unix, segment_seconds, current_segment_id,
+                   plus the wall-clock↔PTS pairs anchor_wall_us / anchor_pts_90khz (taken once, on the
+                   first indexed frame) and recent_wall_us / recent_pts_90khz (re-sampled every 60 s
+                   while the writer runs) that let DVR clip export date a mark to a PTS — absent on
+                   recordings made before they existed, which the exporter then cuts from whole segments
 index.bin        ← timecode → byte-offset (24 B / IDR)
 clips.json       ← named (in_pts, out_pts) ranges
 thumbs/          ← filmstrip JPEGs, one <pts_90khz>.jpg per capture (only when filmstrip_seconds is set)
@@ -106,6 +110,7 @@ Playback and clip lifecycle are driven by WS commands:
 |---|---|
 | `start_recording` / `stop_recording` | Arm / disarm a flow's writer — **PreBuffer**/`idle` → **Armed**, and back to `idle`. The writer has to exist already: a flow whose `recording.enabled` is `false` has none, and both commands are refused with `replay_recording_not_active`. |
 | `recording_status` | Report the writer's `mode` / `armed` state and its disk counters — see [Operating modes](#operating-modes). |
+| `configure_recording` | Set or clear (`"recording": null`) one flow's `recording` block without touching the rest of the flow — how the manager arms the recorder a [DVR clip export](#dvr-clip-export) is cut from. The `recording` key must be present (a command that forgot it is refused rather than read as "clear"). It merges: an omitted `pre_buffer_seconds` / `filmstrip_seconds` keeps its previous value, an explicit `null` clears it. It validates like a config push and persists only; the recorder binds at flow spawn, so the reply's `restart_required` (true only when a running flow's value actually changed) tells the caller to `restart_flow`. |
 | `mark_in` / `mark_out` | Set the in/out points of a new clip. |
 | `list_clips` | Enumerate a recording's clips. Takes either `flow_id` or `recording_id` — the latter re-syncs against an orphan recording whose flow is gone. |
 | `get_clip` | Fetch one clip's metadata. |
@@ -119,24 +124,49 @@ Playback and clip lifecycle are driven by WS commands:
 | `list_recordings` | Enumerate the on-disk Recordings library. |
 | `delete_recording` | Remove a recording and its clips from disk. |
 | `list_filmstrip` / `get_filmstrip_frame` | List filmstrip frame metadata for a scrub window, and pull one JPEG by its exact PTS. See [Filmstrip thumbnails](#filmstrip-thumbnails). |
-| `export_clip` / `export_recording` | Pull a clip or whole recording as TS or fragmented MP4 (see [Export to MP4](#export-to-mp4)). |
+| `export_clip` / `export_recording` | Pull a clip or whole recording as TS or a progressive MP4 (see [Export to MP4](#export-to-mp4)). |
 
 ### `play_clip` parameters
 
 All five fields are optional:
 
 - `clip_id` — re-scope the reader to a stored clip. **Omit it** to play the reader's current scope (whatever `cue_clip`, a previous `play_clip` or the input's own `clip_id` left it on).
-- `from_pts_90khz` / `to_pts_90khz` — play an ad-hoc range without a stored clip. An inverted range (`to < from`) is refused with `replay_invalid_range`.
+- `from_pts_90khz` / `to_pts_90khz` — play an ad-hoc range without a stored clip. An inverted range (`to < from`, or a `to` below the reader's current in-point) is refused, but the `play_clip` arm maps every failure to one code: `command_ack.error` reads `replay_invalid_range` while `command_ack.error_code` is `replay_clip_not_found`. (`update_clip` and the export commands do surface `replay_invalid_range` as the `error_code`.)
 - `speed` — forward rate in `(0, 1.0]`, default `1.0`.
-- `start_at_unix_ms` — future wall-clock start anchor. The input sleeps until that instant, so several `replay` inputs can be started in step for a multi-cam replay. A target more than **5000 ms** in the future is refused with `replay_invalid_start_at`, so a misconfigured sync group can't park the input task.
+- `start_at_unix_ms` — future wall-clock start anchor. The input sleeps until that instant, so several `replay` inputs can be started in step for a multi-cam replay. A target more than **5000 ms** in the future is refused (reason text `replay_invalid_start_at` in `command_ack.error`, surfaced under `command_ack.error_code = "replay_clip_not_found"` like every other `play_clip` rejection), so a misconfigured sync group can't park the input task.
 
 ## Export to MP4
 
-`export_clip` and `export_recording` take a `format` of `"ts"` (the default) or `"mp4"`. On `"mp4"` the edge remuxes the on-disk MPEG-TS to a fragmented MP4 via the TS→fMP4 remuxer; anything else is refused up front with `replay_export_format_unsupported`.
+`export_clip` and `export_recording` take a `format` of `"ts"` (the default) or `"mp4"`. On `"mp4"` the edge builds a **progressive** MP4 from the on-disk MPEG-TS — one `moov` with real sample tables ahead of one `mdat`, so players can seek — not the fragmented shape the CMAF path publishes. Audio is copied as-is, never re-encoded; **video is not a remux** — on any build carrying an x264 encoder (all three release artefacts) the range is decoded and re-encoded all-intra H.264 (`gop_size = 1`, CRF 20, no B-frames; H.264 out whatever went in) so the clip steps cleanly in a player, and a build with no encoder — or a re-encode that fails for any other reason — falls back to the source's own GOP structure (written in display order with DTS == PTS) with a log line. One build runs at a time node-wide, on a blocking thread, sharing that slot with the DVR clip cutter. Any other `format` is refused up front with `replay_export_format_unsupported`.
 
-MP4 export covers **H.264 (`avc1`) and HEVC (`hvc1`)** video with **AAC / AC-3 / E-AC-3 / MP2** audio. MPEG-2 video, Opus audio and any other video `stream_type` return `replay_export_format_unsupported`; a recording with no video frames at all returns `replay_no_video_frames`, because the MP4 builder needs a video track. MP4 builds materialise the whole file in memory, so a pull over the 256 MiB cap returns `replay_export_too_large`. Download those as TS.
+MP4 export accepts **H.264 and HEVC** video with **AAC / AC-3 / E-AC-3 / MP2** audio. The video track written is **H.264 (`avc1`) whatever went in** on a build with an x264 encoder; the source codec (`avc1` / `hvc1`) reaches the file only on the fallback path above. MPEG-2 video, Opus audio and any other video `stream_type` return `replay_export_format_unsupported`; a recording with no video frames at all returns `replay_no_video_frames`, because the MP4 builder needs a video track. MP4 builds materialise the whole file in memory, so a pull over the 256 MiB cap returns `replay_export_too_large`. Download those as TS.
 
-**The manager offers TS only today.** Every clip row — Live tab and Recordings library alike — renders a single hard-coded `⬇ TS` link, served by a REST proxy that sends no `format` field and labels the response `application/mp2t`. It also applies **no** capability gate: `replay_export_mp4` is advertised by every `replay`-enabled edge but is not read anywhere in the manager, so the bit changes nothing in the browser. MP4 export is reachable over the WS command surface only.
+An MP4 range — a clip or a whole-recording window — that crosses a flagged join in the media's own timeline is refused with `replay_export_spans_restart`, checked before the size cap. The index stays continuous across such a join (the writer resumes its counter) but the TS underneath does not, so muxing across it produces a file that plays and declares a wildly wrong duration. The writer flags three kinds of join, on the next indexed frame: a recorder restart, an operator Stop → Start of the recording, and a source PCR step of more than five minutes (an upstream encoder restart or a live → file transition) — the error name says "restart" but all three are refused. The refusal is settled, not transient: retrying cannot move the join, so export each side separately or download TS. With neither `from_pts_90khz` nor `to_pts_90khz` the guard covers the whole recording, so an unbounded `format: "mp4"` pull of a recording holding any such join is refused; with only `from_pts_90khz` set, joins before it are ignored. TS export applies no such check.
+
+**The manager offers TS only today.** Every clip row — Live tab and Recordings library alike — renders a single hard-coded `⬇ TS` link, served by a REST proxy that sends no `format` field and labels the response `application/mp2t`. It also applies **no** capability gate: `replay_export_mp4` is advertised by every `replay`-enabled edge but is not read anywhere in the manager, so the bit changes nothing in the browser. From the Replay surface, then, MP4 export is reachable over the WS commands only. It is not the edge's only MP4 producer, though: a [DVR clip export](#dvr-clip-export) — a viewer's mark posted to the relay origin's clip queue from the DVR player — is cut by the same builder by a poller the edge runs against every passthrough CMAF output, with no manager command issued per clip; the manager's part is arming the recorder (`configure_recording`) when it activates the session.
+
+## DVR clip export
+
+**Not the same thing as a replay clip.** A *replay clip* is a mark-in/mark-out range an operator creates in the manager UI, stored in `clips.json` and played back or pulled with `export_clip`. A *DVR clip export* starts in the browser DVR player (see [DVR Sessions](/manager/dvr/) and the [viewer portal](/relay/portal/)): a viewer marks a moment and asks for so many seconds either side of it, and the relay records the ask as a job. The relay refuses a request whose `pre_secs + post_secs` exceeds **60 s** (HTTP 400), and a zero-length one; it does not shorten an over-long ask.
+
+The edge does the cutting, because the relay never parses media. Every **passthrough** CMAF output — one with no `video_encode` block, DVR session or not; the DVR proxy rendition is skipped — runs a poller that asks `<ingest_url>/clips` for pending marks every **5 s**, authenticating with the same ingest token it PUTs segments with, and cuts each one in turn. Two paths, in order:
+
+1. **From this flow's recording.** The exporter finds the recording under the id the writer really used (`storage_id`, which is the flow id only by default — an operator-named one is followed), maps the mark's wall-clock date to a PTS through the anchor pair in `recording.json` (at the recording's own measured rate once the rolling `recent_*` sample spans long enough to trust, the nominal 90 kHz otherwise), widens the end to the next random-access point so the clip covers the window rather than stopping short of it, and hands the range to the same builder as [Export to MP4](#export-to-mp4): decoded, re-encoded all-intra H.264 and muxed as a progressive MP4, audio copied as-is. The cut is **GOP-aligned, not frame-exact** — the in-point rounds back to the random-access point at or before it and the out-point forward to the first one after. Builds share the single node-wide permit with `export_clip` / `export_recording`.
+2. **From whole origin segments.** When the recording cannot serve the moment — no recording for the flow (including a build without the `replay` feature), no wall-clock anchor in `recording.json`, or a moment the recorder has since aged out of (any other failure of the MP4 build itself lands here too, logged; the restart and empty-window refusals below do not) — the clip is assembled from the init segment plus every segment overlapping the window, so it lands on segment boundaries: up to one segment early at the in-point and one late at the out-point. A coarser clip, not a broken one.
+
+The finished file is PUT to `<ingest_url>/clips/<name>.mp4`, with an upload deadline of a minute plus the body at 2 Mbit/s (capped at 15 min) so a cellular or Starlink uplink is not timed out. If the origin refuses the exact cut as too large (HTTP 413 — the relay accepts up to 256 MiB per clip, sized against source bytes, and an all-intra re-encode of a high-bitrate window can exceed it), the segment cut is tried before the clip is called impossible.
+
+Some failures are settled and are given up on the first attempt: a window that spans a **recorder restart** (the TS either side of the join is two timelines, and the relay's renditions restart with the same process, so the segment path cannot rescue it either), one that spans an **encoder change** on the origin (segments either side decode against different init segments), a window that has aged out of the origin's segments too, an empty window, a playlist with no dated segments, or a clip too large for the origin. Anything else — an origin restarting mid-fetch, a segment not yet uploaded — is retried on later polls, up to **3** attempts. When the edge gives up it tells the origin (`POST <ingest_url>/clips/<name>.mp4/failed`) so the viewer's page shows the clip as failed rather than "being cut" forever.
+
+Failures surface as **Warning** events on the `cmaf` category, not `replay`, with `details.error_code`:
+
+| `error_code` | Meaning |
+|---|---|
+| `clip_export_failed` | The edge gave up on one clip (`details.clip`, `details.attempts`, `details.error`). |
+| `clip_export_blocked` | The clip queue cannot be read — for example a 403 from an ingest token the origin no longer accepts. Raised once per spell of failures; polling continues. |
+| `clip_export_unsupported` | The origin answered 400 / 404 / 405 six polls running — a third-party packager, a CDN ingest that accepts PUT and nothing else, or a relay that predates clip export. No mark will be cut there; polling drops to once every 5 min so an upgraded relay is still noticed. |
+
+**Where this sits against the capability gate below.** The exporter is compiled in unconditionally and advertises its own bit, `clip-export`, regardless of the `replay` feature: it promises "marks will be cut", not "cut from the recording". The manager refuses to activate a DVR session against an edge without `clip-export` (such an edge takes every command and never cuts), and only logs when `replay` is absent — clips then come from whole segments. That is also why activating a session **arms this recorder**: the manager asks `recording_status` and reads `replay_root_free_bytes`, `segments_written` and `bytes_written` to check the session window fits on the replay volume (refusing the activation with the shortfall named if not), then pushes `configure_recording` with `enabled: true`, `storage_id` = the flow id unless you already named one, and `retention_seconds` / `max_bytes` raised to no lower than the window needs — merged onto your existing block, so `pre_buffer_seconds` and `filmstrip_seconds` survive, and remembered so teardown can hand it back. Nothing is pushed if the recorder already covers the session (`max_bytes` within 10 % of the wanted cap counts as covering, because it follows a measured rate that never stops moving). When something is pushed and the flow is running, the edge answers `restart_required` only if the block actually changed, and the manager then sends `restart_flow` — a destroy-then-create that drops **every** output on the flow — and raises an event saying so.
 
 ## Filmstrip thumbnails
 
@@ -162,7 +192,7 @@ Older edges (Phase 1.0) omit the `mode` field — the manager falls back to deri
 
 `update_clip` (Phase 2 / 1.5) is the unified clip-mutation command — a superset of the legacy `rename_clip`. Optional fields, at least one required:
 
-- `name` — clip display name (≤ 256 chars, no control chars).
+- `name` — clip display name (≤ 256 bytes of UTF-8; newline, carriage return and NUL are refused — other control characters such as tab pass).
 - `description` — free-form notes (≤ 4096 chars).
 - `tags` — up to 16 tags per clip, each `[A-Z0-9_-]{1,32}`.
 - `in_pts_90khz` / `out_pts_90khz` — bracket-trim ±100 ms style edits. SMPTE timecode strings are cleared on PTS trim because the IDR index doesn't carry them.
@@ -206,7 +236,7 @@ There is **no** stop event. `stop_recording` acks with an empty payload and emit
 
 ## Capability gate
 
-A build compiled with the `replay` feature advertises **four** capability strings in `HealthPayload.capabilities`; a build without it advertises none of them and returns `unknown_action` for replay commands instead of throwing.
+A build compiled with the `replay` feature advertises **four** replay capability strings in `HealthPayload.capabilities`; a build without it advertises none of those four and returns `unknown_action` for replay commands instead of throwing. A fifth string, `clip-export`, is advertised by **every** build and is listed here because its frame-exact path runs through the replay recorder.
 
 | Capability | What the manager does with it |
 |---|---|
@@ -214,6 +244,7 @@ A build compiled with the `replay` feature advertises **four** capability string
 | `replay-v2` | Gates the speed-preset row, which physically contains the two frame-step buttons. The `,` / `.` hotkeys stay live either way: with the bit they issue `step_frame`, without it they fall back to a ±33 ms `scrub_playback` seek. |
 | `replay-filmstrip` | **Not read by the manager.** The filmstrip strip falls back on the edge's `unknown_action` reply instead, so the bit is informational today. |
 | `replay_export_mp4` | **Not read by the manager.** See [Export to MP4](#export-to-mp4) — the browser only ever offers the TS download. |
+| `clip-export` | **Not gated on `replay`** — advertised by every edge build, because the DVR clip poller (`engine::cmaf::clips`) is compiled in unconditionally. It says this binary polls the relay for a viewer's marks and will cut them; an edge that predates it accepts every DVR command and streams perfectly while every mark sits pending for the life of the session. The manager refuses to activate a DVR session against a node that does not advertise it. It promises a clip, not a frame-exact one: cutting from the flow's Replay recording additionally needs the `replay` recorder armed on the source flow — the manager arms it itself on activation when the node also advertises `replay` — plus the x264 encoder every release artefact carries (without one the cut keeps the source's own GOP structure). With no recording to cut from, the exporter assembles the clip from whole segments instead. See [DVR clip export](#dvr-clip-export). |
 
 ## Where to read next
 

@@ -96,8 +96,12 @@ relay and quietly skipping the half you asked for.
 
 **The installer does not start the portal**, and cannot: it needs a manager
 service token that does not exist until you generate one, and a portal started
-without it refuses every viewer with a message that reads like their account
-being wrong. Generate the token (below), put it in `portal.env`, then:
+without one does not start at all — validation runs once at startup and the
+process exits with ``portal config: no manager token: set BILBYCAST_PORTAL_TOKEN
+or `manager_token` in the config file``, so the packaged unit (`Restart=always`,
+`RestartSec=3`) would only restart it into the same error every three seconds
+until its start limit trips (ten failures in five minutes). Generate the token
+(below), put it in `portal.env`, then:
 
 ```bash
 sudo systemctl enable --now bilbycast-portal
@@ -256,13 +260,19 @@ under **DVR Sessions → Portal logins → Generate a token**.
 A page headed **Your feeds**, with "Signed in as *username*" beside it and a
 **Sign out** link only when `logout_url` is set. Below it, one row per entitled
 on-air feed — the feed's name and a **Watch** button — and a note that opening a
-feed gives three hours of access to it.
+feed gives thirty minutes of access at a time: where renewal has been set up the
+player extends that itself while they keep watching (see **Renewal, and the
+origin gate** below); if it reports expired access instead, they come back here
+and open the feed again.
 
 **Watch** posts the *session* id to the portal, which asks the manager to mint,
 and follows the returned URL **in the same tab** (a token-bearing URL opened with
 `window.open()` gets blocked as a popup often enough that the failure would read
 as the feed being broken). The viewer arrives at the relay's DVR page with
-`?token=…`.
+`?token=…`, plus `&hold=…` — an opaque id for this device, see **One viewing
+session per login** below — and `&from=…`, this page's own origin, which the
+player's back-to-feeds button honours only when it matches the relay's
+configured `portal_url` and otherwise ignores.
 
 With nothing entitled and on air, the page says so in one message. Distinguishing
 "you have none" from "none are on air" would need the manager to report
@@ -298,8 +308,11 @@ Two rules follow, and they are what makes the DVR player work off one credential
 - The manager mints a portal token over **both** of a session's stream ids, so the
   player fetches the main rendition and the proxy off the one credential.
 
-A portal-minted token lasts **three hours**. The player strips it from the URL on
-load — a viewer copying the address bar should not hand out their credential —
+A portal-minted token lasts **thirty minutes** — much shorter than the three
+hours a token exchanged from a one-off link gets, because a viewer who came
+through the portal renews (see below) and a link viewer cannot. The player
+strips it, and the holder id beside it, from the URL on load — a viewer copying
+the address bar should not hand out their credential —
 and keeps it in `sessionStorage` for the life of the tab, so a reload, a
 back-navigation or a restored tab does not report expired access that has not
 expired. A token the origin refuses is forgotten, so one refusal cannot become a
@@ -313,22 +326,23 @@ hint of which.
 
 ## Renewal, and the origin gate
 
-Three hours does not cover a match plus its build-up, and the failure arrives
-mid-second-half. So the player renews itself **600 seconds before expiry**, by
-calling `GET /api/renew?stream=…` on the portal.
+Thirty minutes does not cover a match plus its build-up, and the failure would
+arrive before half-time. So the player renews itself **600 seconds before
+expiry**, by calling `GET /api/renew?stream=…&held=…` on the portal — which puts
+the entitlement re-check on a twenty-minute cadence.
 
 That renewal goes back through the manager exactly as the first mint did, and
 **the manager re-checks the entitlement before it signs**. That is what keeps a
 short expiry meaningful: it is revocation latency, not a countdown. A renewal
-that skipped the check would quietly turn "access lasts three hours" into "access
-lasts as long as the tab is open".
+that skipped the check would quietly turn "access lasts thirty minutes" into
+"access lasts as long as the tab is open".
 
 Renewal needs **two** settings, on two different services, and either one missing
 disables it silently:
 
 | Where | Setting | If it is missing |
 |---|---|---|
-| Relay | `distribution.portal_url` (the manager's **Viewer portal URL** field) | The player schedules no renewal at all, however the portal is configured. The three hours become a hard limit. |
+| Relay | `distribution.portal_url` (the manager's **Viewer portal URL** field) | The player schedules no renewal at all, however the portal is configured. The thirty minutes become a hard limit. |
 | Portal | `player_origins` | The renewal request is refused `403`, and the viewer loses access mid-event. |
 
 `install-relay.sh --player-origin https://relay.example.com` writes the second one
@@ -354,8 +368,67 @@ not — their three hours are the point of the link.
 
 Removing a portal login stops that user getting *new* tokens immediately. A token
 already in a browser keeps working until it expires: the relay verifies a
-signature and an expiry and holds no per-viewer state to revoke. Three hours is
-the outer bound on how long a withdrawal takes to bite.
+signature and an expiry and holds no per-viewer state to revoke. Thirty minutes
+is the outer bound on how long a withdrawal takes to bite: the player renews ten
+minutes early, so the manager re-checks the entitlement every twenty minutes,
+and a refused renewal does not recall the token in hand — it runs out its
+remaining ten minutes. A withdrawal therefore lands somewhere between ten and
+thirty minutes after it is made.
+
+## One viewing session per login
+
+Pressing **Watch** — or following the player's `/watch?stream=…` link back —
+*claims* the login. The manager records this device under an opaque holder id
+(a random UUID, deliberately not the token: two tokens minted in the same second
+for the same streams are byte-identical and cannot tell two devices apart),
+hands it to the player as `&hold=…` beside the token, and the player presents it
+back as `&held=…` on every renewal and every beat.
+
+The record is keyed by **username**, not by username and feed, so one login is
+one device on one feed at a time: opening a second feed, or the same feed on a
+second device, displaces the first, and the newest device wins. A renewal from
+the displaced device is answered `409` (`session_taken_over`); the player
+forgets its token, pauses, and shows *This login is in use on another device.
+Only one at a time.* with a link back to the feed, which takes the login back.
+The displaced picture runs until that renewal, not mid-sentence, so the wait is
+bounded by the token's remaining life. Claims, renewals and displacements land
+in the manager's audit log.
+
+Mints made only as a permission check — the three clips routes below — claim
+nothing, so a clip poll cannot displace the viewer's own player. A renewal that
+arrives without a holder is treated as a fresh Watch, so an older player keeps
+its feed by retaking the login.
+
+The beat, not the renewal, is what feeds the manager's "who is watching" count:
+a renewal arrives every twenty minutes, a beat every minute (the cadence travels
+in each reply as `next_beat_secs`, so it is the manager's to change), and a
+viewer whose beats stop is dropped from the count after 150 s. It rides the same
+two settings as renewal — `distribution.portal_url` on the relay and
+`player_origins` on the portal — and without them no beat ever lands, so the
+manager falls back to counting whoever holds a live token, which keeps a closed
+tab in the count until its token runs out. Its DVR Sessions page says so rather
+than asserting silence: the count is marked approximate, with a note that this
+relay's player is not sending heartbeats.
+
+## Exports
+
+Once there is a clip on any feed the viewer may reach, the page grows an
+**Exports** table — hidden until then, so someone whose feeds carry no clips is
+not shown an empty shelf. It lists every clip cut from the player's Marks panel
+on every feed the user may reach, newest first, with a download link that goes
+through the portal and a delete button; a clip still being cut is listed too,
+marked not ready, so an operator who has just pressed Export sees that something
+is happening. Clips are kept for **24 hours after the feed stops**, on the
+manager's clock (`clips_expire_at`, set when the session stops), and the
+manager's expiry sweep is what removes them — which is why a stopped feed with
+clips still appears here for a day, though never as something to watch. The
+relay's own sweep is only a backstop for a manager that never comes back:
+half-written uploads and media with no record beside it after an hour, and
+anything older than seven days. A clip belongs to the session, not to whoever
+exported it: anyone entitled to the feed can see it, download it and delete it.
+While a cut is still pending the page re-asks every five seconds for up to ten
+minutes from the last page load; a failed poll keeps asking, and only "nothing
+pending" from the server stops it.
 
 ## Endpoints
 
@@ -364,9 +437,13 @@ the outer bound on how long a withdrawal takes to bite.
 | `GET /` | The page. Served `no-store`, with `X-Frame-Options: DENY` and a `script-src 'self'` CSP. |
 | `GET /portal.js` | Its script — a separate route so the page can carry that CSP. |
 | `GET /api/feeds` | What the signed-in user may watch, plus their username and `logout_url`. |
-| `POST /api/watch` | Mint a link for one feed. The body names the **session**; the username comes from the header and can never be supplied by the browser. |
-| `GET /watch?stream=…` | One tap back to a feed whose credential ran out — re-mints and redirects. This is where the player's expired-access link points. |
-| `GET /api/renew?stream=…` | Background renewal. Cross-origin, so it answers only origins named in `player_origins`. |
+| `POST /api/watch` | Mint a link for one feed. The body names the **session**; the username comes from the header and can never be supplied by the browser. Pressing Watch *claims* the login (see above). |
+| `GET /watch?stream=…` | One tap back to a feed whose credential ran out — re-mints (claiming the login afresh) and redirects. This is where the player's expired-access link points. |
+| `GET /api/renew?stream=…&held=…` | Background renewal. Cross-origin, so it answers only origins named in `player_origins`. `held` is the holder id the player was given: a renewal that presents it must still hold the login (else `409`), and one that omits it — an older player — is treated as a fresh Watch and retakes the login. The reply carries the new token and the holder. |
+| `POST /api/beat?stream=…&held=…` | "Still watching", from a playing tab, on the cadence the manager's reply sets (`next_beat_secs`, currently 60 s; the player floors it at 15 s and pauses while the tab is hidden). Cross-origin and gated on `player_origins` exactly as renewal is. Authenticated by the same session cookie as everything else here, but it carries no viewing token and mints nothing: it moves one timestamp on a row this device must already hold, so without `held` it is `400`. The reply's `held: false` tells a displaced tab to stop beating — its picture is ended at its next renewal, not here — and any upstream failure answers `held: true`, so a lost beat costs a number on an operator's screen, never a picture. |
+| `GET /api/clips` | Every clip — ready, still cutting, or failed — on every feed the user may reach, which includes a stopped feed for the 24 hours its clips are kept (the manager is asked `?for=clips`). Each feed costs one manager mint, purely as the permission check and re-made on every call rather than cached, plus one origin listing over the minted token, eight feeds at a time. A relay too old to know about clips answers 404 and is skipped silently. |
+| `GET /api/clips/download?session=…&name=…` | Hands a finished clip to the viewer **through the portal** — re-minting as the permission check and streaming the bytes from the origin with the token in a header — so the viewer token never appears in a link they are told to right-click and save, nor in the relay's access log. |
+| `DELETE /api/clips` | Removes one clip; the JSON body names the `session_id` and the clip `name`. Through the portal because the page's `connect-src 'self'` CSP stops the browser reaching the origin itself. The mint is the only check, so any viewer entitled to the feed may delete any clip on it — the stated design. An origin `404` counts as done. |
 | `GET /healthz` | Liveness. Deliberately needs no user — a health check that required one would be reporting on the proxy. |
 
 Upstream failures answer `502` with "Cannot reach the manager right now", never

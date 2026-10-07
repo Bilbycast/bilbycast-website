@@ -196,17 +196,94 @@ Every refusal on `/watch` returns the same 403 with the same wording. A viewer h
 
 ### Portal logins
 
-Right for staff who watch regularly, where issuing and chasing links is the worse job. The viewer signs in to the [portal](/relay/portal/) — a separate binary running beside the relay — sees the feeds they are entitled to, clicks one, and lands in the player.
+Right for staff who watch regularly, where issuing and chasing links is the worse job. The viewer signs in to the [portal](/relay/portal/) — a separate binary running beside the relay, behind Authelia — sees the feeds they are entitled to, clicks one, and lands in the player.
 
-**Portal logins** on the DVR Sessions page is where you manage that:
+**Portal logins** on the DVR Sessions page is where you manage that. Each row shows a username, its display name and how many feeds it has, and — to the Admins of its group — its email and where its password link stands. Search by name, username or email, or filter to logins with or without feeds, with a password link pending, or with no email.
 
-- A login is an **identity-provider username, verbatim and case-sensitive**. The manager is not the identity provider: it stores an entitlement against a name it cannot verify, so `A.Smith` and `a.smith` are two different people. Deleting a leaver upstream does not delete these rows.
-- Usernames are unique **per group**, not globally. One person can legitimately be a viewer for two tenants' feeds, and those are separate decisions made by separate operators.
-- The **display name** is a label for this list only. The manager has no way to look a real name up.
-- Adding a name grants nothing. It is the tick list against each name that decides what they see, and saving it **replaces** the set rather than merging — you are looking at a checklist, so what you see is what is true afterwards. Up to 256 sessions per login.
+- A login is an **Authelia username, verbatim and case-sensitive**: `A.Smith` and `a.smith` are two different logins here. Authelia stays the identity provider — passwords live there, and nobody at the manager ever sees or sets one.
+- Usernames are unique **per group**, not globally. One person can legitimately be a viewer for two tenants' feeds, and those are separate decisions made by separate operators — but it is still one Authelia account, which is why [one email per username](#one-email-per-username) holds across groups.
+- The **display name** is optional. With [account sync](#is-account-sync-running) running, the portal writes it into the person's Authelia account and greets them by it in the emails it sends.
+- The **username cannot be edited** — it is what the person signs in with, so changing it is removing one login and adding another. **Edit** changes the email and display name.
+- Adding a name grants nothing. It is the tick list against each name (**Feeds**) that decides what they see, and saving it **replaces** the set rather than merging — you are looking at a checklist, so what you see is what is true afterwards. Up to 256 sessions per login. **Add users** on a session card is the same list read down the session instead of down the person; saving it changes only the logins whose tick moved.
 - Only sessions that are **on air** appear in the portal's feed list. A feed that is not running is absent rather than broken. The one exception is the **Exports** table beneath that list: clips cut from a session stay listed there — and can still be downloaded or deleted — for the 24 hours after the session stops, each row naming the feed it came from. A stopped session with no exported clips appears nowhere.
+- Remove a leaver **here**, not only in Authelia. With account sync running, removing a username's **last** login — in whichever group — removes the Authelia account the portal made for it; while another group still has a login for that username, the account stays. Deleting just the Authelia account leaves the login and its entitlements in place, and the portal makes the account afresh on its next sync if the login has an email — with a new password nobody knows, so its owner cannot sign in until you press **Send password link**.
 
-The portal **asks** the manager on every page load rather than being pushed to, so withdrawing access takes effect on the viewer's next click instead of on the next successful push to a box that might be unreachable. It holds no secret and signs nothing — it asks the manager to mint a token, and the manager re-checks the entitlement before it does.
+The portal **asks** the manager on every page load rather than being pushed to, so withdrawing access takes effect on the viewer's next click instead of on the next successful push to a box that might be unreachable. It holds no viewer-token signing key and signs nothing — it asks the manager to mint a token, and the manager re-checks the entitlement before it does.
+
+#### Emails and password links
+
+Give a login an **email** and — while the portal's account sync is running — the portal creates the person's Authelia account and has Authelia email them a link to choose their own password. The account is created with a password nobody knows, so it cannot be signed in to until its owner uses the link. A forgotten password is replaced the same way: **Send password link** on the row asks for another. The manager sends no email itself — it queues the request, and the portal collects it on its next sync. This needs manager 0.87.0 and relay 0.15.0 or later.
+
+The row says where the link stands:
+
+| The row reads | What it means |
+|---|---|
+| *password link requested* | Queued; the portal sends it on its next sync (every 15 seconds unless its config says otherwise). A brand-new account, or one whose email has just changed, takes two syncs, because Authelia has to load the account before it can mail it. A request also stays here while Authelia is rate-limiting the portal's link requests — by default 5 in 10 minutes, all from the portal's own address — so a batch of invitations needs that limit raised on the portal host |
+| *password link sent* and a time | The portal had the link sent. Without the portal's `mail` block that means Authelia accepted the request; with it, the outbound SMTP relay accepted the message. Neither is delivery, and neither proves the link works — see [What the person receives](#what-the-person-receives). How long the link then works is Authelia's `identity_validation.reset_password.jwt_lifespan` on the portal host: five minutes unless raised, too short for an invitation — see [What Authelia needs](/relay/portal/#what-authelia-needs) |
+| *password link failed:* and a reason | The portal could not send it, and says why (below). Fix the cause and press **Send password link** again — the portal never retries a failed link by itself |
+| *link request expired* | No portal sent it within **24 hours** of the request, so the manager withdrew it rather than let it go out late. Press **Send password link** again. While no portal is collecting it reads *link request lapsed unsent* instead, since asking again would only start the same 24 hours over |
+| *password link not being sent: no portal is collecting the login list* | Requested, but no portal is running account sync — see [Is account sync running?](#is-account-sync-running). It expires after 24 hours like any other |
+
+The reasons a link fails that you can act on from here:
+
+| The reason begins | What to do |
+|---|---|
+| *this username is an Authelia account managed by hand* | The portal only manages, and only sends links for, accounts it created; one made by hand is never rewritten or removed. Its owner can still use "Reset password" on Authelia's sign-in page; or have whoever runs the portal host delete the hand-made entry, let the portal create its own on the next sync, and press **Send password link** again |
+| *another Authelia account already uses this email, or has it as its username* | Something already in Authelia's user file — usually a hand-made account — holds that address. Give the login another one, or have that entry changed |
+| *another Authelia account already has this username, in another case or as its email* | See [Case](#adding-a-login) below |
+| *Authelia could not send the link*, *Authelia refused the request*, *could not reach Authelia* | A problem on the portal host: Authelia's notifier, its configuration, or Authelia being down. Whoever runs the host checks Authelia's log |
+| *timed out waiting for Authelia's email*, *the mail relay refused it*, *the mail relay did not answer* | The portal's `mail` block: Authelia's notifier is not reaching the portal's listener, or the outbound SMTP relay refused or ignored the message |
+
+#### Is account sync running?
+
+Account sync is **optional on the portal, and off until its `accounts` block is configured** — see [Accounts and password links](/relay/portal/#accounts-and-password-links) on the portal page. Until a portal runs it, adding a login with an email creates no Authelia account and sends no email: accounts are made and removed in Authelia by hand, as before, and a requested link waits until it expires.
+
+The Portal logins panel says which applies. A portal counts as **collecting the login list** while it has polled the manager within three of its own sync intervals, never judged on less than five minutes. The (i) beside the panel's title, the Add dialog and every waiting link say when none is, with when one last did or that none ever has.
+
+Collecting means the list was fetched, not that the portal could act on it. When a portal collects but cannot update Authelia's user file, a warning above the list quotes the portal's own reason, and until whoever runs the portal host fixes it no account is created, changed or removed, and a link waiting on one of those changes is not sent. If the reason is that the portal cannot read or parse the file at all, no password link is sent until it can. That reason is shown only to Admins, because it can name any account in the file.
+
+#### Adding a login
+
+**Add login** asks for the username, an optional name, an optional email and the owner group. The email is never required:
+
+- **With an email**, a password link is requested at once, so with account sync running the person is emailed within a sync or two. While no portal is collecting, the dialog says nothing will be emailed; the request still stands, and goes out if a portal starts collecting within a day.
+- **Without one**, the login is an entitlement against an Authelia account somebody manages by hand, or one that already exists — such as the same person's login in another group that has no email. No account is created and no link is sent, and while account sync is running the dialog warns about that before you press **Add login**. If adding with an email is refused because the username is a login elsewhere and that login has no email, add it again with the email left empty.
+
+**Case.** The manager compares usernames exactly, so it accepts `a.smith` beside an existing `A.Smith`. The portal is stricter: it will not create an account whose username differs **only in case** from one already in Authelia's user file, or matches another account's email, and that login's password link fails with *another Authelia account already has this username, in another case or as its email*. Give each person a username that differs by more than case. `<<` is refused as a username outright — Authelia's user file would read it as a YAML merge key.
+
+#### One email per username
+
+A username is one Authelia account whichever group grants it, and whoever controls its email controls its password. So:
+
+- An address belongs to **one username**, compared without regard to case, and a username cannot be another login's address — Authelia accepts either at sign-in.
+- A second group adding a username that is already a login elsewhere must give it the **same email**, or none if the first has none. That holds for a SuperAdmin too.
+- Once a username is granted in more than one group, only a **SuperAdmin** can change its email, and the change then applies to every group's login at once.
+- An email **cannot be removed** once set — change it, or remove the login. Clearing it would hand the account back to nobody: the portal goes on managing the account it created.
+- Changing an email leaves a requested link requested. The portal holds it back until Authelia has loaded the new address, so it goes there.
+
+Logins added before these rules can disagree about one username's email. Such a row is marked **email differs between groups**, the portal is offered no address for that username, and **Send password link** refuses. A SuperAdmin settles it by opening the login that has the right address (**Edit**) and pressing **Save**: a confirmation names the address and says it replaces the email on the username's logins in other groups. Declined, nothing is saved — not even a changed name.
+
+Refusals never name the other group or its address. But because a username is one account across every tenant, a refusal — or a success — does tell an Admin whether the username is a login somewhere else, and whether the email they gave matched. Where tenants should not learn each other's usernames, give each its own prefix.
+
+Only a group's **Admins** see its logins' emails and password-link status, in this list and in the Audit Log — where readers who are not Admin of that group see `email_withheld` instead of the address. Other members see the names and their feeds.
+
+#### Removing a login, and giving a username out again
+
+**Remove** drops the login and its entitlements. When it was the username's **last** login in any group, the portal removes the Authelia account it created for it on its next sync. It acts only on the manager's record that the last login went — never on a username simply being absent from the list, which is what a manager restored from an older backup would look like — and the manager keeps that record until the portal confirms it has applied it, for up to 90 days. A portal that does not sync for that long never removes that account; remove it by hand.
+
+Adding the same username again afterwards — in any group, however soon, even before the portal has synced — has the portal **replace** the account instead of keeping it, so the previous holder's password stops working. If the new login has an email, the account is made afresh with a new unusable password and the new holder sets their own from their link. If it has none, the old account is simply removed and no new one is made, as for any login without an email.
+
+:::caution[A replacement never ends a session already signed in, and a removal may not]
+Authelia signs a session out only when that session next makes a request after its profile refresh and finds the account gone or disabled — never for an account made afresh under the same name. So a session the previous holder has open (up to a month with Authelia's remember-me) survives a replacement, and one left idle while the account was gone is honoured again once the username is given out again; either way it then reaches the portal as that username and sees the new holder's feeds. Only whoever runs the portal host can end it, by clearing Authelia's sessions — restarting Authelia when it keeps them in memory, or deleting them from its Redis; either signs every viewer out. The portal logs this each time it removes or replaces an account. Where you can, give a new person a username nobody has had.
+:::
+
+**After a backup restore.** A restore records no removals. A login added after the backup was taken is gone from the manager, but its Authelia account and password stay on the portal: they reach no feed while the username has no login, but once the username is granted again, the previous holder's password still signs in — and sees the new holder's feeds. Before giving such a username to anyone else, have its account deleted from Authelia's user file by hand, or add the username (no email, no feeds) and remove it again, which records the removal the portal acts on; then add it for the new holder. A username the archive holds with a different email than it has had since is the same case: remove **every** group's login for it, then add it again. See [Backup & Restore](/manager/backup/#what-gets-restored).
+
+#### What the person receives
+
+With the portal's [`mail` block](/relay/portal/#rewriting-authelias-email) set, the email is the portal's own, in your brand's words — an **invitation** until a link to that username has gone out without error, a **password reset** after that. Without it, it is Authelia's own reset email either way.
+
+From relay releases after 0.15.0, the portal's email does not carry Authelia's link itself: it links to the portal's own **Set your password** page, and only pressing that page's button continues to Authelia. Authelia's link works once, and mail security that opens links to check them (Microsoft 365's, for one) would otherwise spend it seconds after delivery, leaving the person told it "may have expired". If a recipient lands on Authelia's **sign-in page** instead of that button, the portal host's Authelia is missing the rule that lets `/set-password` through without signing in — see [the set-password page](/relay/portal/#the-set-password-page). Once whoever runs the portal host adds it, the link the person already has works, as long as Authelia's link lifetime has not run out; otherwise press **Send password link** again. Where the portal's configuration cannot serve that page, it emails Authelia's own link instead and warns in its log. A viewer who uses "Reset password" on Authelia's own sign-in page gets Authelia's email and link unchanged, which a scanner can still spend — for someone behind that kind of filtering, send the link from here instead.
 
 #### One viewing session per login
 
@@ -216,12 +293,13 @@ Holding a token and watching are different facts. The player sends a heartbeat e
 
 #### The portal service token
 
-The portal authenticates to the manager with a shared bearer token, generated at **Portal logins → connection panel** and visible only to a **SuperAdmin**: the credential is not group-scoped — it admits its holder to ask about any username in any group — so who holds one is an instance-level decision.
+The portal authenticates to the manager with a shared bearer token, generated in the connection panel at the top of **Portal logins** (**Generate a token**, or **Settings → Generate a new token** once one is connected) and visible only to a **SuperAdmin**: the credential is not group-scoped — it admits its holder to ask about any username in any group — so who holds one is an instance-level decision. The same token carries account sync as well as viewing.
 
-- It is **generated, never typed**, and shown once. There is no way to read it back; an operator who loses it generates a new one.
-- Deploy it to the portal host as `BILBYCAST_PORTAL_TOKEN`. **Rotating it takes the portal down until the new value is deployed** — and the symptom on the viewer's side is an empty feed list, which does not look like a token problem.
-- The manager **fails closed**: with no token configured, or with the setting unreadable, every portal request is refused rather than answered.
-- Clearing it is the switch that turns the portal off.
+- It is **generated, never typed**, and shown once; the panel never displays it again, and an operator who loses it generates a new one. It is stored as an ordinary settings row, so a database dump or a compromised SuperAdmin account exposes it too.
+- Deploy it to the portal host as `BILBYCAST_PORTAL_TOKEN`. **Rotating it takes the portal down until the new value is deployed.** Every viewer is told *Cannot reach the manager right now*, which does not look like a token problem — the portal's log says *manager refused the stream list* — and account sync stops with it, so no account changes and no password link goes out until the new value is in place.
+- The manager **fails closed**: with no token configured, or with the setting unreadable, every portal request is refused (`401`) rather than answered.
+- Clearing it (**Disconnect**) is the switch that turns the portal off.
+- Its holder can read **every tenant's portal logins with their emails**, and can tell the manager a removal was applied — which, done by anyone but the portal, would leave a removed person's Authelia account and password in place. After rotating a leaked token, check Authelia's user file for accounts whose login is gone.
 
 ## Deleting a session
 
@@ -249,10 +327,14 @@ Authority splits the way the [multiviewer](/manager/multiviewer/) does, and for 
 | Stop it | **Operator** | **Operate** on both — a stop writes to both nodes (it takes the renditions off the edge and retires the streams on the relay), so it is re-checked like a start |
 | Set a stop time alone, disarm | **Operator** | — |
 | Issue and revoke viewing links | **Admin** | — |
-| Add, remove portal logins; set entitlements | **Admin** | — |
+| List portal logins — names and feeds | Any member of the group | — |
+| See a login's email and password-link status | **Admin** of the login's group | — |
+| Add, edit or remove portal logins; send a password link | **Admin** of the login's group | — |
+| Set a login's feeds | **Admin** of the login's group, and of each session ticked | — |
+| Change the email of a username granted in more than one group, or settle one whose groups disagree | **SuperAdmin** | — |
 | Mint or clear the portal service token | **SuperAdmin** | — |
 
-The node check is separate from the group check, and both are re-checked at activation rather than only at create: a node can be moved between groups, or a caller's membership changed, while a session sits in draft. Every mutation is written to the Audit Log, group-scoped to the session's owner — the one exception being the portal service token, which belongs to no tenant, so its rows carry no group and only a SuperAdmin sees them. The scheduler's unattended starts and stops are recorded there too, marked as system-triggered.
+The node check is separate from the group check, and both are re-checked at activation rather than only at create: a node can be moved between groups, or a caller's membership changed, while a session sits in draft. Every mutation is written to the Audit Log, group-scoped to the session's or portal login's owning group — a SuperAdmin's email change that reaches other groups' logins is recorded under each of those groups too. The one exception is the portal service token, which belongs to no tenant, so its rows carry no group and only a SuperAdmin sees them. The scheduler's unattended starts and stops are recorded there too, marked as system-triggered.
 
 ## Events
 
@@ -289,12 +371,13 @@ Everything above is an endpoint. Full descriptions are in the [manager API refer
 | GET | `/api/v1/dvr/sessions/{id}/viewers` | Which portal logins hold a viewing session on this feed, and which of them are watching — by the player's heartbeat, falling back to "holds an unexpired token" where the player never beats |
 | GET / POST | `/api/v1/dvr/sessions/{id}/grants` | List the viewing links issued for a session, or issue one |
 | DELETE | `/api/v1/dvr/grants/{grant_id}` | Revoke a viewing link |
-| GET / POST | `/api/v1/dvr/portal-users` | Portal logins the caller can see, or add one |
-| DELETE | `/api/v1/dvr/portal-users/{id}` | Remove a portal login |
+| GET / POST | `/api/v1/dvr/portal-users` | Portal logins the caller can see, with whether a portal is collecting the list (`account_sync`), or add one — with an optional email, which also requests a password link |
+| PATCH / DELETE | `/api/v1/dvr/portal-users/{id}` | Change a login's email and display name, or remove the login |
+| POST | `/api/v1/dvr/portal-users/{id}/password-link` | Queue a set-your-password email for the portal to have sent. `202`: what is accepted is the request, not the email |
 | PUT | `/api/v1/dvr/portal-users/{id}/entitlements` | Replace the set of sessions that login may watch |
 | GET / POST / DELETE | `/api/v1/dvr/portal-service-token` | Whether a portal token is configured, mint a replacement, or clear it (SuperAdmin) |
 
-Four routes carry no session cookie by design — the viewer's entry point, and the three the portal service calls with its bearer token:
+Seven routes carry no session cookie by design — the viewer's entry point, and the six the portal service calls with its bearer token:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -302,12 +385,15 @@ Four routes carry no session cookie by design — the viewer's entry point, and 
 | GET | `/api/v1/dvr/portal/streams` | What one portal username may watch — `active` sessions only. With `?for=clips` (what the portal's Exports table asks), also stopped sessions whose 24-hour clip-retention window, started at the stop, has not yet run out — listed whether or not any clip was actually cut |
 | POST | `/api/v1/dvr/portal/token` | Mint a viewing token for one session on behalf of a username, re-checking the entitlement first |
 | POST | `/api/v1/dvr/portal/heartbeat` | The player's presence beat, forwarded by the portal — what separates a login that is watching from one that merely holds a token |
+| GET | `/api/v1/dvr/portal/accounts` | Account sync: every login folded to one row per username — email, display name, any outstanding link request — plus the usernames whose last login was removed. The portal reports its sync interval, and any reason it could not write Authelia's user file, on the same request |
+| POST | `/api/v1/dvr/portal/accounts/link-sent` | The portal reporting that a password link went out, or why it could not |
+| POST | `/api/v1/dvr/portal/accounts/removed-applied` | The portal confirming it has removed, or replaced, the account behind a removed username, so the manager can forget the record |
 
 The manager's `/watch/{stream_id}` is **not** the relay's `/watch/{stream_id}`: different server, different credential. The manager's exchanges a grant key for a redirect; the relay's is a WHEP player page on its distribution listener.
 
 ## Related
 
 - [Viewer Distribution (WHEP + LL-HLS)](/relay/viewer-distribution/) — installing and configuring the relay half, the origin's storage and retention settings, and the browser DVR player's controls, picture modes and self-test.
-- [The viewer portal](/relay/portal/) — the sign-in service that fronts a gated feed, and the trust boundary it depends on.
+- [The viewer portal](/relay/portal/) — the sign-in service that fronts a gated feed, the trust boundary it depends on, and the portal-host half of portal logins: account sync, the Authelia settings it needs, rewriting Authelia's email, and the set-password page.
 - [CMAF / LL-HLS output](/edge/cmaf/) — the edge output type a session provisions, and what `dvr_window_secs`, segment duration and the thumbnail track mean on the unit.
 - [Multiviewer Walls](/manager/multiviewer/) — the other manager surface built on the same author-then-deploy split.

@@ -11,7 +11,7 @@ bilbycast-manager ships **two distinct encrypted backup paths**. Both seal the o
 
 | Path | Scope | When to use |
 |---|---|---|
-| **Application-level export / import** | The 50 persisted application tables — tenancy, nodes, tunnels, settings, AI keys, managed flows, switcher, routines, master graphs, address pools, multiviewer, replay, DVR, config history, audit log, events. Ephemeral runtime state (sessions, node connections, PTP and telemetry caches) is intentionally excluded, and so is HA cluster state. Re-encrypts secrets across master keys, so the file is portable across deployments. | Nightly / weekly snapshots; consolidating two deployments; exporting customer data on contract end. |
+| **Application-level export / import** | The 51 persisted application tables — tenancy, nodes, tunnels, settings, AI keys, managed flows, switcher, routines, master graphs, address pools, multiviewer, replay, DVR, config history, audit log, events. Ephemeral runtime state (sessions, node connections, PTP and telemetry caches) is intentionally excluded, and so is HA cluster state. Re-encrypts secrets across master keys, so the file is portable across deployments. | Nightly / weekly snapshots; consolidating two deployments; exporting customer data on contract end. |
 | **DR-grade `pg_dump` archive** | Full Postgres-level snapshot. Round-trips every row including `manager_instances`, `node_connections`, `cross_instance_rpc` — the full cluster, byte-for-byte. | Hardware replacement; restoring after a corrupted database; the safety net for "lost master key" scenarios. |
 
 Both paths exist because they answer different questions. Export is "I want to migrate my application data." Backup is "I want to put the cluster on a new machine without losing a single byte."
@@ -58,7 +58,7 @@ A secret that comes back NULL is gone: re-register that node, or re-key that tun
 
 ### What gets restored
 
-`EXPORTED_TABLES` round-trips 50 tables. Order matters — parents before children; restore runs in a single Postgres transaction with foreign-key enforcement suspended for the duration (`SET session_replication_role = 'replica'`, re-set to `origin` before the commit), which needs a role holding REPLICATION.
+`EXPORTED_TABLES` round-trips 51 tables. Order matters — parents before children; restore runs in a single Postgres transaction with foreign-key enforcement suspended for the duration (`SET session_replication_role = 'replica'`, re-set to `origin` before the commit), which needs a role holding REPLICATION.
 
 - **Tenancy and identity** — `users`, `groups`, `group_members`, `resource_shares`.
 - **Fleet** — `nodes`, `tunnels`, `unit_links` (the cabling an operator wrote down; nothing else recreates it).
@@ -70,7 +70,7 @@ A secret that comes back NULL is gone: re-register that node, or re-key that tun
 - **Address pools** — `address_pools`, `address_pool_exclusions`, `address_allocations`. The allocations are the half worth being explicit about: a pool restored without them believes its whole range is free.
 - **Multiviewer** — `mv_monitoring_objects`, `mv_heads`, `mv_layouts`, `mv_layout_tiles`, `mv_walls`, `mv_routings`, `mv_routing_entries`.
 - **Replay** — `replay_clips`, `recording_sync_groups`, `recording_sync_group_members`, `replay_sync_clips`, `replay_sync_clip_members`.
-- **Browser DVR** — `dvr_sessions`, `dvr_access_grants`, `dvr_portal_users`, `dvr_portal_entitlements`.
+- **Browser DVR** — `dvr_sessions`, `dvr_access_grants`, `dvr_portal_users`, `dvr_portal_entitlements`, `dvr_portal_account_removals`. A restore records no new portal-account removals (triggers are off while it loads), and it re-derives which portal logins have already had a password link delivered, so an archive made before that was tracked does not turn every next link into an invitation. See [Removing a login, and giving a username out again](/manager/dvr/#removing-a-login-and-giving-a-username-out-again).
 - **UI state and history** — `topology_positions`, `ui_preferences`, `audit_log`, `events`.
 
 Ephemeral tables (`sessions`, `revoked_sessions`, `node_connections`, `node_config_snapshots`, `ptp_state_cache`, `epoch_lock_state_cache`, `psi_catalog_cache`, `node_bus_programs`, `oidc_state`, `user_mfa_attempts`, `stream_history`, `network_history`) are wiped on restore — they would propagate stale runtime state across machines, and each one refills from the live stream within a tick or two.

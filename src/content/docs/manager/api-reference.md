@@ -254,12 +254,35 @@ A **DVR session** ties a source to the edge that produces its CMAF renditions, t
 | POST   | `/api/v1/dvr/sessions/{id}/schedule` | Arm a start time, a stop time, or both; nulls disarm it |
 | GET / POST | `/api/v1/dvr/sessions/{id}/grants` | List the viewing links issued for a session, or issue one. The key is returned **once** — only its hash is stored |
 | DELETE | `/api/v1/dvr/grants/{grant_id}` | Withdraw a viewing link. The row is kept, so "who could watch this, and when did that stop" still has an answer |
-| GET / POST | `/api/v1/dvr/portal-users` | Portal logins the caller can see, or add one |
-| DELETE | `/api/v1/dvr/portal-users/{id}` | Remove a portal login |
-| PUT    | `/api/v1/dvr/portal-users/{id}/entitlements` | Replace the set of sessions that login may watch — the operator is looking at a checklist, so a merge would leave anything they unticked quietly in force |
-| GET / POST / DELETE | `/api/v1/dvr/portal-service-token` | Whether a portal token is configured, mint a replacement, or clear it. **SuperAdmin** — the token is not group-scoped, and its value is shown once and never readable again |
+| POST   | `/api/v1/dvr/sessions/{id}/watch` | Open the running feed as the caller: answers `{url}` for the relay's player, carrying a three-hour viewer token. Not a grant — it leaves a `dvr.session.watch` audit row naming the caller instead. Any member of the session's group, plus **View** on the relay. `409 not_running`, `409 no_relay`, `409 relay_not_ready` |
+| GET    | `/api/v1/dvr/sessions/{id}/viewers` | Which portal logins hold a viewing session on the feed, and which of them are watching: by the player's heartbeat, or, where the player has never beaten (`heartbeat: false`), by holding an unexpired token. Any member of the session's group; the viewer's IP address is included for Admins only |
+| GET / POST | `/api/v1/dvr/portal-users` | `GET`: the portal logins in the caller's groups, each with its feeds and a `can_write` flag, plus `account_sync` — when a portal last collected the login list, the sync interval it reported, whether that counts as collecting now, and (to Admins) the portal's reason when it could not write Authelia's user file. A row's `email`, `email_conflict` and `password_link_*` fields are present only for Admins of its group. `POST` `{username, owner_group_id, display_name?, email?, send_link?}` adds one; with an email, `send_link` (default `true`) also queues a password link |
+| PATCH / DELETE | `/api/v1/dvr/portal-users/{id}` | `PATCH` `{email, display_name}` replaces both — an absent field is a cleared one, and the username cannot be changed. A SuperAdmin settles a username whose groups disagree on its email by adding `settle_email: true`. `DELETE` removes the login; when it was the username's last, the portal is told to remove the Authelia account it created — or to replace it, if the username is given out again first |
+| POST   | `/api/v1/dvr/portal-users/{id}/password-link` | Queue a set-your-password email. `202`, because what is accepted is the request, not the email: the portal collects it on its next sync and has Authelia send it, and it is offered to the portal for 24 hours |
+| PUT    | `/api/v1/dvr/portal-users/{id}/entitlements` | Replace the set of sessions that login may watch (`{session_ids}`, at most 256 — `400 too_many_sessions` beyond). A replace, not a merge, because the operator is looking at a checklist — but only within the caller's write scope: an entitlement to a session the caller cannot administer is carried over rather than dropped |
+| GET / POST / DELETE | `/api/v1/dvr/portal-service-token` | Whether a portal token is configured, mint a replacement, or clear it. **SuperAdmin** — the token is not group-scoped, and its value is shown once and never displayed again. Rotating it takes the portal, and its account sync, down until the new value is deployed |
 
-Authority follows the multiviewer split: creating and deleting a session is **Admin** in its owner group because it commits a node's disk, while activating, stopping and scheduling one is **Operator** — the people who start and stop a recording are not administrators. Grants and portal logins are Admin.
+Authority follows the multiviewer split: creating and deleting a session is **Admin** in its owner group because it commits a node's disk, while activating, stopping and scheduling one is **Operator** — the people who start and stop a recording are not administrators. Grants are Admin. Any member of a group may list its portal logins, but adding, editing, removing them, setting their feeds and sending password links is **Admin** of the login's group — and setting feeds needs Admin of each session ticked too. Once a username is a login in more than one group, only a **SuperAdmin** can change its email, which then changes on every group's login. A login the caller cannot administer answers `404`, the same as one that does not exist.
+
+### Portal login refusals
+
+Refusals never name another group's login or its address.
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| `invalid_username` | 400 | Empty, containing whitespace or a control character, over 256 characters, or `<<` (Authelia's user file would read it as a YAML merge key) |
+| `invalid_display_name` | 400 | Over 256 characters, or containing a control character |
+| `invalid_email` | 400 | Not shaped like an address, or over 254 characters |
+| `email_required` | 400 | A `PATCH` that would remove an email — once set it can be changed, not removed |
+| `no_email` | 400 | A password link for a login with no email |
+| `username_taken` | 409 | This group already has a login with that username |
+| `email_taken` | 409 | Another username already has that address, or is that address — compared without regard to case |
+| `username_is_address` | 409 | The new username is another login's email |
+| `username_email_mismatch` | 409 | The username is a login in another group with a different email, or with none. One username is one Authelia account, so every group's login for it carries the same email — SuperAdmins included |
+| `shared_login` | 409 | A change to the email of a username also granted in another group, by anyone but a SuperAdmin |
+| `email_conflict` | 409 | The username's logins disagree on its email (possible only for logins added before one email per username was enforced), so no password link can be sent. A SuperAdmin's `PATCH` that leaves the address unchanged is refused with it too, and writes nothing, unless it carries `settle_email: true` |
+| `forbidden` | 403 | Adding a login to a group the caller is not Admin of, or any portal-service-token call by anyone but a SuperAdmin |
+| `not_found` | 404 | No such login, or one in a group the caller does not administer; on `PUT …/entitlements`, also a session id the caller cannot administer (and the login does not already hold), the same answer as one that does not exist |
 
 ### Public endpoints
 
@@ -268,10 +291,14 @@ These carry no session cookie, by design.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/watch/{stream_id}` | The viewer's entry point. Takes the grant key as `?k=`, validates it, mints a short-lived viewer token and redirects to the relay's player. Every refusal is the same `403` with the same wording, so a dud link never reveals whether the feed exists, or whether the key was revoked rather than expired |
-| GET    | `/api/v1/dvr/portal/streams` | What one portal username may watch — `active` sessions only |
-| POST   | `/api/v1/dvr/portal/token` | Mint a viewing token for one session on behalf of a username. The entitlement is re-checked here rather than taken from the last listing, so access withdrawn in between takes effect |
+| GET    | `/api/v1/dvr/portal/streams?username=` | What one portal username may watch — `active` sessions only. `?for=clips` also lists stopped sessions still inside their 24-hour clip retention |
+| POST   | `/api/v1/dvr/portal/token` | Mint a viewing token for one session on behalf of a username. The entitlement is re-checked here rather than taken from the last listing, so access withdrawn in between takes effect. A fresh watch takes the login for that device; a renewal from a device another has since displaced answers `409 session_taken_over`. Not entitled, no such session, no usable relay, and — for a mint that opens or renews a feed — not running all answer the same `403 not_entitled`, so it cannot be used to find out which feeds exist. A mint that only checks permission for clips also reaches a stopped session still inside its 24-hour clip retention |
+| POST   | `/api/v1/dvr/portal/heartbeat` | The player's once-a-minute "still watching", forwarded by the portal. Grants nothing; answers whether the device still holds the login |
+| GET    | `/api/v1/dvr/portal/accounts` | Account sync: every login folded to one row per username — email, display name, the newest outstanding link request, and whether the next link is an invitation or a reset — plus `removed`, the usernames whose last login went, each kept until the portal acknowledges it (or for 90 days). The optional `?interval_secs=` and `?sync_error=` are the portal reporting how often it syncs and why it could not write Authelia's user file — what the Portal logins panel uses to say whether a portal is collecting the list, and why it is stuck |
+| POST   | `/api/v1/dvr/portal/accounts/link-sent` | The portal reporting that a password link went out, or why it could not; the reason is cut to 300 bytes rather than refused |
+| POST   | `/api/v1/dvr/portal/accounts/removed-applied` | The portal confirming it removed, or replaced, the account behind a removed username. The record goes only when the `removed_at` it echoes matches exactly, so a later removal of the same username is never lost |
 
-The two `/api/v1/dvr/portal/…` routes are called by the portal service on the relay's VPS and authenticate with the shared service token above, presented as `Authorization: Bearer`. They are fail-closed: a manager with no token configured refuses every request rather than answering entitlement questions.
+The six `/api/v1/dvr/portal/…` routes are called by the portal service on the relay's host and authenticate with the shared service token above, presented as `Authorization: Bearer`. They are fail-closed: with no token configured, or one that does not match, every request is refused `401 unauthorized` rather than answered. Over-long fields on the token, heartbeat and acknowledgement routes, and an acknowledgement's `requested_at` or `removed_at` that is not RFC 3339, are refused `400 invalid_field`.
 
 The manager's `/watch/{stream_id}` is **not** the relay's `/watch/{stream_id}` — different server, different credential. The manager's exchanges a grant key for a redirect; the relay's is the player page itself, on its distribution listener.
 
@@ -415,7 +442,7 @@ Mutating endpoints require the Operator role and the usual CSRF + node-access ch
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET    | `/api/v1/audit-log` | Group-scoped audit trail — timestamp, user, action, target, structured details. Admins of the owning group, and SuperAdmins across all groups. |
+| GET    | `/api/v1/audit-log` | Group-scoped audit trail — timestamp, user, action, target, structured details. SuperAdmins see every row; anyone who is Admin in at least one group sees the rows of every group they belong to, whatever their role there. A portal login's email is replaced by `email_withheld` in rows whose group the caller does not administer. |
 
 The log is append-only at the data layer; no API path deletes rows. The UI page is `/admin/audit-log`.
 

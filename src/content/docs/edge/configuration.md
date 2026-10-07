@@ -281,7 +281,7 @@ If TLS is configured but the binary was built without the `tls` feature, a warni
 
 ## Auth Configuration
 
-Optional sub-object of `server`. See the [Security Guide](api-security.md) for detailed usage.
+Optional sub-object of `server`. See the [Security Guide](/edge/security/#the-local-rest-api) for detailed usage.
 
 ```json
 {

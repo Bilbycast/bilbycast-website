@@ -12,7 +12,7 @@ bilbycast-manager supports an **active/active HA topology**: two manager instanc
 Broadcast operations expect reliability you'd associate with a hardware control plane: a primary failure can't take the manager offline for the time it takes to spin up a replacement. Active/active across two instances against shared Postgres gives you:
 
 - **Zero-downtime failover** — both instances are live, both can answer REST + WS at any moment. DNS failover is the only operator action.
-- **Rolling deploys** — drain one instance, swap the binary via systemd, rejoin. The other instance keeps serving the entire time.
+- **Rolling deploys** — drain one instance, swap the binary via systemd, rejoin. The other instance keeps serving the entire time. The exception is a release whose migrations remove something the older binary still uses: the first upgraded instance runs them while its peer still serves. The AI assistant release is one — its migration `0074` drops `ai_applied_actions`, which the older binary writes on every assistant apply — so stop the other instances before the first upgraded one starts (see [AI Assistant](/manager/ai-assistant/#upgrading)).
 - **Geographic redundancy** — instances in two regions, one Postgres cluster reachable from both.
 - **Honest observability** — every Prometheus sample carries `instance_id` and `region` labels so dashboards can split metrics per node.
 

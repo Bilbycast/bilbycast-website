@@ -11,7 +11,7 @@ bilbycast-manager ships **two distinct encrypted backup paths**. Both seal the o
 
 | Path | Scope | When to use |
 |---|---|---|
-| **Application-level export / import** | The 51 persisted application tables — tenancy, nodes, tunnels, settings, AI keys, managed flows, switcher, routines, master graphs, address pools, multiviewer, replay, DVR, config history, audit log, events. Ephemeral runtime state (sessions, node connections, PTP and telemetry caches) is intentionally excluded, and so is HA cluster state. Re-encrypts secrets across master keys, so the file is portable across deployments. | Nightly / weekly snapshots; consolidating two deployments; exporting customer data on contract end. |
+| **Application-level export / import** | The 52 persisted application tables — tenancy, nodes, tunnels, settings, AI provider keys (personal and organisation), managed flows, switcher, routines, master graphs, address pools, multiviewer, replay, DVR, config history, audit log, events. Ephemeral runtime state (sessions, node connections, PTP and telemetry caches) is intentionally excluded, and so is HA cluster state. Re-encrypts secrets across master keys, so the file is portable across deployments. | Nightly / weekly snapshots; consolidating two deployments; exporting customer data on contract end. |
 | **DR-grade `pg_dump` archive** | Full Postgres-level snapshot. Round-trips every row including `manager_instances`, `node_connections`, `cross_instance_rpc` — the full cluster, byte-for-byte. | Hardware replacement; restoring after a corrupted database; the safety net for "lost master key" scenarios. |
 
 Both paths exist because they answer different questions. Export is "I want to migrate my application data." Backup is "I want to put the cluster on a new machine without losing a single byte."
@@ -58,11 +58,11 @@ A secret that comes back NULL is gone: re-register that node, or re-key that tun
 
 ### What gets restored
 
-`EXPORTED_TABLES` round-trips 51 tables. Order matters — parents before children; restore runs in a single Postgres transaction with foreign-key enforcement suspended for the duration (`SET session_replication_role = 'replica'`, re-set to `origin` before the commit), which needs a role holding REPLICATION.
+`EXPORTED_TABLES` round-trips 52 tables. Order matters — parents before children; restore runs in a single Postgres transaction with foreign-key enforcement suspended for the duration (`SET session_replication_role = 'replica'`, re-set to `origin` before the commit), which needs a role holding REPLICATION.
 
 - **Tenancy and identity** — `users`, `groups`, `group_members`, `resource_shares`.
 - **Fleet** — `nodes`, `tunnels`, `unit_links` (the cabling an operator wrote down; nothing else recreates it).
-- **Catalog and configuration** — `service_templates`, `config_templates`, `settings`, `ai_keys`.
+- **Catalog and configuration** — `service_templates`, `config_templates`, `settings`, `ai_keys`, `ai_org_keys` (the AI assistant's personal and organisation provider keys, resealed under the destination's master key).
 - **Flows** — `managed_flows`, `flow_groups`.
 - **Switcher** — `switcher_pages`, `switcher_presets`.
 - **Routines** — `routines`, `routine_actions`, `routine_schedules`, `routine_activations`.
@@ -75,15 +75,17 @@ A secret that comes back NULL is gone: re-register that node, or re-key that tun
 
 Ephemeral tables (`sessions`, `revoked_sessions`, `node_connections`, `node_config_snapshots`, `ptp_state_cache`, `epoch_lock_state_cache`, `psi_catalog_cache`, `node_bus_programs`, `oidc_state`, `user_mfa_attempts`, `stream_history`, `network_history`) are wiped on restore — they would propagate stale runtime state across machines, and each one refills from the live stream within a tick or two.
 
+The AI assistant's own runtime tables are classified as **not exported**, each for its reason: `ai_jobs` and `ai_job_events` (a run's lease and its progress mirror) are wiped on restore like the tables above; `user_api_tokens` is wiped too, so a personal API token minted on one installation never becomes live on another (only its hash is stored, so it could not be recovered from a backup anyway); and `ai_proposals` is left as it is, because a proposal follows its conversation — see the AI threads below. A pending proposal that survives cannot be applied as it stands: Apply re-checks it against the node's current configuration first.
+
 The calling session's user row is replaced wholesale. The API response includes `"session_invalidated": true` and the UI bounces to `/login`.
 
 ### What an export does not carry
 
-Seventeen live tables sit in neither list, so an export drops them and a restore leaves whatever the destination already held:
+Sixteen live tables are not yet classified at all, so an export drops them and a restore leaves whatever the destination already held:
 
 - **Services** — `services`, `service_versions`, `service_steps`, `service_automations`.
 - **Children whose parents *are* exported** — `switcher_preset_actions` (so presets restore with no actions: buttons that exist and do nothing), `managed_inputs`, `managed_outputs`, `transcode_profiles`, `tunnel_teardown_targets`.
-- **AI threads** — `ai_threads`, `ai_messages`, `ai_applied_actions`, `ai_embeddings`. History rather than current state, though `ai_keys` *is* exported.
+- **AI threads** — `ai_threads`, `ai_messages`, `ai_embeddings`. History rather than current state, though `ai_keys` and `ai_org_keys` *are* exported.
 - **HA cluster state** — `manager_instances`, `cross_instance_rpc`. Neither exported *nor* cleared, so the destination's own cluster rows survive a restore untouched.
 - **Auth-failure counters** — `login_auth_failures`, `node_auth_failures`.
 

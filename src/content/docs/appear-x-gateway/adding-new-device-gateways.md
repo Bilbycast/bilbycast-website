@@ -168,24 +168,17 @@ impl DeviceDriver for MyDeviceDriver {
     }
 
     fn ai_actions(&self) -> Vec<AiActionDescriptor> {
-        // Define AI actions with prompt instructions and UI hints.
-        // All third-party device actions should use execution_mode: "command".
+        // Worked examples of your write commands for the AI assistant:
+        // a prompt description and the {"command", "args"} params for each.
     }
 }
 ```
 
 ### AI actions
 
-The manager's AI assistant can propose the commands in your `supported_commands()` table (reads excepted — it has read tools for those) through its generic device-command action, which goes through `POST /api/v1/nodes/{id}/command` — validated by your `validate_command()`, role-checked from your command catalogue — and is applied only when an operator applies the proposal. The descriptors you return from `ai_actions()` are shown to the model as worked examples of those commands, and your `ai_context()` text is the topic it reads to learn your device. When defining `ai_actions()`, use `execution_mode: "command"` for all actions.
+The manager's AI assistant can propose the commands in your `supported_commands()` table (reads excepted — it has read tools for those) through its generic device-command action, which goes through `POST /api/v1/nodes/{id}/command` — validated by your `validate_command()`, role-checked from your command catalogue — and is applied only when an operator applies the proposal. The descriptors you return from `ai_actions()` are shown to the model as worked examples of those commands, and your `ai_context()` text is the topic it reads to learn your device.
 
-For **`ConfigAction`** category (complex payloads):
-
-- Set `payload_key` to the JSON key holding the config (e.g., `"inputs"`, `"profile"`)
-- Set `preview_type` to `"generic"` (renders a key-value card) or implement a custom preview component
-
-For **`SimpleAction`** category (buttons):
-
-- Pick an appropriate `button_style`: `"info"` (blue), `"apply"` (green), `"delete"` (red), `"stop"` (orange)
+Write each descriptor's `ai_prompt_example` as the params of that device-command step, in JSON — `{"command": "set_ip_input", "args": {"slot": 1, "inputs": [...]}}`, where `args` is what your `validate_command()` receives beside `type` — and describe in `ai_prompt_description` when to use it. Give examples only for commands the assistant may propose: a read, or a command one of the assistant's own actions owns, is left out of what the model sees. Set `category` to `ConfigAction` for a command carrying a config payload and `SimpleAction` otherwise; `ui_hints` is not read by anything any more, so fill it with plain labels and `execution_mode: "command"`.
 
 ### Register the driver
 

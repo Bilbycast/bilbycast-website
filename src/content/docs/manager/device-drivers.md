@@ -66,33 +66,32 @@ The sidecar runs anywhere it can reach the device and the manager — usually co
 
 ## Action descriptors
 
-Action descriptors are how a driver advertises its operations to the manager. Each descriptor includes:
+Action descriptors are worked examples of a driver's device commands, for the AI assistant. Each descriptor includes:
 
 ```rust
 pub struct AiActionDescriptor {
-    pub name: String,                   // e.g., "set_ip_input"
+    pub name: String,                   // the command, e.g. "set_ip_input"
     pub display_label: String,          // human-readable label
     pub category: ActionCategory,       // ConfigAction | SimpleAction
-    pub ai_prompt_description: String,  // sent to the AI assistant
-    pub ai_prompt_example: String,      // example JSON the AI should produce
-    pub ui_hints: ActionUiHints,
+    pub ai_prompt_description: String,  // when and how to use the command, for the model
+    pub ai_prompt_example: String,      // the command's params, as JSON
+    pub ui_hints: ActionUiHints,        // unused
 }
 
 pub struct ActionUiHints {
     pub button_label: String,
-    pub button_style: String,           // "apply", "delete", "stop", "start", "restart", "info"
-    pub payload_key: Option<String>,    // ConfigAction only
-    pub preview_type: Option<String>,   // "flow", "tunnel", "generic" — ConfigAction only
+    pub button_style: String,
+    pub payload_key: Option<String>,
+    pub preview_type: Option<String>,
     pub execution_mode: String,
 }
 ```
 
-- **`name`** — a bare identifier (`set_ip_input`, `create_flow`), not driver-prefixed. It is wizard ids, not action names, that carry a `<driver>.` prefix (`edge.srt-pipeline`).
-- **`category`** — `ConfigAction` (carries a config payload, so the UI draws a preview card plus an Apply button) or `SimpleAction` (a single Execute button).
-- **`ai_prompt_description`** — the instruction that tells the AI assistant when and how to use this action. Be specific about what the action does and what its preconditions are.
-- **`ai_prompt_example`** — the example JSON envelope the assistant should imitate for this action.
-- **`ui_hints.payload_key`** / **`ui_hints.preview_type`** — which key of the AI response holds the config, and which preview renderer draws the confirm card. Only meaningful for a `ConfigAction`.
-- **`ui_hints.execution_mode`** — a plain string, not an enum: one of `command`, `flows_create`, `flows_delete`, `tunnels_create`, `tunnels_delete`. It names the endpoint the action is expected to end up calling, but nothing reads it today — neither the server nor the browser UI dispatches on it.
+- **`name`** — the device command the example sends: a bare name from the driver's `supported_commands()` (`set_ip_input`), not driver-prefixed. It is wizard ids, not command names, that carry a `<driver>.` prefix (`edge.srt-pipeline`).
+- **`category`** — `ConfigAction` (the command carries a config payload) or `SimpleAction` (a few parameters). Descriptive metadata only.
+- **`ai_prompt_description`** — the instruction that tells the AI assistant when and how to use this command. Be specific about what it does and what its preconditions are.
+- **`ai_prompt_example`** — the params of the assistant's device-command step, as JSON: `{"command": "set_ip_input", "args": {"slot": 1, "inputs": [...]}}`, where `args` is exactly what `validate_command()` receives beside `type`. Give examples only for commands the assistant may propose — a read (`get_*`, `list_*`), or a command one of its own actions owns (`create_flow`, `start_flow`, …), is left out of what the model sees, and so is an example that is not JSON.
+- **`ui_hints`** — display hints from an earlier assistant design that drew a button per action. Nothing reads them any more; they stay in the struct so the discovery API keeps its shape.
 
 RBAC is not part of the action descriptor. The minimum role lives on the driver's `supported_commands()` catalogue (`CommandDescriptor.requires_role`), and the manager core resolves it per request before sending anything.
 
@@ -144,7 +143,7 @@ To make this concrete, here's how `AppearXDriver` (in `crates/device-appear-x/sr
 | `device_type()` | Returns `"appear_x"` |
 | `validate_command(action)` | Validates Appear X-specific payloads (IP input/output addressing, slot/board IDs in hex). The manager core then sends the validated command to the connected sidecar over the existing WebSocket; the sidecar handles JSON-RPC translation |
 | `supported_commands()` | The command catalogue, each entry carrying the role needed to issue it |
-| `ai_actions()` | Returns the Appear X action descriptors (`set_ip_input`, `set_ip_output`, `get_inputs`, `get_outputs`, `get_services`, `get_alarms`, `get_chassis`, and many more) |
+| `ai_actions()` | Returns worked examples of the Appear X write commands the assistant may propose: `set_ip_input`, `set_ip_output`, `clear_all_counters`, `set_audio_profiles`, `set_xger_ip_interfaces`, `set_coder_services` |
 | `extract_metrics(stats)` | Rolls the latest stats up into the dashboard summary — alarm counts by severity, input/output counts, aggregate bitrates and RTP / CC error totals |
 | `extract_health_status(health)` | Maps alarm severity to `ok` / `degraded` / `critical` / `unknown`, as tabulated above |
 | `ui_capabilities()` | Declares the topology / dashboard participation flags, the `"amber"` accent colour, and that this device type is fronted by a gateway sidecar polling an external target |

@@ -253,9 +253,9 @@ Edge and relay nodes can accept self-signed TLS certificates by setting `accept_
 
 ## AI Assistant
 
-AI provider API keys — personal and organisation — are encrypted at rest with authenticated envelope encryption, never returned by the API, and decrypted only when needed to call the provider. Conversations and proposals are encrypted at rest; personal API tokens for AI agents are stored only as hashes.
+AI provider API keys — personal and organisation — are encrypted at rest with authenticated envelope encryption, never returned by the API, and decrypted only when needed to call the provider. Conversations and the body of each proposal are encrypted at rest — a proposal's title, which the model writes, is stored in plain text and is not redacted — and personal API tokens for AI agents are stored only as hashes.
 
-The assistant sends the operator's messages and the results of the tools it runs to the model provider the organisation allows, with every secret value redacted first; it can change nothing until a person applies one of its proposals, and an apply runs through the same routes, permissions and audit trail as the UI. The full data-flow and credential model is on the [AI Assistant](/manager/ai-assistant/) page.
+The assistant sends the operator's messages and the results of the tools it runs to the model provider the organisation allows, with every secret value redacted first; it can change nothing until one of its proposals is applied — by a person, or by an external agent its owner has given an **apply**-scoped token — and an apply runs through the same routes, permissions and audit trail as the UI. The full data-flow and credential model is on the [AI Assistant](/manager/ai-assistant/) page.
 
 ---
 

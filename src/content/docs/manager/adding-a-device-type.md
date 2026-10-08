@@ -81,11 +81,11 @@ All default-implemented. The right-hand column is what the manager does with you
 
 | Method | Default | Where it is actually read |
 |---|---|---|
-| `ai_actions` | `vec![]` | Serialized onto `GET /api/v1/device-types` and `/{type}` — and nowhere else. No UI module fetches them, and the AI request path never touches the driver registry |
+| `ai_actions` | `vec![]` | Serialized onto `GET /api/v1/device-types` and `/{type}`, and shown to the AI assistant as worked examples when it looks up the generic device-command action. No UI module renders them |
 | `wizards` | `vec![]` | The Services wizard catalogue |
 | `wizard_field_ui` | `vec![]` | Composed onto the serialized wizard descriptors — form ergonomics only, never validation |
 | `build_wizard_plan` | `Err(WizardError::UnknownWizard)` | Called by the wizard runner after it has validated the operator's submission against your descriptor |
-| `validate_payload` | `Ok(())` | Dispatched for exactly three kinds today: `"channel_map"` and `"flow_group"` (ST 2110 routes) and `"flow_assembly"` (the PID-bus route). The rustdoc lists more; nothing forwards them yet |
+| `validate_payload` | `Ok(())` | Dispatched by three routes — `"channel_map"` and `"flow_group"` (ST 2110) and `"flow_assembly"` (the PID-bus route) — and by the AI assistant's proposal preview, for every `"input"`, `"output"` and `"flow"` a proposal creates or updates on a node of your type |
 | `managed_entity_kinds` | `&[]` | The registry's consistency check (below), and the device-type metadata |
 | `reconnect_behavior` | `ReconnectBehavior::None` | The hub, on every reconnect |
 | `tunnel_legs` | `&[]` | Tunnel push-status updates, via `TunnelLeg::as_push_status_key()` |

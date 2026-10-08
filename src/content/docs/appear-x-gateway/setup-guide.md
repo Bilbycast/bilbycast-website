@@ -259,7 +259,7 @@ You should see `manager: connected` within a few seconds, then the polling tasks
 
 1. The node should appear as **online** on the manager dashboard.
 2. Stats (inputs, outputs, alarms, chassis) populate within the configured polling intervals (10–30s).
-3. The **AI Assistant** can target the Appear X node — pick it from the dropdown.
+3. The **AI Assistant** can answer questions about the Appear X node and propose its commands — use **Ask AI** on the node's page, or name the node in the assistant.
 4. The node detail page's **Gateway Module** header shows the sidecar version, gateway host, polled chassis address, and a **reachable** / **target down** badge driven by the alarm-poll heartbeat.
 
 Two `[appear_x]` keys tune that badge. `reachability_failure_threshold` (default `2`) is how many consecutive failed alarm polls flip it to **target down** — roughly 20 s at the default 10 s alarms cadence; lower it for an inline broadcast path, raise it for a flaky remote uplink. `reachability_event_dwell_secs` (default `60`) is how long the badge must stay down before a `target_unreachable` event fires, which damps slow flap. Recovery is not dwell-gated — `target_recovered` fires on the first successful poll after the streak.

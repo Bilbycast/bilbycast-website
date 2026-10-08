@@ -39,7 +39,7 @@ The bilbycast-appear-x-api-gateway acts as a protocol bridge between two systems
 
 ### Write Path (Manager → Appear X)
 
-1. User clicks an action button in the AI assistant (or sends a command via API)
+1. A command is sent from the manager — by an operator through the API, or by applying an AI assistant proposal, which goes through the same command route
 2. Manager sends a `command` message via WebSocket to the gateway
 3. The SDK read loop invokes `CommandHandler::handle_command` directly on the received command (no local mpsc + oneshot hop, no separate handler task)
 4. The handler translates the action type to an Appear X JSON-RPC method

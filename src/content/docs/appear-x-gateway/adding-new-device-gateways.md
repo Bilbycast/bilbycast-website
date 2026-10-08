@@ -176,7 +176,7 @@ impl DeviceDriver for MyDeviceDriver {
 
 ### AI actions
 
-When defining `ai_actions()`, use `execution_mode: "command"` for all actions. This routes through the generic `POST /api/v1/nodes/{id}/command` endpoint, which the manager forwards via WebSocket to your gateway.
+The manager's AI assistant can propose the commands in your `supported_commands()` table (reads excepted — it has read tools for those) through its generic device-command action, which goes through `POST /api/v1/nodes/{id}/command` — validated by your `validate_command()`, role-checked from your command catalogue — and is applied only when an operator applies the proposal. The descriptors you return from `ai_actions()` are shown to the model as worked examples of those commands, and your `ai_context()` text is the topic it reads to learn your device. When defining `ai_actions()`, use `execution_mode: "command"` for all actions.
 
 For **`ConfigAction`** category (complex payloads):
 
@@ -208,7 +208,7 @@ And add `pub mod <device>;` to `manager-core/src/drivers/mod.rs`.
    - The node appears online on the dashboard.
    - Stats populate from polling.
    - Health status reflects device state.
-   - The AI assistant offers device-specific actions.
+   - The AI assistant can describe the node, and propose its commands for an operator to apply.
    - Commands execute through the full chain: UI → manager → WebSocket → gateway → device → ack → UI.
 
 ## Reference: what the Appear X gateway does

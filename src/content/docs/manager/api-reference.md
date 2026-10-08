@@ -512,18 +512,31 @@ Backups are sealed with a user-supplied passphrase using authenticated encryptio
 
 | Method | Path                           | Description                          |
 |--------|--------------------------------|--------------------------------------|
-| GET / POST / DELETE | `/api/v1/ai/keys`  | List the stored provider keys (masked), store one, or delete one |
+| GET / PUT | `/api/v1/ai/policy`         | The AI policy as it applies to the caller; a Super Admin changes it |
+| GET    | `/api/v1/ai/org-keys`          | Organisation provider keys, configured or not (Super Admin; never the key) |
+| PUT / DELETE | `/api/v1/ai/org-keys/{provider}` | Set, replace or remove an organisation key and its default model (Super Admin) |
+| GET / POST / DELETE | `/api/v1/ai/keys`  | List the caller's personal provider keys (never the key), store one (checked with the provider first), or delete one |
+| PATCH  | `/api/v1/ai/keys/{provider}`   | Change the preferred model without re-entering the key |
 | GET    | `/api/v1/ai/providers/{provider}/models` | The models the named provider exposes |
-| GET / POST | `/api/v1/ai/threads`       | List conversation threads, or start one |
-| GET    | `/api/v1/ai/threads/running`   | Threads with an agent run in progress |
-| GET / PATCH / DELETE | `/api/v1/ai/threads/{id}` | Read, rename or delete one thread   |
-| GET    | `/api/v1/ai/threads/{id}/messages` | The messages in a thread         |
-| GET    | `/api/v1/ai/threads/{id}/live` | Server-Sent Events stream of an in-progress run on the thread |
-| POST   | `/api/v1/ai/chat`              | Run the agent once, returning the full response |
-| POST   | `/api/v1/ai/chat/stream`       | Run the agent with a streamed (SSE) response |
-| POST   | `/api/v1/ai/apply`             | Apply an AI-proposed configuration change |
+| GET / POST | `/api/v1/ai/threads`       | List conversations, or start one |
+| GET / PATCH / DELETE | `/api/v1/ai/threads/{id}` | Read, rename, pin, archive or delete one conversation |
+| GET    | `/api/v1/ai/threads/{id}/messages` | The stored messages of a conversation |
+| POST   | `/api/v1/ai/chat/stream`       | Start a run and stream its progress (SSE): status, text, tool steps, proposals, then the result |
+| POST   | `/api/v1/ai/chat`              | The same, answered once the run ends |
+| GET    | `/api/v1/ai/threads/{id}/live` | Follow a conversation's run from any manager instance (SSE) |
+| GET    | `/api/v1/ai/threads/running`   | The caller's runs, cluster-wide |
+| POST   | `/api/v1/ai/threads/{id}/cancel` | Stop a conversation's run, wherever it runs |
+| GET    | `/api/v1/ai/threads/{id}/proposals` | The proposals in a conversation |
+| GET    | `/api/v1/ai/proposals/{id}`    | One proposal: steps, preview, result |
+| POST   | `/api/v1/ai/proposals/{id}/preview` | Re-run the preview against the current configuration |
+| POST   | `/api/v1/ai/proposals/{id}/apply` | Apply it as the caller, through the ordinary API routes, after acknowledgement and (for on-air or riskier plans) a typed confirmation |
+| POST   | `/api/v1/ai/proposals/{id}/undo` | Store the proposal that reverses an applied one |
+| POST   | `/api/v1/ai/proposals/{id}/dismiss` | Decline a pending proposal |
+| GET / POST | `/api/v1/account/api-tokens` | The caller's personal API tokens for AI agents, or create one (shown once) |
+| DELETE | `/api/v1/account/api-tokens/{id}` | Revoke a token |
+| POST   | `/api/v1/mcp`                  | Model Context Protocol endpoint for external AI agents, authenticated by a personal API token |
 
-The AI assistant calls back to the manager using the same driver action system exposed through the UI. Prompt construction, per-driver action schemas, and credential-stripping behaviour are documented in the commercial integration reference.
+The assistant changes nothing itself: it stores proposals, and an apply runs each step through the same routes, permission checks and audit trail as the UI. See [AI Assistant](/manager/ai-assistant/).
 
 ---
 

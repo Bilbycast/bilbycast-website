@@ -20,10 +20,10 @@ A driver is a Rust implementation of the `DeviceDriver` trait (defined in `bilby
 | Device type identifier | The string used in `node.device_type` (e.g., `"edge"`, `"appear_x"`) |
 | Validation | `validate_command()` checks an incoming `command` payload before the manager core sends it, and returns descriptive errors |
 | Command catalogue | `supported_commands()` — every command the device accepts, each with the minimum role needed to issue it |
-| Action descriptors | Structured definitions of every action the driver exposes to the AI assistant and generic UI |
+| Action descriptors | Structured examples of the driver's operations, published on the driver-discovery API and shown to the AI assistant as worked examples of its device commands |
 | Topology rendering hints | An accent colour and a flag for whether the type is drawn in topology at all; the list of "ports" (inputs / outputs) comes from the driver's browser-side JS plugin, not from Rust |
 | Health derivation | Maps the driver's native event/alarm format into a status string (`ok`, `degraded`, `critical`, `unknown`) |
-| AI context contribution | A short text block describing the driver's protocol semantics, included in AI-assistant prompts |
+| AI context contribution | A short text block describing the driver's protocol semantics, which the AI assistant reads on demand as the `driver:<device_type>` topic |
 
 The trait is designed so that **everything that varies per device type lives in the driver**, and everything that's shared (auth, push status, ghost cleanup, audit, RBAC) lives in the manager core.
 
@@ -92,14 +92,14 @@ pub struct ActionUiHints {
 - **`ai_prompt_description`** — the instruction that tells the AI assistant when and how to use this action. Be specific about what the action does and what its preconditions are.
 - **`ai_prompt_example`** — the example JSON envelope the assistant should imitate for this action.
 - **`ui_hints.payload_key`** / **`ui_hints.preview_type`** — which key of the AI response holds the config, and which preview renderer draws the confirm card. Only meaningful for a `ConfigAction`.
-- **`ui_hints.execution_mode`** — a plain string, not an enum: one of `command`, `flows_create`, `flows_delete`, `tunnels_create`, `tunnels_delete`. It names the endpoint the action is expected to end up calling, but nothing reads it today — neither the server nor the browser UI dispatches on it. See [AI Assistant](/manager/ai-assistant/#execution-modes).
+- **`ui_hints.execution_mode`** — a plain string, not an enum: one of `command`, `flows_create`, `flows_delete`, `tunnels_create`, `tunnels_delete`. It names the endpoint the action is expected to end up calling, but nothing reads it today — neither the server nor the browser UI dispatches on it.
 
 RBAC is not part of the action descriptor. The minimum role lives on the driver's `supported_commands()` catalogue (`CommandDescriptor.requires_role`), and the manager core resolves it per request before sending anything.
 
 When a new driver is registered, its descriptors are served by the driver-discovery API:
 
 - They appear in `GET /api/v1/device-types` (and `GET /api/v1/device-types/{device_type}`) as the device type's `ai_actions`, alongside `supported_commands` and the driver's UI capabilities.
-- An AI-proposed plan is applied through `POST /api/v1/ai/apply`, which dispatches on the action *name* — not on `execution_mode`.
+- The AI assistant shows them to the model as examples when it looks up the generic device-command action. A command it proposes is one of the driver's `supported_commands()`, and applying it goes through the same command route as below — see [AI Assistant](/manager/ai-assistant/).
 - Everything else lands on `POST /api/v1/nodes/{id}/command`: the manager core resolves the driver, calls `validate_command()`, checks the caller's role against the command catalogue, and only then sends over the node's WebSocket.
 
 ## Health derivation

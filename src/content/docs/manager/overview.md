@@ -28,7 +28,7 @@ bilbycast-manager is the centralized control plane for bilbycast. It provides a 
 - **Events & alarms** — Every event raised by every managed node in one filterable log: severity, category, node, free-text search, date range, and a display timezone.
 - **[Multi-tenant Groups](/manager/multi-tenant-groups/)** — Per-tenant users, nodes, tunnels, switcher pages, routines, audit trail, quotas, and per-tenant logo + brand-colour theming. Access-control boundary only.
 - **[On-edge Media Library](/manager/media-library/)** — Browser upload + delete of slates, loops, and emergency-fallback content for the edge `media_player` input, with quota enforcement.
-- **AI assistant** — AI-assisted flow configuration with support for multiple LLM providers (OpenAI, Anthropic, Gemini).
+- **[AI assistant](/manager/ai-assistant/)** — Answers questions about the fleet, investigates problems and proposes configuration changes that an operator previews and applies; Anthropic, OpenAI, Gemini or a self-hosted OpenAI-compatible model, plus an MCP endpoint for external agents.
 - **Device driver pattern** — Extensible architecture supporting edge nodes, relays, and third-party devices via vendor sidecars.
 - **Hybrid RBAC** — Platform role (`user` / `super_admin`) plus per-group `viewer` / `operator` / `admin` membership, with shared resources via `resource_shares`.
 - **MFA + SSO** — TOTP second factor for local accounts; OIDC Single Sign-On (Authorization Code + PKCE) with optional group-sync — see [Security](/manager/security/).

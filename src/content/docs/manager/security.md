@@ -251,9 +251,11 @@ Edge and relay nodes can accept self-signed TLS certificates by setting `accept_
 
 ---
 
-## AI API Key Storage
+## AI Assistant
 
-AI provider API keys are encrypted at rest with authenticated envelope encryption, displayed as masked values in the UI, and decrypted only when needed to call the provider.
+AI provider API keys — personal and organisation — are encrypted at rest with authenticated envelope encryption, never returned by the API, and decrypted only when needed to call the provider. Conversations and proposals are encrypted at rest; personal API tokens for AI agents are stored only as hashes.
+
+The assistant sends the operator's messages and the results of the tools it runs to the model provider the organisation allows, with every secret value redacted first; it can change nothing until a person applies one of its proposals, and an apply runs through the same routes, permissions and audit trail as the UI. The full data-flow and credential model is on the [AI Assistant](/manager/ai-assistant/) page.
 
 ---
 
@@ -269,7 +271,7 @@ Coverage:
 - **Node CRUD** — node create, edit, delete, secret rotation, registration token regeneration.
 - **Flows / inputs / outputs** — create, update, delete, hot input add/remove, recording arm/disarm.
 - **Routines** — fire (manual + scheduled), partial / failed / missed transitions.
-- **AI-driven actions** — every confirmed AI proposal is tagged with the provider + model that generated it.
+- **AI-driven changes** — every step of an applied AI proposal writes its route's own audit row, plus one `ai.proposal.apply` row naming the proposal, the conversation, the steps and the outcome; provider keys, the AI policy and personal API tokens are audited as they change.
 - **Auth events** — login success / failure, MFA enrollment, OIDC binding, password change, lockouts.
 
 The log is append-only at the data layer — no API path deletes rows. Retention is configurable per deployment.

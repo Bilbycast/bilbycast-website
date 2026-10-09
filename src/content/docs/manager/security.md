@@ -14,6 +14,7 @@ bilbycast-manager handles several categories of sensitive data:
 - **Node secrets** — encrypted at rest with authenticated envelope encryption
 - **AI API keys** — encrypted at rest with authenticated envelope encryption
 - **Tunnel keys** — encrypted at rest, never exposed to the relay
+- **Service secrets** — the passphrases, keys and stream-id credentials a wizard-built service provisions: encrypted at rest, and `[REDACTED]` in every read of the service
 - **Configuration** — non-secret settings stored in plaintext TOML
 
 All cryptographic secrets are loaded from environment variables at startup. The server refuses to start if secrets are missing, empty, too short (under 64 hex characters / 32 bytes), or contain known weak/default values.

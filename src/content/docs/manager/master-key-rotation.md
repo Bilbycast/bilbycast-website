@@ -37,27 +37,34 @@ Because every KEK is derived from the master key, the whole encrypted surface is
 | Tunnel | `kek:tunnel` | Tunnel encryption keys, bind secrets, PSKs |
 | Registration token HMAC | `hmac:registration-token` | Not encryption — the HMAC-SHA256 key that hashes node registration tokens |
 | User MFA | `kek:user-mfa` | TOTP shared secrets and recovery-code blobs |
-| Config history | `kek:config-history` | Captured node configs (which carry flow credentials in cleartext inside the blob) and the visual editor's draft / deployment configs |
-| AI thread | `kek:ai-thread` | AI Configurator thread messages |
+| Config history | `kek:config-history` | Captured node configs (which carry flow credentials in cleartext inside the blob), the visual editor's draft / deployment configs, and a wizard-built service's form, plans and pushed steps |
+| AI thread | `kek:ai-thread` | AI assistant thread messages and proposals |
 
 ## What rotation covers
 
-Eleven encrypted columns, all inside one transaction:
+Twenty encrypted columns, all inside one transaction:
 
 | Table | Column(s) | Domain |
 |---|---|---|
 | `nodes` | `auth_client_secret_enc` | Node secret |
 | `ai_keys` | `api_key_enc` | AI key |
+| `ai_org_keys` | `api_key_enc` | AI key |
 | `tunnels` | `tunnel_key_enc`, `tunnel_bind_secret_enc`, `tunnel_psk_enc` | Tunnel |
 | `users` | `totp_secret_enc`, `mfa_recovery_codes_enc` | User MFA |
 | `config_history` | `config_json_enc` | Config history |
 | `visual_graph_drafts` | `base_config_enc` | Config history |
 | `visual_graph_deployments` | `desired_config_enc` | Config history |
+| `services` | `parameters_enc` | Config history |
+| `service_versions` | `parameters_enc`, `plan_enc` | Config history |
+| `service_steps` | `action_enc`, `rollback_enc` | Config history |
 | `ai_messages` | `content_json_enc` | AI thread |
+| `ai_proposals` | `plan_enc`, `preview_enc`, `result_enc` | AI thread |
 
 That census is enforced, not maintained by hand. A unit test named **`every_enc_column_in_the_schema_is_rotated`** scans every `.sql` file under `migrations-pg/` for column names ending in `_enc` and fails the build unless the rotation routine issues an assignment to each one. It exists because two columns — the visual editor's draft base config and its deployment desired config — shipped with no rotation block and nobody noticed: they share the config-history KEK domain, which *looks* like coverage. A rotation would have left them permanently undecryptable, and neither failure was loud at runtime.
 
-Three of the eight — `visual_graph_drafts`, `visual_graph_deployments`, `ai_messages` — rotate without a counter on screen: `RotationSummary` carries eight counts and the CLI prints five. They are rewritten in the same transaction all the same. Their `SELECT`s are also the only three written to be skipped rather than propagated if the table were missing, but that branch is unreachable here — `rotate-master-key` migrates the schema to head before the rotation starts, and all three tables are created by migrations (`ai_messages` as far back as `0001_initial_schema.sql`).
+`RotationSummary` carries eleven rotation counts and the CLI prints six: node secrets, AI keys, tunnel secrets, MFA secrets, config history, and service rows (each service, version and step whose sealed columns it re-encrypted). The other five — `visual_graph_drafts`, `visual_graph_deployments`, `ai_messages`, `ai_proposals`, `ai_org_keys` — are rewritten in the same transaction without a line on screen. The first three are also the only reads written to be skipped rather than propagated if the table were missing, but that branch is unreachable here — `rotate-master-key` migrates the schema to head before the rotation starts, and all three tables are created by migrations (`ai_messages` as far back as `0001_initial_schema.sql`).
+
+A service row written before migration `0079` has nothing to rotate until the first `serve` start of a release carrying it seals the row, under the master key that start runs with.
 
 ## What rotation invalidates
 
@@ -131,6 +138,7 @@ Rotation complete:
   Tunnel secrets rotated: 9
   User MFA secrets rotated: 3
   Config history rotated: 412
+  Service rows rotated:   57
 
   WARNING: 2 pending registration token(s) invalidated.
   Regenerate tokens for pending nodes after updating the master key.

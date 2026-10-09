@@ -92,7 +92,7 @@ Everything below that is optional: AES key length (128 / 192 / 256, only read wh
 2. truck-1   create_output  Create SRT-caller output 'srt-out-4f2c91ab' on source edge
 ```
 
-The preview is the built plan verbatim — including a passphrase you typed, which appears in the step's `create_input` / `create_output` payload. It goes only to the browser that asked for it, over the manager's own TLS session.
+Secrets are never shown back: the preview — and later a saved service's parameters, steps and versions — reads `[REDACTED]` where an SRT passphrase, a bond's encryption key or the user and password in a stream id would be. The manager stores them encrypted under its master key and sends them whole only to the nodes.
 
 The ids are generated with an eight-hex-character suffix shared by both ends, so the input and its matching output are recognisably one pair. Switch *Path routing* to **Via relay** and a third step appears on the manager itself, creating the native-UDP tunnel that carries the SRT — the source then dials a loopback port the tunnel bridges, and the relay only ever forwards ciphertext.
 
@@ -121,7 +121,7 @@ A service holds at `degraded` rather than flipping green whenever a step acknowl
 
 Opening a service gives four tabs and a header row of actions.
 
-**Overview** leads with a [signal-flow diagram](#the-signal-flow-diagram), then the facts: description, wizard, lifecycle, health and health message, carrier tunnels (or *Direct — no relay carrier tunnels*), owning group, when it was last applied, and the stored parameters verbatim.
+**Overview** leads with a [signal-flow diagram](#the-signal-flow-diagram), then the facts: description, wizard, lifecycle, health and health message, carrier tunnels (or *Direct — no relay carrier tunnels*), owning group, when it was last applied, and the stored parameters, secrets redacted.
 
 **Steps** lists the current version's plan — the step number, its description, its target node, the action type, the entity it created, and its push status (`pending`, `pushed`, `failed` or `drifted`).
 
@@ -131,7 +131,7 @@ Opening a service gives four tabs and a header row of actions.
 
 | Action | What it does |
 |---|---|
-| **Edit configuration** | Re-opens the wizard form pre-filled from the stored parameters. Apply always writes a **new version**, and the manager hands the driver the previous version's plan so it *can* re-provision in place. Only `edge.bonded-link` reads it today: that wizard emits `update_*` steps against the same entity ids. Every other wizard ignores the prior plan and mints fresh `create_*` steps with new ids, so the originals sit on the device until the service is released (Release walks every version, so they do get torn down then). |
+| **Edit configuration** | Re-opens the wizard form pre-filled from the stored parameters. A secret you leave as it is is kept, and one you type over is replaced; a value that still shows `[REDACTED]` but has been edited around it is refused (`400 redacted_value`), so retype the whole value. Apply always writes a **new version**, and the manager hands the driver the previous version's plan so it *can* re-provision in place. Only `edge.bonded-link` reads it today: that wizard emits `update_*` steps against the same entity ids. Every other wizard ignores the prior plan and mints fresh `create_*` steps with new ids, so the originals sit on the device until the service is released (Release walks every version, so they do get torn down then). |
 | **Re-apply** | Re-runs the *current* version's plan unchanged, with no version bump. This is the button for drift — a node that was rebuilt, or somebody who deleted an input underneath the service. |
 | **Save as template** | Turns the service's settings into a reusable catalogue entry. |
 | **Release** | Rolls back everything the service ever provisioned and marks it `released`. It asks first. |
@@ -191,9 +191,16 @@ A share lets another group see the template in their catalogue and instantiate i
 Permission on a service is per **node**, not per service, and it is checked against the plan rather than the form.
 
 - **Applying** a wizard or a service — preview included — requires **Operate** on every node the built plan touches. A wizard whose descriptor is visible to you may still be refused at this point.
-- **Releasing** a service, or **binding an automation** to it, requires **Operate** on every node it has *ever* provisioned onto, across all versions. Being able to *see* a service only takes membership in its owning group at any role, including Viewer, which is not enough to tear one down or to mint a routine that will fire commands at its nodes.
+- **Releasing** a service, **editing its configuration**, or **binding an automation** to it, requires **Operate** on every node it has *ever* provisioned onto, across all versions. An edit keeps the secrets a read hid and sends them wherever its new plan goes, and those nodes are the editor's choice. Being able to *see* a service only takes membership in its owning group at any role, including Viewer, which is not enough to tear one down or to mint a routine that will fire commands at its nodes.
 - **Creating, editing, deleting or importing** a template requires **Operator** in the owning group. **Sharing** one requires **Admin** there.
 - Services and templates are tenant-scoped through [Multi-tenant Groups](/manager/multi-tenant-groups/); a service must be given an owning group when it is saved, and a SuperAdmin browsing *All groups* must pick one explicitly.
+
+## Upgrading
+
+The release that seals a service's secrets at rest carries migration `0079`. The first start of an upgraded manager seals every stored service's form, plans and pushed steps, once per installation, and leaves only a redacted copy in the columns the older binary reads. An older binary therefore re-applies or edits a sealed service with `[REDACTED]` — ten characters, a valid SRT passphrase — in place of its passphrase or key, so:
+
+- **Do not roll this release through an HA cluster one instance at a time.** Stop the manager on every other instance, upgrade one and let it start, then upgrade and start the rest. If an older instance did run alongside, a service it created stays unsealed until `DELETE FROM settings WHERE key = 'service_plans_sealed';` and a restart of an upgraded instance seal it, and an edit it made to an existing service's configuration must be made again.
+- **Rolling back means restoring the pre-upgrade database snapshot** the upgrade script takes. An older binary must not run against a sealed database even with `0079` deleted from `_sqlx_migrations`, so there is no in-place reverse for this release. That snapshot, like any dump taken before the upgraded manager first started, still holds the secrets in clear: guard it as you would them, and replace it once you no longer need it to roll back.
 
 ## Audit trail
 

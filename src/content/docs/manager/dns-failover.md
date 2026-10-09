@@ -156,6 +156,8 @@ sudo bilbycast-manager upgrade --drain-secs 90
 
 That writes `<data_dir>/upgrade.drain` carrying the requested window, and flips this instance's row to `standby`. The running `serve` polls for the sentinel every 5 s; on seeing it, it raises a Warning `upgrade_drain` event, waits out the window, deregisters its row, removes the sentinel and exits 0 for systemd. The window is a **timed wait, not a gate** — nothing refuses new connections while it runs — so size it for how long your clients need to rotate, and shift DNS away first if you want the wait to be quiet.
 
+An upgrade across migration `0074` or `0079` cannot roll this way: stop the manager on every other instance before the first upgraded one starts (see [Rolling deploys](/manager/active-active-ha/#why-it-matters)).
+
 An instance stopped any other way (`systemctl stop`, a crash, a partition) leaves its row behind until the 15 s reaper removes it. That is normal; no operator action is needed.
 
 Bringing a host back:

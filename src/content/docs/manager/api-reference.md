@@ -86,7 +86,7 @@ SSO is a commercially licensed feature. See the [SSO setup guide](/manager/secur
 
 The set of valid commands and their payload schemas is specific to each device driver. The list of supported commands per driver is returned by `/api/v1/device-types` and documented in full in the commercial integration reference.
 
-`/api/v1/nodes/{id}/command` requires **Operate** on the node as a baseline, and then enforces the driver's own declared minimum role for the named command on top of it — so a command a driver marks admin-only is refused with HTTP 403 and `error_code: "insufficient_role"` even for a caller who can start and stop flows. The declared minimum rides on `/api/v1/device-types` as `supported_commands[].requires_role`; see [Per-command roles](/manager/security/#role-based-access-control-rbac).
+`/api/v1/nodes/{id}/command` requires **Operate** on the node as a baseline, and then enforces the driver's own declared minimum role for the named command on top of it — so a command a driver marks admin-only is refused with HTTP 403 and `error_code: "insufficient_role"` even for a caller who can start and stop flows. The declared minimum rides on `/api/v1/device-types` as `supported_commands[].requires_role`; see [Per-command roles](/manager/security/#role-based-access-control-rbac). One command is refused here on every node type: `upgrade_binary` answers `400` with `error_code: "use_upgrade_route"` before anything is sent — an upgrade goes through `POST /api/v1/nodes/{id}/upgrade` or the group rollout, which check the release it names, mark the node as upgrading and audit `node.upgrade.request` ([Remote upgrade](/manager/remote-upgrade/)).
 
 ### Node Bus
 

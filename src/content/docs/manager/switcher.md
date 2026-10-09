@@ -75,11 +75,12 @@ Every meaningful action is audited:
 
 | Action | Audit row |
 |---|---|
-| Activate preset directly | `switcher.preset.activate` |
-| Promote PVW → PGM | `switcher.take` |
+| Activate preset directly | `switcher.preset.activate`, with `all_succeeded` in its details |
+| Promote PVW → PGM | `switcher.take`, with `all_succeeded` in its details |
+| Set / clear PVW | `switcher.pvw.set` (naming the preset) / `switcher.pvw.clear` — only when the bus actually changed |
 | Create / update / delete preset or page | `switcher.preset.{create,update,delete}` / `switcher.page.{create,update,delete}` |
 
-Setting or clearing PVW writes no audit row, by design — Activate and Take cover every audit-worthy edge-side command.
+Every row carries the group that owns the page or preset — for a Take or a PVW change, the group whose bus moved — so that group's Admins see it on their audit log and no other tenant does. Until 2026-10 the update, delete, activate and Take rows carried no group, so only a SuperAdmin saw them, activate and Take stored their details where the client address belongs, and PVW changes were not audited at all. Rows written before the fix stay as they were.
 
 PVW is **not** a browser-local marker, though. Like PGM it is server-side state owned by the tenant: setting it requires the **Operator** role in the preset's owner group, and the new bus state is pushed to every connected client in that group, so every director on the show sees the same preview armed. Clearing PVW without naming a preset acts on the group you are currently pinned to — if you are in more than one and have not chosen, the manager refuses rather than clear another tenant's stage. The schema enforces at most one PGM and one PVW marker per tenant.
 

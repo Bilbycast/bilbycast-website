@@ -268,7 +268,7 @@ Every state-changing operator action is recorded in a group-scoped audit table �
 
 Coverage:
 
-- **Switcher** — `switcher.preset.activate`, `switcher.take`, `switcher.preset.{create,update,delete}`, `switcher.page.{create,update,delete}`.
+- **Switcher** — `switcher.preset.activate`, `switcher.take`, `switcher.pvw.{set,clear}`, `switcher.preset.{create,update,delete}`, `switcher.page.{create,update,delete}`.
 - **Node CRUD** — node create, edit, delete, secret rotation, registration token regeneration.
 - **Flows / inputs / outputs** — create, update, delete, hot input add/remove, recording arm/disarm.
 - **Routines** — fire (manual + scheduled), partial / failed / missed transitions.

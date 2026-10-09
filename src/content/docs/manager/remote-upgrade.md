@@ -54,10 +54,10 @@ POST /api/v1/groups/{id}/upgrade
 
 - **Permission** — **Group Admin** on that group, or SuperAdmin. Operator is not enough.
 - **`strategy`** — `"staged"` (the default if you omit it) or `"immediate"`:
-  - **Staged** — the manager fans out the upgrade in three waves: 10% canary → 50% wave → 100% wave, with a 5-minute settle window between waves. If any node in a wave fails to ack, the orchestrator **pauses** and the remaining waves do not run. You retry after fixing the underlying issue.
+  - **Staged** — the manager fans out the upgrade in three waves: 10% canary → 50% wave → 100% wave, with a 5-minute settle window between waves. The orchestrator **pauses**, and the remaining waves do not run, when a node refuses the command or cannot be reached, or when, at the end of a settle window, a node reports the upgrade failed or rolled back or is not back online on the new version. A node that simply does not answer within the manager's 10-second acknowledgement budget is **not** a failure: the edge acknowledges only once it has downloaded and staged the release, which takes longer than that on most links, so it counts as in flight and the settle-window check judges it. You retry after fixing the underlying issue.
   - **Immediate** — every node in parallel. Use this for small clusters or test environments.
   - A group of two or fewer upgrade-capable nodes collapses to a single wave whichever strategy you pick.
-- **`channel`** defaults to `stable`. The optional `target_arch` and `variant` override the release asset the nodes resolve.
+- **`channel`** defaults to `stable`. The optional `target_arch` and `variant` override the release asset the nodes resolve; each must be lowercase letters, digits, `_` and `-` (`target_arch` up to 64 characters, `variant` up to 32), and anything else is refused `400 upgrade_arch_invalid` / `upgrade_variant_invalid` before any node is touched. The per-node route checks them the same way.
 - Nodes that didn't advertise the `"upgrade"` capability on their last health beat are **silently skipped**. If none of them did, the call still returns `200` with `"scheduled": 0` and a `note` saying so.
 
 The call returns immediately with `scheduled` and the `waves` plan; the rollout itself proceeds in the background. Watch the **Events** page (filter category: `upgrade`) or the per-node version badges for live progress.

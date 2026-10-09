@@ -320,7 +320,7 @@ pub const PROFILE: UpgradeProfile = UpgradeProfile {
 | `repo` | `Bilbycast/<repo>`. The release base URL is derived as `https://github.com/<repo>/releases/download/v<version>`; the host is separately checked against a whitelist of `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com`, https only. |
 | `binary_name` | Filename of the binary inside the release tarball. |
 | `device_type` | Must equal the `device_type` inside `manifest.json`, which the release workflow injects. A mismatch is rejected as `upgrade_manifest_invalid`. |
-| `allowed_signers` | Identity allowlist, OR-ed: the Fulcio cert must satisfy all four claims of at least one entry. `issuer` and `repo` are exact string equality; `ref_pattern` is a `*`-suffix glob (`refs/tags/v*`); `workflow` is a **prefix** match, because the cert's SAN carries `<workflow>@<ref>`. No entry matches, and staging fails with `upgrade_identity_not_allowed`. An empty allowlist refuses every signature. |
+| `allowed_signers` | Identity allowlist, OR-ed: the Fulcio cert must satisfy all four claims of at least one entry. `issuer` and `repo` are exact string equality — `repo` in URL form (`https://github.com/<owner>/<repo>`), read from Fulcio's `.1.12` extension, falling back to the deprecated `.1.5` with `https://github.com/` put in front; `ref_pattern` is a `*`-suffix glob (`refs/tags/v*`); `workflow` must be followed directly by `@` in the cert's SAN, which carries `<workflow>@<ref>`. No entry matches, and staging fails with `upgrade_identity_not_allowed`. An empty allowlist refuses every signature. |
 
 The operator-facing policy is an `[upgrade]` section deserialised into `UpgradeConfig`:
 
@@ -364,7 +364,7 @@ Wiring it up, in order:
 | `upgrade_network_error` / `upgrade_extract_failed` | Transport failure fetching the manifest, bundle or tarball; or a failure unpacking and staging the tarball — a full disk lands on `upgrade_extract_failed` too, since `upgrade_disk_full` is likewise defined but never emitted. |
 | `upgrade_staged_manual` | `manual_only = true` — returned as a *failed* ack even though the download verified. |
 
-Release-side, the shared `scripts/build-manifest.sh` in the SDK produces the canonical `manifest.json` from your per-arch tarballs; sign it with `cosign sign-blob --bundle` (workflow `permissions:` needs `id-token: write`), then self-verify with `cosign verify-blob` against your own allowlist *before* publishing — that catches an allowlist/workflow-path mismatch in CI instead of in production. See [Remote Upgrade](/manager/remote-upgrade/) for the manager-side controls.
+Release-side, the shared `scripts/build-manifest.sh` in the SDK produces the canonical `manifest.json` from your per-arch tarballs; sign it with `cosign sign-blob --bundle` (workflow `permissions:` needs `id-token: write`), then self-verify with `cosign verify-blob` and an identity regexp for your workflow *before* publishing. That is cosign's matcher, not the SDK's verifier, so it cannot tell you whether your compiled-in allowlist accepts the release — SDK 0.10.0 to 0.10.4 refused every genuine release while it passed. Pin that with a unit test that feeds a real release certificate through the verifier. See [Remote Upgrade](/manager/remote-upgrade/) for the manager-side controls.
 
 ## Testing against a mock manager
 

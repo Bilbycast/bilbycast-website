@@ -5,6 +5,10 @@ description: How an edge node verifies, stages and rolls back a manager-schedule
 
 An edge node can be upgraded from the manager over the WebSocket link it already holds: no SSH, no per-box shell script. The node fetches a Sigstore-signed release manifest, verifies it against an identity allowlist compiled into its own binary, downloads the tarball named by that manifest, atomically swaps a symlink, and exits for systemd to respawn. If the new binary crash-loops, a boot watchdog inside it counts the restarts and puts the symlink back.
 
+:::caution[Edges up to and including v0.114.0 cannot be upgraded from the manager]
+v0.105.0 to v0.114.0 compared the deprecated `.1.5` extension (`Bilbycast/bilbycast-edge`) with the allowlist's `https://github.com/Bilbycast/bilbycast-edge`, so every genuine release was refused with `upgrade_identity_not_allowed`; older edges failed earlier, with `upgrade_signature_invalid`. Both failed closed — nothing unverified was installed — but the fix is in the new binary, so move each such edge to the first release after v0.114.0 **once** with the [manual upgrade](/edge/getting-started/#manual-upgrade) (`install-edge.sh --upgrade-installer`, then restart the service). Manager-driven upgrades work from then on.
+:::
+
 This page is the **node** side — what it verifies, what it writes to disk, what you configure, and how rollback behaves. For the operator runbook (the Upgrade button, group rollouts, badge states) see [Remote Upgrade](/manager/remote-upgrade/) on the manager. For the wider supply-chain picture see [Security architecture](/security/).
 
 ## The shape of it
@@ -126,7 +130,7 @@ AllowedSigner {
 }
 ```
 
-`issuer` and `repo` are exact string equality against the certificate's Fulcio extensions (OIDs `1.3.6.1.4.1.57264.1.1` and `.1.5`); `ref_pattern` is a `*`-suffix glob against `.1.6`; `workflow` is a prefix match against the certificate's SAN URI. A release built from `main` rather than a `v*` tag produces a `refs/heads/main` certificate and fails — which is why the release workflow is driven by a tag push, not a schedule.
+`issuer` and `repo` are exact string equality against the certificate's Fulcio extensions — `1.3.6.1.4.1.57264.1.8` (issuer) and `.1.12` (source repository URI, `https://github.com/<owner>/<repo>`), falling back to the deprecated `.1.1` and `.1.5` (bare `<owner>/<repo>`, read with `https://github.com/` in front) on a certificate without them; `ref_pattern` is a `*`-suffix glob against `.1.14`, falling back to `.1.6`; `workflow` is a prefix of the certificate's SAN URI that must be followed directly by `@`. A release built from `main` rather than a `v*` tag produces a `refs/heads/main` certificate and fails — which is why the release workflow is driven by a tag push, not a schedule.
 
 Verification runs these steps and every one must pass:
 

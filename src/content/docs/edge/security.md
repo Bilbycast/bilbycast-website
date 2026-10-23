@@ -40,7 +40,7 @@ Two files, and the split is a deliberate policy decision rather than a filing co
 | File | Holds | Visible to the manager |
 |------|-------|------------------------|
 | `config.json` | Operational config, plus **flow-level user parameters** — SRT passphrases, RTSP credentials, RTMP stream keys, WHIP/WHEP bearer tokens, HLS auth tokens | Yes, in full — that is the point |
-| `secrets.json` | **Infrastructure secrets** — `manager_node_secret`, `manager_registration_token`, `server_tls`, `server_auth` (JWT secret + client credentials), `setup_token`, `nmos_registration_bearer_token`, per-tunnel keys under `tunnels`, cellular-router passwords under `cellular_uplinks` | No — stripped from every `GetConfig` response |
+| `secrets.json` | **Infrastructure secrets** — `manager_node_secret` (with `manager_node_id`, the node ID it was issued for, so a restart authenticates from this file alone), `manager_registration_token`, `server_tls`, `server_auth` (JWT secret + client credentials), `setup_token`, `nmos_registration_bearer_token`, per-tunnel keys under `tunnels`, cellular-router passwords under `cellular_uplinks` | No — stripped from every `GetConfig` response |
 
 Flow credentials live in `config.json` **on purpose**: an operator editing an SRT passphrase in the manager UI has to be able to see and change it, and round-tripping the config must not silently blank it. Treat `config.json` as credential-bearing.
 
@@ -69,7 +69,9 @@ stat -c '%a %U:%G %n' /opt/bilbycast/edge/config.json /opt/bilbycast/edge/secret
 The guard is deliberately narrow. `tunnel_encryption_key`, `tunnel_bind_secret` and cellular-uplink passwords **are** accepted from a push, because the manager is genuinely where those originate.
 
 :::caution[A local `PUT /api/v1/config` is a different matter]
-An admin-authenticated `PUT /api/v1/config` **does** write the `server.auth` block it is given into `secrets.json`. Two things follow. The router resolves auth once, when it is built at process start, so the change takes effect at the **next restart**, not immediately. And omitting the block does not reliably delete it: `secrets.json` is rewritten only when the extracted secret set is non-empty, so a push that empties every secret leaves the previous file — and therefore the previous auth config — in place.
+An admin-authenticated `PUT /api/v1/config` **keeps** every infrastructure secret its body leaves out, **removes** one it names `null`, and **sets** one it names — `server.auth` and `server.tls` included, which a manager push may not set: they are this node's own API access, and the admin authenticated to that API owns them. `GET /api/v1/config` leaves every secret out, so the body a client reads, edits and puts back keeps the node secret, `server.auth`, `server.tls` and the tunnel keys.
+
+A secret is kept only within a block the body keeps — `server`, the `manager` block, `nmos_registration`, a tunnel by its `id`, a cellular uplink by its `interface` — so a body that leaves the block out, or names it `null`, removes the block and its secrets. Omitting `server.auth` keeps the current auth; switching it off takes `"auth": null` or `"auth": { "enabled": false, "jwt_secret": "", "clients": [] }`, and `"tls": null` turns the API's TLS off. The router resolves both once, when it is built at process start, so a change takes effect at the **next restart**, not immediately. A body that names `setup_token`, a value or `null`, is refused with 400: the node mints that token itself, and re-opening the wizard is `setup_enabled: true`. How to remove each secret: [API reference → PUT /api/v1/config](/edge/api-reference/#put-apiv1config).
 :::
 
 ## The manager link
@@ -198,8 +200,8 @@ NMOS endpoints inherit auth automatically: with `auth.enabled: true` and `nmos_r
 
 | Control | Behaviour |
 |---------|-----------|
-| `setup_enabled` | Default `true`. Flipped to `false` and persisted on the **first successful manager registration**, after which `GET /setup` renders a "Setup Disabled" page and `POST /setup` returns 403. |
-| `setup_token` | 256-bit hex token auto-generated on first boot when the wizard is open and no token exists. Persisted in `secrets.json`, printed to stdout once, cleared on successful registration. |
+| `setup_enabled` | Default `true`. Flipped to `false` and persisted on the **first successful manager registration**, after which `GET /setup` renders a "Setup Disabled" page and `POST /setup` returns 403. It stays closed after a restart even when the registration could not rewrite `config.json` (a full disk): a `config.json` that does not hold the node ID `secrets.json` names beside the secret predates the registration, so its `setup_enabled: true` is not read. |
+| `setup_token` | 256-bit hex token auto-generated on first boot when the wizard is open and no token exists. Persisted in `secrets.json`, printed to stdout once, cleared on successful registration. A token that cannot be saved (a full disk) is logged and the node starts anyway: the printed token gates the wizard until the process exits, `--print-setup-token` cannot show it, and the next start mints another. |
 | Loopback bypass | A caller from `127.0.0.0/8` or `::1` skips the token check — being on the box is already an authentication. |
 | Non-loopback callers | Must send `Authorization: Bearer <setup_token>`, compared in constant time. Missing, empty or wrong is **401**. |
 

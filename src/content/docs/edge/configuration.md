@@ -363,7 +363,7 @@ Optional connection to a bilbycast-manager instance for centralized monitoring a
 | `accept_self_signed_cert` | boolean | No | `false` | Accept self-signed TLS certificates from the manager. **Dev/testing only** — disables all TLS validation. Requires `BILBYCAST_ALLOW_INSECURE=1` environment variable as a safety guard. |
 | `cert_fingerprint` | string | No | `null` | SHA-256 fingerprint of the manager's TLS certificate for certificate pinning. Format: hex with colons, e.g. `"ab:cd:ef:01:23:..."`. When set, connections to servers presenting a different certificate are rejected, even if the certificate is CA-signed. Protects against compromised CAs. The server's fingerprint is logged on first connection. |
 | `registration_token` | string | No | `null` | One-time registration token from the manager. Used on first connection only. After successful registration, the token is cleared and replaced by `node_id` + `node_secret`. **Stored in `secrets.json`.** |
-| `node_id` | string | No | `null` | Persistent node ID assigned by the manager during registration. Saved automatically. |
+| `node_id` | string | No | `null` | Persistent node ID assigned by the manager during registration. Saved automatically, to `config.json` and beside `node_secret` in `secrets.json`. |
 | `node_secret` | string | No | `null` | Persistent node secret assigned by the manager during registration. **Stored in `secrets.json`** (encrypted at rest). |
 
 ### Registration Flow
@@ -371,7 +371,7 @@ Optional connection to a bilbycast-manager instance for centralized monitoring a
 1. Create a node in the manager UI — you receive a one-time registration token.
 2. Provide the token via the setup wizard (`http://<edge-ip>:8080/setup`) or in `secrets.json`.
 3. Start the edge. It connects to the manager, sends the token, and receives `node_id` + `node_secret`.
-4. Credentials are saved automatically: `node_id` to `config.json`, `node_secret` to `secrets.json`.
+4. Credentials are saved automatically: `secrets.json` first and on its own, holding `node_secret` and the `node_id` it was issued for, then `config.json`, holding `node_id`. A restart reads the pair from `secrets.json`, so a `config.json` that could not be rewritten (a full disk fails the bigger file alone) does not lock the node out, and the setup wizard the registration closed stays closed: a `config.json` that does not hold the node ID `secrets.json` names predates the registration, so its `setup_enabled: true` is not read. One registration cannot be told apart this way — one the manager answers with the node ID `config.json` already holds, a token regenerated for the same node — and after it the wizard reopens until `setup_enabled` is set back to `false`. A `secrets.json` that cannot be written raises a Warning `manager_credentials_not_saved` (`during: registration`): the node stays connected on the issued credentials and the next config save that succeeds writes them, but a restart before then presents the spent token.
 5. The registration token is cleared. Future connections use `node_id` + `node_secret`.
 6. If the connection drops, the edge auto-reconnects with exponential backoff (1s to 60s).
 
@@ -2100,12 +2100,12 @@ bilbycast-edge automatically persists configuration changes to disk when flows a
 - **Delete flow** (`DELETE /api/v1/flows/{id}`) -- Removes the flow and saves.
 - **Add output** (`POST /api/v1/flows/{id}/outputs`) -- Appends the output and saves.
 - **Remove output** (`DELETE /api/v1/flows/{id}/outputs/{oid}`) -- Removes the output and saves.
-- **Replace config** (`PUT /api/v1/config`) -- Replaces the entire config and saves.
+- **Replace config** (`PUT /api/v1/config`) -- Replaces the entire config and saves. An infrastructure secret the body leaves out — as `GET /api/v1/config` returns it — keeps the node's own value, within a block the body keeps (leaving out the `manager` block, a tunnel or an uplink removes its secrets with it); one the body names `null` is removed. See [API reference → PUT /api/v1/config](/edge/api-reference/#put-apiv1config).
 - **Get config** (`GET /api/v1/config`) -- Returns the config with infrastructure secrets stripped. Flow parameters (passphrases, credentials, keys) are included in the response.
 
 ### Atomic writes
 
-All config saves use an atomic write strategy: both `config.json` and `secrets.json` are written to temporary files (`.json.tmp`), then atomically renamed to the target paths. This prevents corruption if the process is interrupted during a write. `secrets.json` is written with `0600` permissions (owner-only) on Unix.
+All config saves use an atomic write strategy: both `config.json` and `secrets.json` are written to temporary files (`.json.tmp`), then atomically renamed to the target paths. This prevents corruption if the process is interrupted during a write. A save that fails — a full disk part way through the write, or a rename that is refused — removes its temporary file rather than leaving it beside the file it never replaced. `secrets.json` is written with `0600` permissions (owner-only) on Unix.
 
 ### Default config
 

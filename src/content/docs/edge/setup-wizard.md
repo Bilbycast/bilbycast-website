@@ -62,7 +62,7 @@ On submit, the wizard:
 
 ## Disabling after provisioning
 
-On the normal path this happens by itself: the first time the edge registers successfully with a manager it sets `setup_enabled: false` and clears the one-shot `setup_token`, so `/setup` stops accepting reconfiguration with no operator action at all. That holds across a restart even when the registration could not rewrite `config.json` (a full disk): the node ID saved beside the secret in `secrets.json` shows the older `config.json` predates the registration, and its `setup_enabled: true` is not read.
+On the normal path this happens by itself: the first time the edge registers successfully with a manager it sets `setup_enabled: false` and clears the one-shot `setup_token`, so `/setup` stops accepting reconfiguration with no operator action at all. That holds across a restart even when the registration could not rewrite `config.json` (a full disk): the node ID saved beside the secret in `secrets.json` shows the older `config.json` predates the registration, and its `setup_enabled: true` is not read. The exception is a registration the manager answers with the node ID `config.json` already holds (a token regenerated for the same node): that file cannot be told apart from a current one, so if the registration could not rewrite it the wizard reopens at the restart until `setup_enabled` is set back to `false` (see [Registration Flow](/edge/configuration/#registration-flow)).
 
 Set the flag by hand only on a node that was configured but never completed registration:
 

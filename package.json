@@ -1,7 +1,7 @@
 {
   "name": "bilbycast-website",
   "type": "module",
-  "version": "0.0.69",
+  "version": "0.0.70",
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",

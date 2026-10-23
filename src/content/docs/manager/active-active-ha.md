@@ -15,6 +15,8 @@ Broadcast operations expect reliability you'd associate with a hardware control 
 - **Rolling deploys** — drain one instance, swap the binary via systemd, rejoin. The other instance keeps serving the entire time. The exception is an upgrade across a migration that changes the database under the older binary: the first upgraded instance applies it while its peer still serves. Two migrations do, so when an upgrade crosses either, stop the other instances before the first upgraded one starts — and expect no in-place rollback, only a restore of the pre-upgrade snapshot:
   - `0074`, in the AI assistant release, drops `ai_applied_actions`, which the older binary writes on every assistant apply (see [AI Assistant](/manager/ai-assistant/#upgrading)).
   - `0079`, in the release that seals service secrets, leaves only a redacted copy of each service's plan where the older binary reads it, so a re-apply or edit from the older binary pushes `[REDACTED]` to the nodes as the passphrase or key (see [Services](/manager/services/#upgrading)).
+
+  The release that adds `0087`–`0089` (v0.90.0) asks the same while any DVR session is armed or running, for another reason. Its DVR session locks are held in Postgres and shared by every instance, and an older instance takes none of them, so its scheduler can start a session while an upgraded instance edits or stops it.
 - **Geographic redundancy** — instances in two regions, one Postgres cluster reachable from both.
 - **Honest observability** — every Prometheus sample carries `instance_id` and `region` labels so dashboards can split metrics per node.
 

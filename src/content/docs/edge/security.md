@@ -130,11 +130,13 @@ Two roles, both minted by `/oauth/token` from a `client_id` / `client_secret` pa
 | `admin` | Read everything, change everything |
 | `monitor` | Read-only — flows, stats, config, the stats WebSocket |
 
-Every method other than `GET` / `HEAD` / `OPTIONS` on `/api/v1` needs the `admin` role, checked twice: by a router layer keyed on the method, which applies to every route on that surface so a write route cannot miss it, and by the `RequireAdmin` extractor each write handler takes. Both return 403 (`admin role required`) to a `monitor` token. When auth is disabled there is no role to check, so both pass every request, which is why an auth-off node has no role enforcement at all.
+Every method other than `GET` / `HEAD` / `OPTIONS` on `/api/v1`, the WHIP/WHEP routes aside (below), needs the `admin` role, checked twice: by a router layer keyed on the method, which applies to every route on that surface so a write route cannot miss it, and by the `RequireAdmin` extractor each write handler takes. Both return 403 (`admin role required`) to a `monitor` token. When auth is disabled there is no role to check, so both pass every request, which is why an auth-off node has no role enforcement at all.
 
 :::caution[The WHIP/WHEP routes carry no role gate]
 The four WHIP/WHEP signalling routes sit on a router of their own, outside the role layer, and are a deliberate exception: a player is not an operator. Their only check is the optional per-flow `bearer_token` on the two **offer** endpoints, and the two session `DELETE`s check nothing — any authenticated caller can tear down a live WebRTC session.
+:::
 
+:::caution[Nodes on v0.116.0 or earlier]
 Up to and including v0.116.0 the extractor was the only role check, and three write handlers did not take it: `PUT /api/v1/ptp`, `POST /api/v1/tunnels` and `DELETE /api/v1/tunnels/{id}`. On those releases a `monitor` token reaches all three and they execute — changing the node's PTP mode (persisted to `/var/lib/bilbycast/ptp.conf`, the settings file `bilbycast-ptp-helper` polls to drive `ptp4l`) or creating, re-pointing or destroying a tunnel and persisting it to `config.json`. Later releases refuse them to a `monitor` like every other write.
 :::
 

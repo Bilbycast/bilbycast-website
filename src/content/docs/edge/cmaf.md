@@ -38,6 +38,8 @@ Names are fixed. If you need a different layout, rewrite the URLs in a reverse p
 
 The manifests are published only after `init.mp4` exists, because every playlist names it in `#EXT-X-MAP` — a manifest published first is one a player can fetch, parse and then fail on.
 
+On a passthrough video track the init's `avcC` / `hvcC` carries **every** SPS and PPS (and HEVC VPS) the source has sent, one entry per id, since the samples carry none of their own (`avc1` / `hvc1`). A random-access access unit defines each kind of set it carries, any other access unit merges its sets in by id, and an IDR that brings a set the init does not hold — a new id, or an id whose bytes changed — cuts the open segment and publishes a new init. A set that names no valid id, or is over 65 535 bytes (more than a configuration record's 16-bit length can describe), is ignored. Up to and including v0.116.0 the init held one set of each kind, the last one the demuxer had seen, so a source whose random-access points carry more than one PPS — DVB H.264 feeds that send SPS0, PPS0 and PPS1 at every IDR among them — did not decode; on upgrade such a source opens a new init once, with `#EXT-X-DISCONTINUITY` at the join.
+
 ## Whole-segment PUT vs low-latency chunked PUT
 
 `low_latency` picks between two delivery models. It is the single most consequential field on the output.
@@ -299,4 +301,7 @@ Lifecycle and upload failures arrive as `cmaf`-category events; the full catalog
 - **No live-to-VOD archival.** The playlist is a rolling window; nothing is promoted to a static asset.
 - **`EXT-X-PART` rows land after their own segment's `#EXTINF`.** RFC 8216bis §4.4.4.9 places them before it. A strictly conforming player attributes them to the next media sequence number, which breaks `_HLS_msn` / `_HLS_part` blocking-reload addressing.
 - **`EXT-X-PART:DURATION` is the nominal chunk target**, not the chunk's real span — a chunk takes samples spanning *at least* the target, so the advertised figure under-claims and the parts do not sum to the segment's `#EXTINF`.
+- **A parameter set first sent outside a random-access point, or one whose content changes between IDRs, is not followed until the next IDR that carries it.** The init can change only at an IDR, so slices naming an id sent mid-GOP are undecodable meanwhile, and pictures after a PPS re-sent mid-GOP with new content decode against the old content. Following both needs in-band parameter sets (`avc3` / `hev1`), which iOS Safari refuses for HEVC.
+- **A source with several SPS is described by its lowest-id one.** The `avcC` / `hvcC` profile, tier, level and compatibility bytes and the DASH `@codecs` string come from the lowest-id SPS — FFmpeg's choice for `avcC`, but an HEVC source whose SPS differ in level is under-declared in its `hvcC`. Every SPS is still in the record.
+- **A source switch is not a clean cut for parameter sets.** Each stream discontinuity starts the table again, but on a switch that keeps the video PID and codec the old source's last picture can still bring its sets in; a new source that sends its sets only outside a random-access point can then carry an extra PPS of the old one's into its next init.
 - **The CENC clear prefix is conservative.** A fixed 32-byte slice-header allowance is safe but leaves roughly 32 more bytes in the clear than a bit-accurate slice-header parser would.

@@ -282,7 +282,7 @@ getcap ./target/release/bilbycast-edge
 
 ## Verifying the result
 
-The wire emitter records PCR_AC samples on every successful send. Read it via the per-output stats (Prometheus `/metrics`, JSON `/api/v1/stats`, manager UI Output card):
+The wire emitter records PCR_AC samples on every successful send of a PCR on its anchor PCR PID, in every pacing mode — so an MPTS output's figure covers one program. Read it via the per-output stats (Prometheus `/metrics`, JSON `/api/v1/stats`, manager UI Output card):
 
 ```text
 output.pcr_trust:
@@ -293,7 +293,7 @@ output.pcr_trust:
   p95_us: 1                  # so a genuine tier-1 result reads 0
   p99_us: 1
   max_us: 6                  # outliers
-  window_samples: 256        # short recent window (≤ 256 samples)
+  window_samples: 256        # most recent window: the last 256 (~10 s at 25 PCR/s)
   window_p95_us: 1           # vs p95_us — "is this spike current or baseline?"
 output.wire_pacing_tier: "so_txtime"      # or "clock_nanosleep" on the default tier
 output.wire_pacing_late: 0
@@ -302,7 +302,7 @@ output.wire_pacing_pinned_cpu: 3          # absent entirely when unpinned
 output.egress_shed: 0
 ```
 
-Every `pcr_trust` figure is a whole-microsecond integer — there is no sub-µs resolution in the field, so the tier-1 target of ≤ 500 ns simply reads `0`. `window_p95_us` against `p95_us` is the "is this spike current or baseline" comparison.
+Every `pcr_trust` figure is a whole-microsecond integer — there is no sub-µs resolution in the field, so the tier-1 target of ≤ 500 ns simply reads `0`. `window_p95_us` against `p95_us` is the "is this spike current or baseline" comparison. On a `forward`-paced UDP/RTP output that re-encodes video, the edge watches `p99_us` itself and raises Warning `egress_pcr_accuracy_exceeded` above 30 ms — see [Outputs that re-encode video](/edge/configuration/#outputs-that-re-encode-video).
 
 **`wire_pacing_late`** is the kernel's count of packets that missed their TX deadline (drained from the socket error queue). Always 0 on the userspace-sleep tier (no errqueue). On the SO_TXTIME tier this stays at zero on a healthy production setup. Non-zero values mean the kernel had to drop or send late — investigate scheduler contention, IRQ pinning, or kernel preemption configuration.
 
@@ -312,7 +312,9 @@ Every `pcr_trust` figure is a whole-microsecond integer — there is no sub-µs 
 
 **`wire_pacing_pinned_cpu`** is the CPU index the wire-emit thread was pinned to at spawn, from `BILBYCAST_WIRE_EMIT_CPUS`. The field is omitted altogether when the thread is unpinned — the scheduler floats it, which is where contention with Tokio workers shows up under load.
 
-**`egress_shed`** counts datagrams dropped by the egress de-jitter residence cap on compressed outputs — non-zero means the release-rate servo hit its authority ceiling and the buffer was trimmed to stay inside the receiver's T-STD. Always 0 on ST 2110 and on the protocol-paced outputs.
+**`egress_shed`** counts datagrams dropped by the egress de-jitter residence cap on compressed outputs — non-zero means the release-rate servo hit its authority ceiling and the buffer was trimmed to stay inside the receiver's T-STD. On `egress_pacing: "pcr"` outputs a shed can also come from a source clock running fast against the host: `pcr` mode is open-loop, so the queue grows at the source's offset (about 108 ms/h at 30 ppm) until the 1000 ms residence cap sheds it and pacing re-anchors, roughly every 8.8 h at 30 ppm; a transcode stall or encoder open approaching 1 s sheds the same way. Up to and including v0.116.0 the pacer's ordering floor also moved its anchor, so a `pcr` output fell behind its own PCR by its wake slop (about 1 ms/s was reported) and shed on that cap every quarter-hour or so. Always 0 on ST 2110 and on the protocol-paced outputs.
+
+**The 5 s diag log line** (info, `clock_nanosleep` tier, PCR anchor: `wire-emit '<id>' diag: …`) ends `rebase=<n> ceil=<n> floor=<n>`, cumulative for the emitter's life and 0 on `forward` and `servo` outputs. `rebase` counts late-rebases (a PCR target more than 5 ms behind real time snaps the anchor later, for good) and `ceil` the 200 ms lookahead ceiling pulling the anchor in; with discontinuities and `egress_shed` re-anchors, those are the only things that move a `pcr` output off its own PCR timeline, and `rebase` climbing at the GOP rate means a VBR I-frame tail costing over 5 ms on every GOP, which steps latency once per GOP until the cap sheds. `floor` counts ordering-floor engagements, which move nothing and run at about half the PCR rate on a VBR mux. For the latency itself, `OutputStats.latency` (`avg_us` / `max_us`) is the direct signal: flat on a healthy `pcr` output, a steady climb on a fast source.
 
 ### Acceptance targets per tier
 
@@ -323,7 +325,7 @@ Every `pcr_trust` figure is a whole-microsecond integer — there is no sub-µs 
 | Tier 4 (default) | ≤ 3 ms typical, ms-tail under heavy load | Compressed TS through 2 Gbps, transcoded outputs, every cloud/VPS deployment |
 | Tier 5 | Best-effort | Dev / testbed only |
 
-The default tier 4 is comfortably inside the broadcast tier-2 envelope (≤ 30 ms p99). Don't optimise above your actual requirement — the tier-1 stack costs significant operational complexity (PTP grandmaster, HW-PTP NIC, ETF qdisc, env var) and pays off only when the per-packet budget genuinely demands it.
+These figures are the release path's own precision; they do not smooth a source's. A `forward` output (the auto default on any flow without a bonded input) leaves at its input's cadence, so it carries that input's arrival jitter — a few ms on a paced feed, and tens to hundreds of ms on an output that re-encodes video, which leaves as its encoder delivers (the edge warns `egress_pcr_accuracy_exceeded` when it measures the latter). The default tier 4 is comfortably inside the broadcast tier-2 envelope (≤ 30 ms p99). Don't optimise above your actual requirement — the tier-1 stack costs significant operational complexity (PTP grandmaster, HW-PTP NIC, ETF qdisc, env var) and pays off only when the per-packet budget genuinely demands it.
 
 ## Tuning Linux for low p99
 

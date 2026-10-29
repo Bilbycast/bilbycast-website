@@ -119,23 +119,22 @@ clock identity, and the current offset in nanoseconds.
 For automation / Ansible / Terraform integration:
 
 ```bash
-# Read current settings
+# Read current settings (any role)
 curl https://edge:8443/api/v1/ptp \
      -H "Authorization: Bearer $TOKEN"
 
-# Switch to slave-only on eno4 with SMPTE domain 127
+# Switch to slave-only on eno4 with SMPTE domain 127 (admin role)
 curl -X PUT https://edge:8443/api/v1/ptp \
-     -H "Authorization: Bearer $TOKEN" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"mode":"slave-only","iface":"eno4","domain":127}'
 ```
 
-Both endpoints require a valid Bearer JWT, but neither checks the
-role. Unlike the inputs / outputs / flows / config write handlers,
-`get_ptp` and `put_ptp` don't ask for the `RequireAdmin` extractor — and
-the auth middleware only validates the token, it never branches on role
-— so any valid token, monitor included, can read *and change* the
-node's PTP settings. The PUT side validates the
+With `server.auth` enabled, the `GET` accepts a token of either role,
+while the `PUT` needs one from an `admin`-role client — a `monitor`
+token is refused 403 (`admin role required`), like every other write.
+Up to and including v0.116.0 the `PUT` accepted any valid token,
+monitor included. The PUT side validates the
 payload before persisting — `iface` must be 1..=15 ASCII bytes
 matching `[A-Za-z0-9._-]+`, `domain` must be in 0..=127, `scan_timeout`
 must be in 1..=60.

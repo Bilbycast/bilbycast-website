@@ -277,7 +277,7 @@ Create a new input. The definition is validated and persisted.
   "name": "Main RTP Input",
   "bind_addr": "239.1.1.1:5000",
   "interface_addr": "192.168.1.100",
-  "fec_decode": { "columns": 10, "rows": 10 }
+  "fec_decode": { "columns": 8, "rows": 8 }
 }
 ```
 
@@ -882,7 +882,7 @@ Retrieve the current PTP configuration and status.
 
 Update the PTP configuration (e.g. clock domain, interface). The settings are persisted to the file `bilbycast-ptp-helper` polls at 1 Hz, so a new mode is picked up within about a second.
 
-**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can write PTP settings.
+**Auth:** Requires `admin` role. A `monitor` token is refused 403 (`admin role required`) before the body is read. Up to and including v0.116.0 this route accepted any valid JWT.
 
 **Request body:**
 
@@ -1078,7 +1078,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `bitrate_bps` | integer | Current bitrate in bits/sec |
 | `packets_lost` | integer | Packets lost (sequence gaps) |
 | `packets_filtered` | integer | Packets dropped by ingress filters |
-| `packets_recovered_fec` | integer | Packets recovered via FEC |
+| `packets_recovered_fec` | integer | Packets rebuilt by SMPTE 2022-1 FEC. On a single-leg RTP input, only those published: a rebuilt packet ahead of every packet already published (a late repair is withheld and not counted). On a 2022-7 RTP input, every packet an FEC datagram on either leg rebuilds, whether or not the other leg delivered it, and not those rebuilt as a media packet arrives |
 | `srt_stats` | object/null | SRT leg 1 stats (if SRT input) |
 | `srt_leg2_stats` | object/null | SRT leg 2 stats (if redundancy enabled) |
 | `redundancy_switches` | integer | SMPTE 2022-7 leg switch count |
@@ -1091,15 +1091,15 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `output_name` | string | Display name |
 | `output_type` | string | Output variant — a free-form string such as `udp`, `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `webrtc`, `hls`, `cmaf`, `bonded`, `display`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features). A WHIP push reports as `webrtc`; there is no `rtsp` or `whip` output |
 | `state` | string | Connection state |
-| `packets_sent` | integer | Total packets sent |
-| `bytes_sent` | integer | Total bytes sent |
+| `packets_sent` | integer | Total packets sent. On a SMPTE 2022-7 SRT output, which sends every packet on both legs, each is counted once: by leg 1, or by leg 2 once leg 1 has been lost, so a pair carried by leg 2 alone still counts |
+| `bytes_sent` | integer | Total bytes sent, counted as `packets_sent` is |
 | `bitrate_bps` | integer | Current bitrate in bits/sec |
 | `packets_dropped` | integer | Packets dropped (channel full) |
-| `fec_packets_sent` | integer | FEC packets sent |
+| `fec_packets_sent` | integer | FEC packets generated: one per column and per row of the matrix (columns and rows 0-7 only, no row FEC when `columns` is 1, and none for a column or row holding a sequence number never sent or datagrams of mixed sizes) |
 | `wire_pacing_tier` | string | Active wire-pacing release tier — `"so_txtime"`, `"clock_nanosleep_fifo"`, or `"clock_nanosleep"`. Set once at output startup. Default is `"clock_nanosleep_fifo"`; the SO_TXTIME tier activates only when `BILBYCAST_ENABLE_TXTIME=1` is set on the edge process AND the kernel accepts the setsockopt (requires `CAP_NET_ADMIN`). See [Wire-Time Precision](/edge/wire-pacing/). Absent on outputs that don't own a UDP socket directly (SRT, RIST, RTMP, HLS, CMAF, WebRTC). |
 | `wire_pacing_late` | integer | Datagrams the kernel rejected as late on the SO_TXTIME path (target tx time landed in the past — `EOVERFLOW`). Always 0 on userspace-sleep release paths (no errqueue). |
-| `srt_stats` | object/null | SRT leg 1 stats (if SRT output) |
-| `srt_leg2_stats` | object/null | SRT leg 2 stats (if redundancy) |
+| `srt_stats` | object/null | SRT stats of a single-socket SRT output, or of leg 1 of a SMPTE 2022-7 one. Present while the socket is connected; absent while it reconnects, and on a 2022-7 output from the moment leg 1 is lost until the pair reconnects |
+| `srt_leg2_stats` | object/null | Leg 2's (the `redundancy` leg's) SRT stats on a SMPTE 2022-7 SRT output. Present while leg 2 is connected; absent before it connects, and from the moment it is lost until the pair reconnects |
 
 **SRT leg stats fields:**
 
@@ -1294,7 +1294,7 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 | `bilbycast_edge_flow_input_bytes_total` | counter | Bytes received |
 | `bilbycast_edge_flow_input_bitrate_bps` | gauge | Input bitrate (bits/sec) |
 | `bilbycast_edge_flow_input_packets_lost` | counter | Packets lost |
-| `bilbycast_edge_flow_input_fec_recovered_total` | counter | Packets recovered via FEC |
+| `bilbycast_edge_flow_input_fec_recovered_total` | counter | Packets rebuilt by SMPTE 2022-1 FEC, counted as `packets_recovered_fec` is (a single-leg RTP input counts only the repairs it publishes) |
 | `bilbycast_edge_flow_input_redundancy_switches_total` | counter | SMPTE 2022-7 leg switches |
 | `bilbycast_edge_flow_input_packets_filtered` | counter | Packets dropped by ingress filters |
 | `bilbycast_edge_flow_pdv_jitter_us` | gauge | PDV jitter in microseconds |
@@ -1491,7 +1491,7 @@ Get status of a specific tunnel.
 
 Create a new IP tunnel. The tunnel configuration is validated before creation.
 
-**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can create a tunnel. The result is persisted to `config.json` (secrets to `secrets.json`), so it survives a restart.
+**Auth:** Requires `admin` role; a `monitor` token is refused 403. Up to and including v0.116.0 this route accepted any valid JWT. The result is persisted to `config.json` (secrets to `secrets.json`), so it survives a restart.
 
 **Request body:** A `TunnelConfig` JSON object. See [Tunnel Configuration](/edge/configuration/#tunnel-configuration) for all fields.
 
@@ -1536,7 +1536,7 @@ Create a new IP tunnel. The tunnel configuration is validated before creation.
 
 Destroy a tunnel and clean up its connections.
 
-**Auth:** Requires valid JWT (any role) when auth is enabled — the handler carries no role check, so a `monitor` token can tear a live tunnel down. The removal is reconciled out of `config.json`, so it is not resurrected on the next restart.
+**Auth:** Requires `admin` role; a `monitor` token is refused 403. Up to and including v0.116.0 this route accepted any valid JWT. The removal is reconciled out of `config.json`, so it is not resurrected on the next restart.
 
 **Response (200 OK):**
 
@@ -1698,15 +1698,15 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | DELETE | `/api/v1/flows/{flow_id}/whep/{session_id}` | Yes | any | WHEP: Disconnect viewer |
 | GET | `/api/v1/tunnels` | Yes | any | List all tunnels |
 | GET | `/api/v1/tunnels/{id}` | Yes | any | Get tunnel status |
-| POST | `/api/v1/tunnels` | Yes | any | Create tunnel |
-| DELETE | `/api/v1/tunnels/{id}` | Yes | any | Delete tunnel |
+| POST | `/api/v1/tunnels` | Yes | admin | Create tunnel |
+| DELETE | `/api/v1/tunnels/{id}` | Yes | admin | Delete tunnel |
 | GET | `/api/v1/stats` | Yes | any | All statistics |
 | GET | `/api/v1/stats/{flow_id}` | Yes | any | Single flow stats |
 | GET | `/api/v1/config` | Yes | any | Get running config |
 | PUT | `/api/v1/config` | Yes | admin | Replace entire config |
 | POST | `/api/v1/config/reload` | Yes | admin | Reload config from disk |
 | GET | `/api/v1/ptp` | Yes | any | Get PTP configuration + status |
-| PUT | `/api/v1/ptp` | Yes | any | Update PTP configuration |
+| PUT | `/api/v1/ptp` | Yes | admin | Update PTP configuration |
 | GET | `/api/v1/ws/stats` | Yes | any | WebSocket stats stream |
 | GET | `/x-nmos/node/v1.3/` | No | - | NMOS IS-04: Node API root |
 | GET | `/x-nmos/node/v1.3/self` | No | - | NMOS IS-04: Node resource |
@@ -1738,6 +1738,8 @@ All API errors return a JSON body with `"success": false` and an `"error"` messa
 | GET | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Staged channel map (in-memory) |
 | POST | `/x-nmos/channelmapping/v1.0/map/staged` | No | - | NMOS IS-08: Stage a new channel map (1024 outputs × 64 ch limit) |
 | POST | `/x-nmos/channelmapping/v1.0/map/activate` | No | - | NMOS IS-08: Activate the staged map and persist |
+
+The `admin` role is enforced twice on `/api/v1`: by a router layer that refuses every method other than `GET` / `HEAD` / `OPTIONS` to any other role, whichever route it reaches, and by the `RequireAdmin` extractor each write handler takes. NMOS and the WHIP/WHEP routes sit on routers of their own, outside that layer. A `monitor` token sending a method a path does not route gets 403 rather than 405. With auth off neither check applies, so the role distinction exists only on auth-enabled nodes. Up to and including v0.116.0 the extractor was the only check, and `POST /api/v1/tunnels`, `DELETE /api/v1/tunnels/{id}` and `PUT /api/v1/ptp` did not take it.
 
 The four WHIP/WHEP rows exist only on a binary built with the default-on `webrtc` Cargo feature; on a `--no-default-features` build the routes are not registered at all. They sit behind the same JWT middleware as every other protected route but enforce no role of their own. The only per-endpoint gate is the optional per-flow `bearer_token` on the WHIP input / WHEP output config, and it covers the two **POST** signalling routes alone: when it is set, the offer handler compares it against the request's `Authorization: Bearer` value and returns 401 on a mismatch; when it is unset there is no per-flow gate, so any valid node JWT — or any caller at all on an auth-disabled node — can open a session. The two `DELETE` teardown routes check no bearer token in any configuration.
 

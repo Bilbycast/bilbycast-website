@@ -126,8 +126,8 @@ If neither file exists at startup, an empty default configuration is used. Both 
       "bind_addr": "239.1.1.1:5000",
       "interface_addr": "192.168.1.100",
       "fec_decode": {
-        "columns": 10,
-        "rows": 10
+        "columns": 8,
+        "rows": 8
       },
       "allowed_sources": ["10.0.0.1", "10.0.0.2"],
       "allowed_payload_types": [33],
@@ -143,8 +143,8 @@ If neither file exists at startup, an empty default configuration is used. Both 
       "dest_addr": "192.168.1.50:5004",
       "interface_addr": "192.168.1.100",
       "fec_encode": {
-        "columns": 10,
-        "rows": 10
+        "columns": 8,
+        "rows": 8
       },
       "dscp": 46
     },
@@ -573,7 +573,7 @@ The transport types are documented below. The five ST 2110 types and `rtp_audio`
 | `ingress_dejitter_ms` | integer | `null` | RTP, UDP | De-jitter buffer depth, 20–2000 ms. Recovers the source rate from inter-PCR observations and releases packets paced at that rate, so analysers, the PCR PLL, the PID bus and every output see a smooth cadence regardless of network jitter. Cooperates with SMPTE 2022-7 — it runs after the merge. Unset falls back to the node-wide [`tuning.ingress_dejitter_ms`](#node-tuning); with that unset too, this input runs ingress passthrough. |
 | `ingress_residence_ms` | integer | `max(4 × setpoint, 250)` | RTP, UDP | Hard-shed residence cap for this input's de-jitter buffer, `ingress_dejitter_ms + 40` – 5000 ms. A packet older than the cap is shed rather than released late, which is what bounds ingress latency when a burst or a source-rate offset outruns the servo's ±5 % authority. Unset falls back to the node-wide [`tuning.ingress_residence_ms`](#node-tuning). **Rejected at config load without `ingress_dejitter_ms` on the same input** — there is no buffer to cap, so accepting it would be a silent no-op. |
 | `ingress_delay_ms` | integer | `null` | RTP, UDP, SRT, RTMP, RTSP | Fixed delay line ahead of the flow, 0–1000 ms. Unlike the `ingress_dejitter_ms` servo it **preserves** jitter — it shifts every packet by the same amount rather than re-pacing. Setting both on one input logs a warning and de-jitter wins. On an SRT input it stacks on top of `latency_ms` (libsrt's own jitter buffer), which is usually redundant and raises a Warning `srt` event. |
-| `interface_binding` | object | `null` | Most inputs and outputs | Pin this endpoint to a specific NIC by name. Also honoured per-leg inside 2022-7 redundancy. A per-endpoint copy is accepted inside [native SRT bonding](#native-libsrt-srt-bonding-socket-groups) but is not applied there — see the caution in that section. |
+| `interface_binding` | object | `null` | Most inputs and outputs | Pin this endpoint to a specific NIC by name. Also honoured per-leg inside 2022-7 redundancy. A per-endpoint copy inside [native SRT bonding](#native-libsrt-srt-bonding-socket-groups) binds that member's source when its `local_addr` is unset, resolved again on every connect. |
 
 :::note[Transcoding is available on the input side too]
 `audio_encode`, its companion `transcode`, and `video_encode` are accepted on **eleven** input types — `rtp`, `udp`, `srt`, `rist`, `rtmp`, `rtsp`, `webrtc`, `whep`, `media_player`, `replay` and `test_pattern` — not only on outputs.
@@ -597,8 +597,8 @@ Receives RTP-wrapped MPEG-TS packets (SMPTE ST 2022-2). Requires valid RTP v2 he
   "bind_addr": "239.1.1.1:5000",
   "interface_addr": "192.168.1.100",
   "fec_decode": {
-    "columns": 10,
-    "rows": 10
+    "columns": 8,
+    "rows": 8
   },
   "allowed_sources": ["10.0.0.1"],
   "allowed_payload_types": [33],
@@ -1066,8 +1066,8 @@ Sends RTP-wrapped MPEG-TS packets to a unicast or multicast destination. Support
   "bind_addr": "192.168.1.100:0",
   "interface_addr": "192.168.1.100",
   "fec_encode": {
-    "columns": 10,
-    "rows": 10
+    "columns": 8,
+    "rows": 8
   },
   "dscp": 46
 }
@@ -1164,6 +1164,23 @@ An existing bonded flow whose UDP/RTP outputs never set `egress_pacing` changes 
 
 Because resolution happens when the output starts, adding or removing a bonded input on a **running** flow does not re-pace outputs already running. The edge raises `egress_pacing_auto_stale` naming them; restart those outputs (or the flow) to re-resolve.
 :::
+
+#### Outputs that re-encode video
+
+Auto does **not** pick `"pcr"` because an output re-encodes video: on a flow without a bonded input such an output stays `"forward"`, the lowest latency, and its packets leave as the transcode chain emits them. An encoder delivers in bursts and stalls, so the output's PCR send jitter (`OutputStats.pcr_trust`) follows them. On the test rig its p99 ranged from about 11 ms to over 400 ms depending on source and encoder, where audio-only transcodes and passthrough outputs of the same feeds measured a few ms; gate 4's operational tier 2 is 30 ms. (A forward output also carries whatever burstiness its input brings — passthrough outputs of an RTMP publish measured near 200 ms on the same rig. The warning below watches an output's own video re-encode only.)
+
+The edge says when such an output needs more: a forward-paced UDP or RTP output that re-encodes video raises Warning `egress_pcr_accuracy_exceeded` once its p99 has been above 30 ms for two consecutive 5 s polls, and clears it with `egress_pcr_accuracy_recovered` under 20 ms or when the output restarts on another pacing. It judges only once the reservoir has rotated the output's first 1024 samples out, a few minutes after start, so an encoder's open does not raise it. An explicit `"forward"` warns too; acknowledge it if the latency matters more. The edge changes no pacing itself.
+
+The fix the warning names is `egress_pacing: "pcr"`, which releases each packet at its PCR-implied instant. What it costs and assumes:
+
+- **Latency.** About 50 ms (the pacer's preroll) to begin with. A transcode stall then becomes latency for good: the pacer replays the backlog it left at the PCR rate, so latency grows to the longest stall seen. Only the 1000 ms residence cap bounds it — past it the queue is shed (`egress_shed`) and pacing re-anchors. That includes the **encoder's open** on the restart that switching to `"pcr"` causes: an encoder whose open takes most of a second (some hardware encoders) can leave the output close to 1 s late. The warning's `estimated_added_latency_ms` is the larger of 50 ms and the measured worst sample — a floor, which leaves that open out.
+- **Long stalls cost latency, not jitter.** After the longest stall the pacer holds that latency and smooths every shorter one, so stalls up to the residence cap (x265 at a slow preset, a whole-MPTS transcode on a loaded host) are expected to reach the limit on `"pcr"` at that latency; a lighter encode keeps the latency down. Measure the output on `"pcr"` before relying on it. An MPTS output's sampler covers one program's PCR only.
+- **It is open-loop.** `"pcr"` follows the source's clock, so a live source fast against the host grows the egress queue at its offset (about 108 ms/h at 30 ppm) until the residence cap sheds it, and a large VBR I-frame tail costing more than 5 ms on every GOP steps the latency once per GOP until the same cap sheds. Watch `OutputStats.latency` (flat on a healthy `pcr` output) and `egress_shed`, not only the p99 — see [Wire pacing](/edge/wire-pacing/).
+- **It holds I-frame bursts to their PCR instant.** A receiver with a shallow buffer has underrun on that before, so verify the receiver after switching.
+- **RTP timestamps** are stamped before the pacer, so a receiver that de-jitters on them sees the re-paced spread.
+- **The advice assumes the `clock_nanosleep_fifo` tier** (`OutputStats.wire_pacing_tier`, also in the warning's details); a wire thread without SCHED_FIFO can add its own late re-anchors on a busy transcoding host.
+
+`pcr_trust` measures at the edge's own socket, so network PDV only adds to it: the warning's absence is not proof of tier 2 at the receiver. The sampler also discards any pair more than 500 ms apart, so stalls longer than that leave no sample at all and a p99 that looks clean.
 
 ### Epoch lock (cross-node alignment)
 
@@ -1932,8 +1949,8 @@ Forward Error Correction parameters used by `fec_decode` (on RTP inputs) and `fe
 
 ```json
 {
-  "columns": 10,
-  "rows": 10
+  "columns": 8,
+  "rows": 8
 }
 ```
 
@@ -1942,12 +1959,25 @@ Forward Error Correction parameters used by `fec_decode` (on RTP inputs) and `fe
 | `columns` | integer | Yes | 1-20 | L parameter: number of columns in the FEC matrix. |
 | `rows` | integer | Yes | 4-20 | D parameter: number of rows in the FEC matrix. |
 
-The FEC matrix protects `columns x rows` media packets with `columns + rows` parity packets. Larger matrices provide better protection at the cost of higher latency and bandwidth overhead.
+The FEC matrix protects `columns x rows` media packets with up to `columns + rows` parity packets: one per column (the XOR of its D packets) and one per row (the XOR of its L packets). A single lost packet is rebuilt from the parity of its column or its row, and a rebuilt packet can complete another column or row in turn. Larger matrices cost less bandwidth but take longer to repair a loss.
 
 Common configurations:
-- `5 x 5` -- Low overhead, moderate protection
-- `10 x 10` -- Good balance of overhead and protection
-- `20 x 20` -- Maximum protection, higher latency
+- `5 x 5` -- 40 % overhead, short repair delay
+- `8 x 8` -- 25 % overhead; the largest matrix every column and row of which carries FEC
+- `4 x 8` (`columns: 4`, `rows: 8`) -- column FEC repairs a burst of up to 4 consecutive losses on a 2022-7 input with `path_differential_ms` (a single-leg input repairs only last-row losses; see below)
+
+What the encoder protects, and what it does not:
+- **The datagrams as sent.** FEC is computed over each RTP datagram the output puts on the wire — its sequence number and the bytes after its 12-byte RTP header — and a packet sits in the matrix at its sequence number minus the matrix's base, on the encoder exactly as on the decoder. A sequence number that never went out (a 2022-7 output forwarding RTP from an upstream with losses) leaves its column and row without FEC instead of shifting every later packet. One sent a second time with other bytes inside the open matrix (an upstream that restarts, or is switched onto a stream numbered nearby) leaves its column and row without further FEC in that matrix, since a receiver may hold either copy; a step back into a matrix whose every packet has already gone out sends no further FEC at all.
+- **Only the first 8 columns and 8 rows.** The FEC header names its column or row in 3 bits, so with `columns` or `rows` above 8 a packet in column 8 or later is protected only by its row, one in row 8 or later only by its column, and one in both not at all. The output logs a warning at start when it is configured that way, except with `columns: 1`, which sends no row FEC and so loses nothing to the limit. `10 x 10` therefore sends 16 parity packets per 100, not 20.
+- **`columns: 1` sends column FEC only.** A one-packet row's parity is a copy of that packet, which a receiver that has already closed the matrix would publish a second time.
+- **A column or row of mixed packet sizes gets no FEC.** The parity is padded to its longest packet and carries no length recovery, so a shorter packet would be rebuilt with a trailing run of zero bytes. Datagrams the output builds from raw TS are all 1316 bytes; mixed sizes come from RTP forwarded or re-wrapped as it arrived — notably with `program_number`, `pid_map` or `pid_overrides`, which drop TS packets from datagrams.
+- **Bilbycast's own framing.** FEC datagrams travel on the media port behind a `BCFE` magic and a 10-byte header with no length, timestamp or mask recovery. Only a bilbycast RTP input with `fec_decode` reads them; a third-party SMPTE 2022-1 decoder does not.
+
+**Where a repaired packet lands.** Column FEC follows the last row of its column, so a loss outside the last row is rebuilt up to (rows − 1) × columns datagrams after newer ones (about 60 ms at 8 x 8 and 10 Mbit/s). A **2022-7 RTP input with `path_differential_ms`** at least that long releases repairs in sequence order, so every repair reaches its outputs. A **single-leg RTP input** publishes a rebuilt packet only when it is ahead of every packet it has already published: a late one is withheld (it stays in the matrix, where it can still help rebuild others) and is not counted in `packets_recovered_fec`, because a datagram out of order — continuity errors, a PCR that steps back — is worse downstream than the loss it repairs. In practice a single-leg input therefore repairs a single loss in the last row of the matrix, and drops a received datagram FEC has already rebuilt and published (one under that sequence number with other bytes is new content, and is published). An RTP input with `fec_decode` used as a leg of a seq-aware Hitless slot in a [Flow Assembly](/edge/flow-assembly/) is a single-leg input too. A 2022-7 input without `path_differential_ms` publishes repairs as they come, late or not.
+
+:::caution[Upgrade receivers before senders]
+Up to and including v0.116.0 the encoder computed FEC over the flow's broadcast items — the input's sequence numbers and bytes — rather than the datagrams it sent, so `fec_encode` protected nothing except on a 2022-7 output fed RTP, and there only while upstream numbering had no gaps. Now that FEC repairs real losses, upgrade every edge receiving with `fec_decode` **before** the edges sending with `fec_encode`: an older single-leg receiver publishes every repair the moment it is rebuilt, out of order. An older sender feeding a new receiver behaves as before (its FEC rarely lines up and is mostly ignored).
+:::
 
 ---
 
@@ -1958,6 +1988,8 @@ Both SRT input and SRT output support SMPTE 2022-7 hitless redundancy via a seco
 For input: packets from both legs are merged using RTP sequence numbers, providing seamless failover if one path fails.
 
 For output: packets are duplicated and sent on both legs simultaneously.
+
+Each output leg reports its own SRT stats — `srt_stats` is leg 1 and `srt_leg2_stats` leg 2, each present while its leg is connected. Leg 2 is brought up beside leg 1 and given 15 s to connect; it announces itself with an Info `SRT output '{id}' 2022-7 leg 2 connected` event. When one leg's send fails the output raises a Warning `redundancy_output_leg_lost` (with `details.other_leg` saying whether the other leg is `carrying`, still `connecting`, or `down`) and that leg's stats disappear. The other leg carries on alone if it is up, or takes over once it connects. A lost leg is not redialled on its own: it comes back when the pair reconnects, which happens once both legs are gone, so until then the output runs unprotected. A leg 2 that does not connect within its 15 s counts as gone for the rest of that cycle, so leg 1, if still up, carries alone and its loss reconnects the pair, leg 2 getting a fresh 15 s. Up to and including v0.116.0 such a leg 2 still counted as alive, and a leg 1 lost after it left the output down until it was restarted. `packets_sent` and `bytes_sent` count each packet once — by leg 1, and by leg 2 once leg 1 has been lost — so an output carried by leg 2 alone still reads `active`.
 
 ```json
 {
@@ -2012,9 +2044,9 @@ This is unrelated to the [bilbycast bonding stack](/edge/bonding/), which is a p
 | `mode` | string | Yes | `"broadcast"` (all members active, libsrt dedups) or `"backup"` (primary / failover). |
 | `endpoints` | array | Yes | 2–8 member entries; duplicate addresses are rejected. |
 | `endpoints[].addr` | string | Yes | Caller mode: remote peer address. Listener mode: the list is advisory — the parent `local_addr` is the single bind, because the libsrt group handshake is multiplexed on one listener. |
-| `endpoints[].local_addr` | string | No | Caller-only source bind for this member. Rejected in listener mode. **Accepted and resolved but never applied** — see the caution below. |
-| `endpoints[].weight` | integer | No | Backup-mode priority, `0` = equal. Rejected with a non-zero value in broadcast mode. **Accepted but never applied** — see the caution below. |
-| `endpoints[].interface_binding` | object | No | Names a NIC whose primary IP is resolved into this member's `local_addr` when that is unset — and therefore inherits the same gap. |
+| `endpoints[].local_addr` | string | No | Caller-only: the source address this member binds (its IP, and its port when non-zero) — use it to pin each leg to a different NIC. Rejected in listener mode. **Wins over `interface_binding`.** `0.0.0.0:0` / `[::]:0` means unbound. A source of the other address family than `addr` is not applied: the member connects unbound and a one-shot Warning `srt_bond_source_not_applied` says so. Prefer port `0`: two members bound to the same fixed `ip:port` share one libsrt multiplexer. |
+| `endpoints[].weight` | integer | No | Backup-mode priority; **lower is preferred**, and `0` (the default) is the most preferred value. Rejected with a non-zero value in broadcast mode. libsrt's own weight runs the other way (greater is preferred), so the edge hands libsrt each member's **rank**: the lowest configured weight gets the highest libsrt weight, and equal weights stay equal. |
+| `endpoints[].interface_binding` | object | No | Caller mode, loose only: when `local_addr` is unset, the member binds the primary IPv4 address of this NIC as its source. **Resolved again on every connect and member re-add**, so a DHCP or cellular address change is followed. A NIC missing when the input or output starts aborts it (Critical, as on every SRT surface); one that disappears later leaves the member down and retried. Against an IPv6 peer the member connects unbound, with `srt_bond_source_not_applied`. |
 
 **Rules:**
 - `bonding` and `redundancy` are **mutually exclusive** on the same SRT input or output — bonding replaces the app-layer 2022-7 merge with the wire-native group handshake.
@@ -2022,11 +2054,21 @@ This is unrelated to the [bilbycast bonding stack](/edge/bonding/), which is a p
 - Every SRT option on the parent — latency, encryption, `stream_id`, `packet_filter`, MSS, `payload_size`, retransmit algorithm — applies to **all** members uniformly.
 - Bonded outputs compose with every other per-output stage: `program_number`, `audio_encode` (with its companion `transcode`), `video_encode`, output `delay`, and `transport_mode: "audio_302m"`.
 
-:::caution[Per-member `local_addr`, `interface_binding` and `weight` do not reach libsrt]
-Only each endpoint's `addr` is handed to the group builder — it carries a plain list of peer socket addresses and has no per-member source bind or priority slot. A per-endpoint `local_addr` (including one resolved from `interface_binding`, which does raise a Critical `srt_strict_binding_unsupported` event when the NIC cannot be resolved) and a per-endpoint `weight` are validated at config load and then dropped, so every member leaves on the host's default source address and backup-mode ordering is libsrt's own. To pin bonded legs to specific NICs today, use policy routing on the host rather than these fields. The `weight` reported back in `srt_bonding_stats` is libsrt's value for the member, not the one configured here.
+**Member recovery (caller mode).** libsrt removes a member whose link breaks — after the peer idle timeout (`peer_idle_timeout_secs`, 30 s by default), which is therefore how long a dead link takes to be noticed — and never brings it back itself. The edge does: on its 1 s stats poll it re-adds any member that is missing or broken, with the same source and weight, backing off 1 s, 2 s, 4 s … up to 30 s, and back to immediate once the member is live again. A member that could not be reached when the group first connected is retried the same way, and a member whose NIC is missing is left out of a connect attempt rather than failing it (unless no member is left). The re-added member joins the running group in place, so the healthy members — and the media — are never interrupted.
+
+Re-adding happens **only while at least one member is still Idle or Running**. When every member is down, the group is torn down and redialled whole: libsrt counts a member that is still handshaking as healthy, so a member added to a group with no live link would keep the dead group from ever being declared failed.
+
+Redundancy loss is reported: a Warning `srt_bond_member_down` once the group has run below its configured member count for `max(connect timeout + 2 s, 5 s)` while at least one member is live, naming each down member with its source and last error, and an Info `srt_bond_member_restored` once every member is back — one pair per episode, carried across a whole-group reconnect. **Listener mode** cannot re-add a member (only the remote caller can, by re-connecting it into the same group), but raises the same pair when an accepted bonded session runs below the most members it has had. See [Events and Alarms](/edge/events-and-alarms/).
+
+:::caution[Upgrading from v0.116.0 or earlier: member sources and weights are now applied]
+Up to and including v0.116.0, `local_addr`, `interface_binding` and `weight` on bonding endpoints were accepted and silently ignored — every member left by the host's default route, and libsrt chose the backup-mode primary — and a bonded **caller** group was torn down before its first member finished the handshake, so it redialled in a loop without carrying media. Now:
+
+- **Each member really binds its source.** This is loose binding: the kernel still routes by its table, not by the source address. On a multi-homed host **without source-based policy routing**, a member pinned to a NIC that is not the kernel's egress for its peer may never connect (an upstream that filters foreign source addresses drops it), and if **every** member is pinned that way the whole bond can fail to connect. Check each pinned member before upgrading with `ip route get <peer> from <source>`, and add a source rule where the egress is wrong (`ip rule add from <source> table <n>` plus a default route via that NIC's gateway in table `<n>`). Such a member's `last_error` reads *the handshake did not complete from source … (no answer, or the peer rejected it)* — in `srt_bond_member_down` while another member is live, and, when every member is affected (the group connects and then fails whole, again and again), in the `members` list of the whole-group disconnect Warning. A peer refusing the members (a passphrase or stream id it does not accept) reads the same.
+- **An explicit `local_addr` must be an address of this host.** One that is not — a typo, or a static IP the DHCP server or carrier has since changed — leaves that member unable to open its socket. If every member is like that the bond does not connect at all: a bonded input raises `SRT input connection failed` naming the source, while a bonded caller output raises no connect-failure event and only logs it. Check with `ip -br addr | grep <source-ip>`, and prefer `interface_binding` where the address can change.
+- **In backup mode with distinct weights, the configured primary (lowest weight) is enforced**: once it is up libsrt switches to it, and a re-added higher-priority member takes over again when stable.
 :::
 
-Per-leg telemetry is surfaced as `srt_bonding_stats` on the input / output snapshot: an `aggregate` block plus one entry per member carrying `endpoint`, `socket_status`, `member_status` (`running` / `idle` / `pending` / `broken`), `weight` and the member's own SRT stats.
+Per-leg telemetry is surfaced as `srt_bonding_stats` on the input / output snapshot: an `aggregate` block plus one entry per member carrying `endpoint`, `socket_status`, `member_status` (`running` / `idle` / `pending` / `broken`), `weight` and the member's own SRT stats. On a **caller** group `weight` is the configured weight of the member's endpoint (lower is preferred); on a **listener** group it is the weight the remote caller sent in the group handshake, which is libsrt's (greater is preferred) — from a bilbycast caller, the rank described above, not its configured number.
 
 ---
 
@@ -2189,8 +2231,8 @@ Use `POST /api/v1/config/reload` to re-read both `config.json` and `secrets.json
       "bind_addr": "239.1.1.1:5000",
       "interface_addr": "10.0.0.100",
       "fec_decode": {
-        "columns": 10,
-        "rows": 10
+        "columns": 8,
+        "rows": 8
       },
       "allowed_sources": ["10.0.0.1"],
       "allowed_payload_types": [33],
@@ -2206,8 +2248,8 @@ Use `POST /api/v1/config/reload` to re-read both `config.json` and `secrets.json
       "dest_addr": "239.1.2.1:5004",
       "interface_addr": "10.0.0.100",
       "fec_encode": {
-        "columns": 10,
-        "rows": 10
+        "columns": 8,
+        "rows": 8
       },
       "dscp": 46
     }
@@ -2389,8 +2431,8 @@ Use `POST /api/v1/config/reload` to re-read both `config.json` and `secrets.json
       "bind_addr": "239.1.1.1:5000",
       "interface_addr": "10.0.0.100",
       "fec_decode": {
-        "columns": 10,
-        "rows": 10
+        "columns": 8,
+        "rows": 8
       }
     }
   ],

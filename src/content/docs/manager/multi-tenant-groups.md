@@ -56,6 +56,10 @@ Effective permission is taken from the membership's `member_role` if the members
 
 A tunnel whose endpoints belong to different groups is allowed if the caller has `manage` on both edges. The tunnel's owner group is the ingress node's owner; the manager auto-inserts a `view` share into the egress group on success, so the egress tenant sees the tunnel terminating on their edge without getting mutation rights. Deleting the tunnel, rotating its bind secret, or transferring its ownership all remain with the owner group's admins.
 
+A tunnel shared into a group is listed to that group's members on the tunnels page and on a node's tunnel list, with the group selected or not — the egress tenant's automatic share included. Up to and including manager v0.91.0 a member of a single group, who is always pinned to it, never saw a tunnel shared in.
+
+A relay shared into several groups carries all of their paths, and its live rows — on the dashboard and on `GET /api/v1/nodes/{id}/stats` — are scoped to the viewer. A member with `manage` on the relay sees every row. Any other member sees the rows of their own paths: the tunnels on their tunnels list, the relayed legs of a Bonded Link their group owns or that ends on a node their group owns, and any relayed leg a node their group owns names in its live stats; and of the edges connected to the relay, the ones they can see. An edge shared into the group, at any level, shows none of its owner's legs, so on the Flows page such an edge's relayed bonded legs can read "no relay session" even when the relay has that session — the row is withheld, not missing. The relay's totals stay relay-wide, so a relay can show more paths than it lists. The relay's `list_tunnels` and `list_edges` commands, which answer with every row, need `manage`. An edge's own configuration and stats are not scoped this way: sharing an edge shares its tunnel list.
+
 ## Quotas and live usage
 
 Per-group caps on `max_nodes`, `max_tunnels`, `max_users` are preflighted at resource-creation time:

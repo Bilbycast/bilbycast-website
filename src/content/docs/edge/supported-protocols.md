@@ -18,7 +18,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Transport:** UDP unicast or multicast, IPv4 and IPv6
 - **Payload:** MPEG-2 Transport Stream in RTP per SMPTE ST 2022-2
 - **Features:**
-  - SMPTE 2022-1 FEC decode (column + row parity)
+  - SMPTE 2022-1 FEC decode (column + row parity); a single-leg input publishes only the repairs that arrive ahead of what it has already published, a 2022-7 input with `path_differential_ms` releases every repair in order
   - IGMP/MLD multicast group join with interface selection
   - Source IP allow-list filtering (RP 2129 C5)
   - RTP payload type filtering (RP 2129 U4)
@@ -154,7 +154,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
 - **Transport:** UDP unicast or multicast
 - **Payload:** RTP-wrapped MPEG-TS packets with RTP headers
 - **Features:**
-  - SMPTE 2022-1 FEC encode
+  - SMPTE 2022-1 FEC encode (column + row parity over the datagrams as sent; bilbycast `BCFE` framing on the media port, read by a bilbycast `fec_decode` input, not by third-party 2022-1 decoders; columns and rows 0-7 only, so at most `8 x 8` is fully protected — see [FEC configuration](/edge/configuration/#smpte-2022-1-fec-configuration))
   - DSCP/QoS marking (default: 46 Expedited Forwarding)
   - Multicast with interface selection
   - **MPTS passthrough** (default) or optional MPTS→SPTS program filter via `program_number`
@@ -214,6 +214,7 @@ Optional audio and video codec paths ship as Cargo features. The default build e
   - **MPTS-aware:** on an MPTS input, selects program by `program_number` or (default) locks onto the lowest-numbered program in the PAT
   - **Optional `audio_encode` block (Phase B):** re-encodes audio so the operator can normalise bitrate / sample rate / channel count or upgrade to HE-AAC v1/v2 (`aac_lc`, `he_aac_v1`, `he_aac_v2`). With the default `fdk-aac` feature, AAC codecs encode in-process via FDK AAC (no ffmpeg needed). Same-codec passthrough fast path skips both decoder and encoder when the source is already AAC-LC and no overrides are set. Outputs without `audio_encode` keep working without ffmpeg installed. See [Audio Gateway — `audio_encode`](/edge/audio-gateway/#the-audio_encode-block--compressed-audio-egress-rtmp--hls--webrtc).
   - **Optional `video_encode` block:** H.264 targets emit classic FLV; HEVC targets emit Enhanced RTMP v2 extended VideoTagHeader (`hvc1` FourCC, hvcC assembled from the encoder's extradata). RTMP HEVC passthrough (no `video_encode`) also rides the E-RTMP path, with hvcC built from the demuxer's cached VPS/SPS/PPS.
+  - **Decode order on a B-frame source (passthrough):** each FLV tag goes out at its picture's decode time (the PES DTS) with its composition time (PTS − DTS) — in the AVC tag's SI24 field, and for HEVC as an Enhanced-RTMP `CodedFrames` tag (a picture presenting at its decode time goes out as `CodedFramesX`), as OBS / x264 and FFmpeg publish. Up to and including v0.116.0 every picture was tagged at its PTS with composition time 0, so the tags stepped back at each reordered picture. A re-encode (`video_encode`) runs without B-frames and writes composition time 0.
 - **Limitations:**
   - RTMPS (TLS) uses the `tls` feature (enabled by default).
   - Single-program by spec — only one program can be published per output.

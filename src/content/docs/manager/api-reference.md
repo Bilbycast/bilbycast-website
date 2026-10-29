@@ -75,7 +75,7 @@ SSO is a commercially licensed feature. See the [SSO setup guide](/manager/secur
 | POST   | `/api/v1/nodes/{id}/reconcile`| Re-run config reconciliation against the node |
 | GET    | `/api/v1/nodes/{id}/config-history` | List stored configuration snapshots (`/{sid}`, `/{sid}/label`, `/{sid}/restore` act on one) |
 | POST   | `/api/v1/nodes/{id}/rotate-secret` | Rotate the node's auth secret (requires an active WebSocket) |
-| GET    | `/api/v1/nodes/{id}/stats`    | Latest stats snapshot (`/stats-history` for the retained series) |
+| GET    | `/api/v1/nodes/{id}/stats`    | Latest stats snapshot (`/stats-history` for the retained series). On a relay, a caller without Manage on it gets `tunnels[]` / `udp_sessions[]` / `edges[]` only for the paths and edges they can see; the relay-wide totals stay. Of the legs a node names in its live stats, only nodes connected to the serving instance count here |
 | GET    | `/api/v1/nodes/{id}/resources`| The node's advertised resource budget    |
 | GET    | `/api/v1/nodes/{id}/psi-catalogs` | The most recent PSI catalogue cached per input, each with the time it was captured â€” the source list behind the track/PID picker |
 | GET    | `/api/v1/nodes/{id}/display-devices` | KMS connectors for the local-display output. `204` when the node reports none |
@@ -312,7 +312,7 @@ The manager's `/watch/{stream_id}` is **not** the relay's `/watch/{stream_id}` â
 | GET / PUT / DELETE | `/api/v1/tunnels/{id}` | Read, update or delete a tunnel |
 | POST   | `/api/v1/tunnels/{id}/rotate-bind-secret` | Mint a new per-tunnel bind secret and re-push it |
 | PUT    | `/api/v1/tunnels/{id}/owner-group` | Transfer tunnel ownership to another group |
-| GET    | `/api/v1/nodes/{id}/tunnels` | Tunnels that terminate on one node |
+| GET    | `/api/v1/nodes/{id}/tunnels` | Tunnels that terminate on one node, including the ones shared into the caller's group (for a single-group member too) |
 
 See [IP Tunneling](/manager/ip-tunneling/).
 
@@ -396,7 +396,7 @@ See [Address Pools](/manager/address-pools/).
 |--------|------|-------------|
 | GET / POST | `/api/v1/services` | List or create a service |
 | GET / PUT / DELETE | `/api/v1/services/{id}` | Read, update or delete a service |
-| POST   | `/api/v1/services/{id}/reapply` | Re-apply a service to its nodes |
+| POST   | `/api/v1/services/{id}/reapply` | Put back what the service's applied version is missing (creates whose entity is present are skipped, other steps re-sent) |
 | GET    | `/api/v1/services/{id}/versions` | Version history |
 | POST / DELETE | `/api/v1/services/{id}/automations` | Attach or detach an automation |
 | GET    | `/api/v1/wizards` | Available service wizards |
@@ -545,6 +545,8 @@ The assistant changes nothing itself: it stores proposals, and an apply runs eac
 ### `/ws/dashboard`
 
 Real-time updates for browser-based dashboards. Receives aggregated node status, stats, and health data. Requires an authenticated session.
+
+Each session receives only the nodes it can see. Inside a relay it can see, a session **without Manage** on the relay receives the relay's per-path rows only for paths it can see: `stats.tunnels[]` and `stats.udp_sessions[]` keep the rows of tunnels on the caller's tunnels list, of relayed bond legs of a service plan the caller's group owns or that runs on a node the caller's group owns, and of relayed bond legs a node the caller's group owns names in its own live stats; `stats.edges[]` keeps the edges the caller can see. A node shared in, at any level, vouches for no leg. The relay's totals stay relay-wide, so a relay card can show more paths than it lists. Manage on the relay shows every row. `driver_metrics.items`, which repeated a relay's `tunnels[]`, is no longer sent. The socket's nodes and selected group are fixed when it opens; its relay-row scope is rebuilt every 30 s, so a tunnel or Bonded Link made meanwhile appears within that. A relay's `health` is not scoped.
 
 ### `/ws/node`
 

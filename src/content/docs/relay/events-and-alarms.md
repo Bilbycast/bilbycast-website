@@ -124,8 +124,10 @@ Emitted only by a relay built with the optional `viewer-distribution` role (defa
 | info | WHIP ingest opened for stream '{stream}' | A WHIP-in ingest began feeding a stream's hub | `{ stream }` |
 | info | distribution ingest opened for stream '{stream}' | A QUIC ES ingest began feeding a stream's hub | `{ stream, has_audio }` |
 | info | distribution ingest closed for stream '{stream}' | A QUIC ES ingest stopped; the stream tears down | `{ stream }` |
+| info | Clip '{clip}' deleted from stream '{stream}' with a {credential} token ({fingerprint}) | `DELETE /origin/{stream}/clips/{clip}.mp4` removed a clip. Any viewer token for the feed may delete any of its clips, deliberately, so every delete is attributed instead. `credential` is `viewer` or `ingest`; `token_fingerprint` is the first 12 hex digits of the SHA-256 of the token's signature, and names a token, not a person — the portal mints a fresh token for each delete it makes on a viewer's behalf. Raised from a task the request cannot cancel, so a client that hangs up does not delete unattributed | `{ error_code: "clip_deleted", stream, clip, credential, token_fingerprint }` |
 | warning | per-IP viewer cap ({cap}) reached from {ip} | A WHEP viewer request was rejected — per-source-IP concurrent-viewer cap (`max_viewers_per_ip`) reached | `{ ip, cap }` |
 | warning | WHEP viewer: off-path datagram dropped by the media source pin | A WHEP session received a datagram from an address other than the one that completed the DTLS handshake, and dropped it before the WebRTC stack saw it. Emitted **once per session**. Either a spoofed ICE nomination trying to redirect the SRTP flow at a third party, or — more often — a legitimate viewer whose public IP changed mid-session (Wi-Fi to cellular, CGNAT rotation), who will see the player go black until they reload | `{ error_code: "webrtc_offpath_source", stream, session_id, pinned_ip, source_addr, source_ip }` |
+| warning | Clip export on stream '{stream}' has used its allowance of 20 minutes of clips, which refills at 20 minutes an hour; … — or, for one token's share, `A {credential} token ({fingerprint}) exporting clips on stream '{stream}' has used its allowance of 17 minutes of clips, which refills at 10 minutes an hour; …` | A `POST /origin/{stream}/clips` was refused `429` + `Retry-After` because it would take the feed past its export allowance (`limit: "feed"`) or one token past its share of it (`limit: "credential"`). The allowance bounds what a feed **commissions** of the edge that cuts it; a delete refunds nothing. **Once per episode** per feed or per token, from the first refusal until that allowance is whole again. Worst case per feed, once its first allowance is spent: 1,200 clip-seconds and 240 new cuts an hour (up to twice that in the hour after a whole allowance, since the refill is rolling), each cut attempted up to three times by the edge. `token_fingerprint` is the **refused** request's token; a `feed` refusal also names `top_spender_fingerprint`, the heaviest token still outstanding on the feed, and `top_spender_outstanding_secs`, how much of its own share it still has spent — read them against `allowance_secs`, since under per-export minting the heaviest token can be a light viewer. Both `null` on a `credential` refusal | `{ error_code: "clip_export_rate_limited", stream, limit, asked_secs, retry_after_secs, allowance_secs, refill_secs_per_hour, credential, token_fingerprint, top_spender_fingerprint, top_spender_outstanding_secs }` |
 
 **Source**: `src/distribution/`
 
@@ -152,10 +154,10 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 | `edge` | 6 | Edge QUIC connection lifecycle (with structured details), incl. per-IP DoS cap and QUIC accept failures |
 | `tunnel` | 11 | Tunnel state changes, authentication, lifecycle (waiting, unbound), per-connection DoS cap, native plain-UDP register rejections (invalid token + per-IP session cap + implausible source address), live-slot takeover refusals, and the startup posture warning |
 | `manager` | 6 | Manager connection and credential management |
-| `distribution` | 5 | Viewer-distribution ingest lifecycle, per-IP viewer cap, and the WHEP media source-pin drop (only on `viewer-distribution` builds) |
-| **Total** | **28** | |
+| `distribution` | 7 | Viewer-distribution ingest lifecycle, per-IP viewer cap, the WHEP media source-pin drop, a spent clip-export allowance, and clip deletes (only on `viewer-distribution` builds) |
+| **Total** | **30** | |
 
-The always-compiled `edge`, `tunnel`, and `manager` categories account for 23 events. The `distribution` category (5 events) is present only when the relay is built with the optional `viewer-distribution` role.
+The always-compiled `edge`, `tunnel`, and `manager` categories account for 23 events. The `distribution` category (7 events) is present only when the relay is built with the optional `viewer-distribution` role.
 
 Three of these — the per-IP connection cap (`edge`), the per-connection tunnel-bind cap (`tunnel`), and the native-UDP per-IP session cap (`tunnel`) — carry the structured `error_code: "relay_dos_suspect"` in their `details`. This is the identifier the security-hardening guidance tells operators to monitor for DoS-cap rejections.
 
@@ -164,7 +166,7 @@ Three of these — the per-IP connection cap (`edge`), the per-connection tunnel
 | Severity | Count | Description |
 |----------|-------|-------------|
 | critical | 1 | Manager authentication failure |
-| warning | 17 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, implausible source addresses, live-slot takeover refusals, the unauthenticated-native-plane posture warning, per-IP viewer cap, WHEP source-pin drops |
-| info | 10 | Connections, tunnel activation/waiting/unbound, secret rotation, distribution ingest lifecycle |
+| warning | 18 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, implausible source addresses, live-slot takeover refusals, the unauthenticated-native-plane posture warning, per-IP viewer cap, WHEP source-pin drops, a spent clip-export allowance |
+| info | 11 | Connections, tunnel activation/waiting/unbound, secret rotation, distribution ingest lifecycle, clip deletes |
 
 The always-compiled event surface (excluding the optional `distribution` category) tallies 23: critical=1, warning=15, info=7.

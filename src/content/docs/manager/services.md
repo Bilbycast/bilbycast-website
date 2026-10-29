@@ -111,8 +111,8 @@ That object carries a **lifecycle state** and a **health** rollup, and both are 
 | `designed` | Created with Apply deferred. The plan exists; nothing has been pushed. |
 | `provisioning` | An apply is in flight. |
 | `active` | Every step confirmed. Health `healthy`. |
-| `degraded` | Applied, but at least one step came back pending, or the reconciler has since found drift. Health `degraded`. |
-| `failed` | The apply was refused and rolled back. Health `failed`, with the device's message on the card. |
+| `degraded` | Applied, but at least one step came back pending, the reconciler has since found drift, or a re-apply failed (the version stays applied and drift-checked). Health `degraded`. |
+| `failed` | A create or edit was refused. Its version reads `rolled_back` when the steps it ran were taken back, otherwise `failed`. Health `failed`, with the device's message on the card. A re-apply never sets `failed`. |
 | `releasing` / `released` | Teardown in progress, then done. |
 
 A service holds at `degraded` rather than flipping green whenever a step acknowledged but reported a partial push. That is deliberate: a tunnel that reached one edge and not the other is not a working link, and showing it green is how a half-dead path sits unnoticed.
@@ -132,7 +132,7 @@ Opening a service gives four tabs and a header row of actions.
 | Action | What it does |
 |---|---|
 | **Edit configuration** | Re-opens the wizard form pre-filled from the stored parameters. A secret you leave as it is is kept, and one you type over is replaced; a value that still shows `[REDACTED]` but has been edited around it is refused (`400 redacted_value`), so retype the whole value. Apply always writes a **new version**, and the manager hands the driver the previous version's plan so it *can* re-provision in place. Only `edge.bonded-link` reads it today: that wizard emits `update_*` steps against the same entity ids. Every other wizard ignores the prior plan and mints fresh `create_*` steps with new ids, so the originals sit on the device until the service is released (Release walks every version, so they do get torn down then). |
-| **Re-apply** | Re-runs the *current* version's plan unchanged, with no version bump. This is the button for drift — a node that was rebuilt, or somebody who deleted an input underneath the service. |
+| **Re-apply** | Puts back what the *current* version provisioned and is missing, with no version bump. Each input, output, flow or tunnel it created is looked for by id: one still there is left alone (even if changed since), one missing is sent again — a relayed SRT/RIST pipeline's deleted tunnel included. Every other step (relay authorizations, a Bonded Link's uplink capacities, an Appear unit's connections) is re-sent as stored. A version made by a Bonded Link edit holds only that edit's updates, so it cannot recreate an entity an earlier version created. A failed re-apply takes back only what it created and leaves the service `degraded` and still drift-checked. This is the button for drift — a node that was rebuilt, or somebody who deleted an input underneath the service. |
 | **Save as template** | Turns the service's settings into a reusable catalogue entry. |
 | **Release** | Rolls back everything the service ever provisioned and marks it `released`. It asks first. |
 
@@ -222,7 +222,7 @@ The `service_template.*` rows carry the owning group, so they appear in a tenant
 | `POST` | `/api/v1/wizards/{id}/apply` | Run the plan as a one-off. Nothing is persisted but the `wizards.apply` audit row. |
 | `GET` `POST` | `/api/v1/services` | List services in your visible groups; create one (`apply_now` defaults to true). |
 | `GET` `PUT` `DELETE` | `/api/v1/services/{id}` | Detail with versions and current steps; re-apply with new `params` or update metadata; release (`?purge=true` also deletes the row). |
-| `POST` | `/api/v1/services/{id}/reapply` | Re-run the current version's plan unchanged. |
+| `POST` | `/api/v1/services/{id}/reapply` | Put back what the current version is missing: creates whose entity is present are skipped (`already_present`), every other step is re-sent; a failed run leaves the service `degraded` and drift-checked. |
 | `GET` | `/api/v1/services/{id}/versions` | Full version history. |
 | `POST` `DELETE` | `/api/v1/services/{id}/automations` | Bind or unbind one curated automation option. |
 | `GET` `POST` | `/api/v1/service-templates` | List or create a template. |

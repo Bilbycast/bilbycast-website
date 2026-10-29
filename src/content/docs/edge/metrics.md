@@ -233,7 +233,7 @@ members alike — not the active member alone. Per-member figures exist only as
 | `bilbycast_edge_flow_input_bytes_total` | counter | Bytes received |
 | `bilbycast_edge_flow_input_bitrate_bps` | gauge | Receive bitrate estimate, bits/sec |
 | `bilbycast_edge_flow_input_packets_lost` | counter | Packets detected as lost — see the note below the table for what each input type actually counts |
-| `bilbycast_edge_flow_input_fec_recovered_total` | counter | Lost packets recovered by SMPTE 2022-1 FEC |
+| `bilbycast_edge_flow_input_fec_recovered_total` | counter | Packets rebuilt by SMPTE 2022-1 FEC. A single-leg RTP input counts only what it publishes: a rebuilt packet ahead of every packet it has already published (a late one is withheld and not counted). A 2022-7 RTP input counts every packet an FEC datagram on either leg rebuilds, whether or not the other leg delivered it, and not those rebuilt as a media packet arrives |
 | `bilbycast_edge_flow_input_redundancy_switches_total` | counter | Times an RTP SMPTE 2022-7 input changed which leg it took a packet from. Only the unbuffered merger counts: an input with `redundancy.path_differential_ms` set (the buffered merger), and SRT / RIST leg-2 redundancy, leave it at `0` |
 | `bilbycast_edge_flow_input_packets_filtered` | counter | Packets dropped before publication — source-IP filter, RTP payload-type filter, ingress rate limiter, or the flow's bandwidth limit while it is blocked |
 | `bilbycast_edge_flow_pdv_jitter_us` | gauge | Packet delivery variation, microseconds. Emitted only when a sample exists |

@@ -130,12 +130,12 @@ Two roles, both minted by `/oauth/token` from a `client_id` / `client_secret` pa
 | `admin` | Read everything, change everything |
 | `monitor` | Read-only — flows, stats, config, the stats WebSocket |
 
-Write routes carry a `RequireAdmin` extractor that returns 403 for a `monitor` token. When auth is disabled the extractor finds no claims in the request extensions and returns success without checking anything, which is why an auth-off node has no role enforcement at all.
+Every method other than `GET` / `HEAD` / `OPTIONS` on `/api/v1` needs the `admin` role, checked twice: by a router layer keyed on the method, which applies to every route on that surface so a write route cannot miss it, and by the `RequireAdmin` extractor each write handler takes. Both return 403 (`admin role required`) to a `monitor` token. When auth is disabled there is no role to check, so both pass every request, which is why an auth-off node has no role enforcement at all.
 
-:::caution[Three write routes carry no role gate]
-`RequireAdmin` is a per-handler extractor, not a router layer, and three write handlers do not take it: `PUT /api/v1/ptp`, `POST /api/v1/tunnels` and `DELETE /api/v1/tunnels/{id}`. Their layers only decode the JWT and refuse browser-initiated writes; nothing looks at the role. A `monitor` token therefore reaches all three and they execute — changing the node's PTP mode (persisted to `/var/lib/bilbycast/ptp.conf`, the settings file `bilbycast-ptp-helper` polls to drive `ptp4l`) or creating/destroying a tunnel and persisting it to `config.json`. Treat a `monitor` credential as able to do those three things until the extractor is added.
+:::caution[The WHIP/WHEP routes carry no role gate]
+The four WHIP/WHEP signalling routes sit on a router of their own, outside the role layer, and are a deliberate exception: a player is not an operator. Their only check is the optional per-flow `bearer_token` on the two **offer** endpoints, and the two session `DELETE`s check nothing — any authenticated caller can tear down a live WebRTC session.
 
-The four WHIP/WHEP signalling routes are a fourth, deliberate exception: they carry no role gate because a player is not an operator. Their only check is the optional per-flow `bearer_token` on the two **offer** endpoints, and the two session `DELETE`s check nothing — any authenticated caller can tear down a live WebRTC session.
+Up to and including v0.116.0 the extractor was the only role check, and three write handlers did not take it: `PUT /api/v1/ptp`, `POST /api/v1/tunnels` and `DELETE /api/v1/tunnels/{id}`. On those releases a `monitor` token reaches all three and they execute — changing the node's PTP mode (persisted to `/var/lib/bilbycast/ptp.conf`, the settings file `bilbycast-ptp-helper` polls to drive `ptp4l`) or creating, re-pointing or destroying a tunnel and persisting it to `config.json`. Later releases refuse them to a `monitor` like every other write.
 :::
 
 ### Browser access scoping
@@ -300,7 +300,7 @@ Nodes advertise `upgrade` on their health tick, so the manager hides the upgrade
 ## Hardening checklist
 
 1. Keep the loopback bind, or enable `server.auth` in the same edit that widens it.
-2. Give each integration its own client, and `monitor` unless it genuinely writes — remembering the three ungated write routes above.
+2. Give each integration its own client, and `monitor` unless it genuinely writes — on v0.116.0 or earlier remembering the three write routes that accepted it (above).
 3. Put a real certificate on the API listener (`server.tls`), and pin the manager's certificate with `cert_fingerprint`.
 4. Never set `accept_self_signed_cert` on a production node; if a lab node has it, keep `BILBYCAST_ALLOW_INSECURE` out of the production unit file.
 5. Check the mode on `config.json` after the first manager-driven config change — it carries flow credentials and the edge does not re-apply a restrictive mode.

@@ -88,6 +88,8 @@ The A/V quality watcher and the PCR-ingress sampler both file under `flow`. The 
 | info | `av_skew_recovered` | Skew back under 30 ms (hysteresis). |
 | warning | `av_interleave_deep` | Windowed p95 of `OutputStats.av_interleave` exceeded 1200 ms. Not a lip-sync fault — guidance that players caching ~1 s (VLC) will starve their audio queue on this stream. |
 | info | `av_interleave_recovered` | Windowed p95 back under 900 ms. |
+| warning | `egress_pcr_accuracy_exceeded` | A UDP or RTP output that **re-encodes video** and runs `forward` egress pacing (auto-resolved or explicit) has a `pcr_trust` p99 above 30 ms (gate 4's operational tier 2) on two consecutive 5 s polls — judged only once the reservoir has rotated its first 1024 samples out, a few minutes after start, so an encoder's open never raises it. Advisory: one constant message naming `egress_pacing: "pcr"` as the fix and its latency cost; the edge changes no pacing. Output-scoped. Details carry `egress_pacing_effective`, `wire_pacing_tier`, `p99_us` / `p95_us` / `max_us`, `samples`, `threshold_us` (30000), `recover_below_us` (20000), `suggested_egress_pacing`, `estimated_added_latency_ms` (a floor) and `transcode_pcr`. See [Outputs that re-encode video](/edge/configuration/#outputs-that-re-encode-video). |
+| info | `egress_pcr_accuracy_recovered` | Clears the warning: `reason: "within_limit"` (p99 back under 20 ms) or `"no_longer_applies"` (the output restarted on `pcr` or `servo`, without its video re-encode, or as a type that is not UDP/RTP). Not raised when the flow itself restarts or the output moves to another flow. |
 | warning | `source_pcr_discontinuity` | Source PCR jumped by > 500 ms in either direction. |
 | warning | `source_pts_discontinuity` | A per-PID PES PTS jumped by > 500 ms in either direction — forward and backward alike, same as PCR. |
 | warning | `source_dts_discontinuity` | A per-PID PES DTS jumped by > 500 ms in either direction (video reorder streams). |
@@ -139,7 +141,9 @@ The `flow` category additionally carries the PES-splice family (`pes_splice_comp
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
-| info | SRT output '{id}' connected | Peer connected (listener) or caller connected |
+| info | SRT output '{id}' connected | Peer connected (listener) or caller connected. On a SMPTE 2022-7 output this is leg 1 (`details.leg: 1`) |
+| info | SRT output '{id}' 2022-7 leg 2 connected | Leg 2 of a 2022-7 output connected, once per connect cycle. Its own message, so the manager's deduplication does not fold it into leg 1's row |
+| warning | SRT output '{id}' 2022-7 leg 2 did not connect within 15s; running single-leg | Leg 2 missed its 15 s connect budget and counts as gone for the rest of the cycle: leg 1, if still up, carries on alone and its loss reconnects the pair, which tries leg 2 again. If leg 1 was already lost while leg 2 was connecting, the pair reconnects at once. Details `{ mode, leg, reason, budget_ms }` |
 | warning | SRT output '{id}' disconnected | Peer disconnected or connection lost |
 | warning | SRT output '{id}' stale connection detected | No ACK received after timeout, re-accepting |
 | critical | SRT output '{id}' connection failed: {error} | Caller can't reach remote, or bind fails |
@@ -151,7 +155,19 @@ Two SRT events carry a structured `details.error_code`:
 | critical | `srt_output_peer_unreachable` | Caller mode: consecutive connect failures crossed the threshold (then every 20th attempt, ~10 min apart, so a long outage leaves a trail without flooding the feed). The output keeps retrying. | `{ error_code, output_id, remote_addr, attempts, error }` |
 | critical | `srt_strict_binding_unsupported` | `interface_binding.strict: true` was requested on an SRT **or RIST** surface (input, output, or a bonding endpoint) — a Phase 1 limitation. Start is aborted. Use `strict: false` (loose source-IP binding), or pin the interface via a UDP-based protocol. The offending surface is named in the message text, not in the details — the payload carries nothing but the code. | `{ error_code }` |
 
-**Source**: `src/engine/input_srt.rs`, `src/engine/output_srt.rs`
+#### SRT socket-group bonding members
+
+Native libsrt bonding (the `bonding` block on an SRT input or output — not the `bonded` input/output type, whose events are under [Bonding](#bonding-bond)). Every one carries `{ mode: "caller-bonded" | "listener-bonded", bonding_mode }` in its details. The whole-group events above (`SRT bonded input disconnected, reconnecting`, `SRT bonded output '{id}' disconnected`) still cover losing **every** member.
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `srt_bond_member_down` | **Caller:** the group has run below its configured member count for `max(connect timeout + 2 s, 5 s)` while at least one member is still Idle or Running; the edge keeps re-adding the down members (1 s backoff doubling to 30 s). **Listener:** an accepted bonded session has run below the most live members it has had for as long; only the remote caller can re-add. Never while no member is live, and once per episode. | Caller: `{ error_code, configured, connected, down: [{ index, addr, source, down_secs, last_error }] }`. Listener: `{ error_code, configured, connected, missing }` |
+| info | `srt_bond_member_restored` | Every configured member (caller) or the session's peak member count (listener) is live again after `srt_bond_member_down`. | `{ error_code, configured, connected }` |
+| warning | `srt_bond_source_not_applied` | A caller member's configured source cannot be applied, so it connects unbound: a `local_addr` of the other address family than the peer, or an `interface_binding` NIC with no usable IPv4 address (or only IPv4 against an IPv6 peer). Once per member for the life of the input or output. | `{ error_code, index, addr, local_addr, interface, reason }` |
+
+A bond whose members open but never complete a handshake — every member pinned to a source the kernel routes out of the wrong interface, say — connects and then fails whole after the connect timeout, over and over, so neither `SRT input connection failed` nor `srt_bond_member_down` fires. On a caller group the whole-group disconnect Warning carries `members: [{ index, addr, source, was_live, last_error }]` instead. A bond that cannot open **any** member (every `local_addr` one this host does not have, or every NIC missing) raises `SRT input connection failed` on an input; a bonded caller **output** has no connect-failure event and only logs it.
+
+**Source**: `src/engine/input_srt.rs`, `src/engine/output_srt.rs`, `src/srt/bond_supervisor.rs`
 
 ---
 
@@ -163,14 +179,15 @@ Two SRT events carry a structured `details.error_code`:
 | warning | Redundant leg 2 lost | SRT redundant leg 2 stopped receiving |
 | critical | Both redundant legs lost | No data from either leg, will reconnect |
 
-Two redundancy events carry a structured `details.error_code`:
+Three redundancy events carry a structured `details.error_code`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
 | warning | `redundancy_failover_mode` | SRT redundancy landed on **raw TS**, which has no shared cross-leg sequence — the input runs active-leg failover, not hitless 2022-7 dedup. Configure the publisher to send RTP/TS (SMPTE ST 2022-2) for true hitless behaviour. | `{ error_code, format, fix_hint }` |
 | warning | `redundancy_ssrc_mismatch` | The two RTP legs carry different SSRCs; 2022-7 needs byte-identical RTP including SSRC. | `{ error_code, mismatch_count }` |
+| warning | `redundancy_output_leg_lost` | A leg of a SMPTE 2022-7 **SRT output** failed a send — message `SRT output '{id}' 2022-7 leg {n} lost; down until the pair reconnects`, once per leg per connect cycle. That leg's stats disappear, and it returns only when the pair reconnects (once both legs are gone), so meanwhile the output runs unprotected on the other leg. After leg 1 is lost, leg 2 counts `packets_sent` / `bytes_sent`, so the output still reads `active`. **Output-scoped** (no `flow_id`), and distinct from the RTP input's flow-scoped `redundancy_leg_dropped`. `other_leg` is `carrying`, `connecting` (leg 2 still inside its 15 s budget; it takes over if it connects) or `down` (the pair reconnects). | `{ error_code, leg, mode, other_leg }` |
 
-**Source**: `src/engine/input_srt.rs`, `src/engine/input_rtp.rs`
+**Source**: `src/engine/input_srt.rs`, `src/engine/input_rtp.rs`, `src/engine/output_srt.rs`
 
 ---
 
@@ -770,8 +787,8 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 |----------|-------------|
 | `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, A/V quality + source-clock discontinuities, PES splice, MXL, multiviewer compositor) |
 | `bandwidth` | Per-flow bandwidth monitoring (alarm, block, recovery) |
-| `srt` | SRT input and output connection state |
-| `redundancy` | SMPTE 2022-7 dual-leg status |
+| `srt` | SRT input and output connection state, including a 2022-7 output's leg 2 and native SRT bonding members |
+| `redundancy` | SMPTE 2022-7 dual-leg status, including a 2022-7 SRT output's lost leg |
 | `rtmp` | RTMP publisher connections |
 | `rtsp` | RTSP input state |
 | `hls` | HLS output failures |

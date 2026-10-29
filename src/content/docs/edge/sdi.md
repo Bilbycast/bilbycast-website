@@ -213,7 +213,21 @@ The API probe succeeds — it only needs `libDeckLinkAPI.so`, which loads fine �
 but the sandbox denies the DeckLink device nodes, so enumeration returns zero
 cards. The `sdi-decklink` capability is gated on that live device list, so the
 node **never advertises SDI at all** and the manager hides the SDI input and
-output types, exactly as it would for a card-less host.
+output types, exactly as it would for a card-less host. The boot log names each
+denied node (see the table below).
+
+The unit grants the node names confirmed on hardware:
+
+| Nodes | Cards |
+|-------|-------|
+| `/dev/blackmagic/io0`…`io7` | Multi-channel cards: a DeckLink Quad 2 has one node per channel. |
+| `/dev/blackmagic/dv0`…`dv7` | Single-channel DeckLink SDI cards, one node per card. |
+
+These are `misc` character devices (major 10, minors assigned dynamically), so
+the unit's `DeviceAllow=char-blackmagic` class rule cannot match them; the path
+rules are what grant access. systemd does not glob device paths, so each node is
+listed, and a listed path that does not exist when the unit starts is skipped
+with a log line, so the extras are harmless.
 
 1. **See what your card exposes:**
 
@@ -221,26 +235,59 @@ output types, exactly as it would for a card-less host.
    ls /dev/blackmagic/
    ```
 
-2. **Check the shipped unit covers them.** It grants the `char-blackmagic`
-   device class plus `/dev/blackmagic/io0` through `io7`. If your host shows
-   nodes outside that set — different names, or more than eight — add matching
-   lines to the unit:
+2. **Check your unit covers them.** The current unit grants `io0`…`io7` and
+   `dv0`…`dv7`. **A manager-driven upgrade replaces only the binary, never the
+   unit**, so a host installed with v0.116.0 or earlier still runs the older
+   list — `io0`…`io7` only — and a single-channel card (`dvN`) enumerates
+   nothing. For any name outside the list (an older unit on a `dvN` host, a
+   second Quad 2's `io8`…, more than eight `dvN` nodes, another prefix), add the
+   rules in a drop-in, one per line with no trailing comment (systemd reads a
+   `#` after the value as part of it and drops the rule):
 
-   ```ini
-   DeviceAllow=/dev/blackmagic/<node> rw
+   ```bash
+   sudo systemctl edit bilbycast-edge
    ```
 
-   Paths that don't exist are ignored with a log warning, so extra entries are
-   harmless.
+   ```ini
+   [Service]
+   DeviceAllow=/dev/blackmagic/dv0 rw
+   DeviceAllow=/dev/blackmagic/dv1 rw
+   ```
 
-3. **Reload and restart:**
+   Alternatively refresh the unit itself with `install-edge.sh
+   --upgrade-installer` (see [Manual upgrade](/edge/getting-started/#manual-upgrade)).
+   That **also moves the node to the latest release**, so prefer the drop-in on
+   a production node you are not ready to upgrade.
+
+3. **Restart** (after a hand edit of the unit file, `daemon-reload` first):
 
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl restart bilbycast-edge
    ```
 
-4. **Confirm** the node's per-port SDI hardware status is now populated.
+   Path rules resolve when the unit **starts**. A node the driver creates later
+   (driver loaded after the edge, card hot-plugged) stays denied until the next
+   restart, even when the unit lists it.
+
+4. **Confirm** the node's per-port SDI hardware status is now populated and the
+   boot log carries no `sdi.decklink` warning.
+
+**Reading the boot log.** Whenever the DeckLink API enumerates zero devices, or
+some device nodes are denied to the edge, the probe logs one warning under
+target `sdi.decklink` (`journalctl -u bilbycast-edge | grep sdi.decklink`)
+saying which of these it found:
+
+| The warning says | Cause | Fix |
+|---|---|---|
+| `… are denied to this process by its device cgroup (EPERM): dv0, dv1 …` | The unit's `DeviceAllow=` list (in a container, the runtime's device rules) does not grant those nodes, or they appeared after the edge started. | Steps 2 and 3 above. |
+| `… are denied by file permissions or an AppArmor/SELinux policy (EACCES): …` | File mode and the service user's groups, or an LSM policy. | `ls -l /dev/blackmagic/`, the service user's groups, the LSM's audit log. |
+| `… although N device node(s) in /dev/blackmagic/ are present and accessible …` | The nodes are reachable, so look past them: most often card firmware older than the driver (`dmesg` shows a firmware version mismatch), or a Desktop Video driver/library mismatch. | `dmesg \| grep -i blackmagic`; `DesktopVideoUpdateTool --list`, update, reboot. |
+| `… /dev/blackmagic/ holds no device nodes …` | No card fitted, the Desktop Video kernel driver is not loaded, or (in a container) the nodes were not passed through. | `lspci \| grep -i blackmagic`, `lsmod \| grep blackmagic` (after a kernel upgrade DKMS rebuilds it on the next boot). |
+| `… could not be read (…)` | `/dev/blackmagic/` itself is unreadable: its permissions, or a container whose `/dev` is not the host's. | `ls -ld /dev/blackmagic/`. |
+
+With some nodes denied but other cards enumerating, the warning says how many
+devices did enumerate and that the ports behind the denied nodes are missing.
 
 ## Ad markers — SCTE-104 ↔ SCTE-35
 
@@ -286,9 +333,12 @@ TS cue → SDI → extraction loop remains the outstanding system-level test.
 | `missing …/DeckLinkAPI.h — DECKLINK_SDK_DIR does not look like the SDK's Linux/include` | Pointing at the SDK root, not `Linux/include` | Point one level deeper |
 | Compile errors about `IDeckLinkVideoBuffer` / `StartAccess` | SDK older than 16 | Download SDK 16 or newer |
 | `sdi_no_media_codecs` at flow start | Built with `media-codecs` disabled | Rebuild with default features |
-| Node does not advertise SDI, and `ls /dev/blackmagic/` **does** list nodes | systemd sandbox denying the device nodes — enumeration returns zero cards, so the capability is withheld | Checklist C |
+| Node does not advertise SDI; boot log `sdi.decklink` says *"… are denied to this process by its device cgroup (EPERM): dv0, …"* | The unit's `DeviceAllow=` list does not grant those nodes (a unit from v0.116.0 or earlier lacks `dvN`), or they were created after the service started — enumeration returns zero cards, so the capability is withheld | Checklist C steps 2 and 3 |
+| Boot log `sdi.decklink` says *"… although N device node(s) in /dev/blackmagic/ are present and accessible …"* | Card firmware older than the driver, or a Desktop Video driver/library mismatch | `dmesg \| grep -i blackmagic`; `DesktopVideoUpdateTool --list`, update, reboot |
+| Boot log `sdi.decklink` says *"… /dev/blackmagic/ holds no device nodes …"* | No card, kernel driver not loaded, or a container without the nodes passed through | `lspci \| grep -i blackmagic`, `lsmod \| grep blackmagic` |
+| Boot log `sdi.decklink` says *"… denied by file permissions or an AppArmor/SELinux policy (EACCES)"* | File mode, the service user's groups, or an LSM policy | `ls -l /dev/blackmagic/`, the service user's groups, the LSM's audit log |
 | Node does not advertise SDI; boot log `sdi.decklink` says *"the DeckLink API is unreachable"* | Desktop Video missing, or binary built without the feature | Install Desktop Video; confirm the feature was enabled |
-| Node does not advertise SDI; boot log `sdi.decklink` says *"no devices enumerated"* | Either the sandbox above or no card fitted — the log line alone cannot tell them apart | `ls /dev/blackmagic/`: nodes listed → Checklist C; nothing listed → seat/fit the card |
+| v0.116.0 or earlier: boot log `sdi.decklink` says *"no devices enumerated … is a card fitted?"* | Any of the causes above — that release's single message cannot tell them apart | `ls -l /dev/blackmagic/`: nodes listed → Checklist C or the firmware row; nothing listed → card or driver |
 | Released binary has no SDI | A `*-rockchip` artefact (never carries it), or a `*-full` artefact from v0.102.0 or earlier. Confirm with `--print-capabilities \| grep '^feature sdi-decklink'` | Upgrade to v0.103.0+ for `*-full`; otherwise Checklist A, or Checklist B then re-release |
 | CI logs *"SDI compile gate skipped"* | No SDK credential visible to that run | Expected on fork PRs; otherwise recheck the secret name |
 

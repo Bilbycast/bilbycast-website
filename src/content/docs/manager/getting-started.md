@@ -515,7 +515,9 @@ Then open `https://manager.example.com:8443/` from a browser — you should see 
 
 ## Upgrading
 
-The manager ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching tarball, verifies SHA-256 against the signed manifest, atomically swaps the binary with a `.previous` backup, restarts the systemd unit, polls `/health`, and **auto-rolls back** to the previous binary on a failed health probe.
+The manager ships an operator-run upgrade script. It downloads the latest signed `manifest.json` + `manifest.sig.bundle`, verifies the Sigstore signature against the publishing workflow's identity (auto-installing cosign with checksum verification if it isn't already on the host), pulls the matching tarball, verifies SHA-256 against the signed manifest, snapshots the database (`pg_dump`, to `pre-upgrade-<timestamp>.dump` beside the binary), atomically swaps the binary with a `.previous` backup, restarts the systemd unit and polls `/health`.
+
+The health probe is found from the unit — the port from `serve --port`, else `BILBYCAST_PORT`, else 8443; `https://` then `http://`, so a `behind_proxy` manager needs no flag — and must answer the running manager **before anything is downloaded**, or the script stops with nothing changed and asks for `--health-url`. On a failed health check it puts the previous binary back only when the previous release was answering beforehand and `_sqlx_migrations` is unchanged (read with `psql`, from the same client package as `pg_dump`): a release that applied a migration leaves a database the previous binary refuses to start on. Otherwise it leaves the new release in place (exit 3) and prints how to restore its pre-upgrade snapshot. It never restores the database itself. A run for the release already installed changes nothing and keeps `.previous`; when the running manager reports an older release than the one installed, it says so and leaves the restart to you. Copies of the script from v0.91.0 and earlier rolled back regardless and probed only `https://127.0.0.1:8443/health`.
 
 The simplest path is curl-pipe-bash from the latest release:
 
@@ -524,21 +526,43 @@ curl -fsSL https://github.com/Bilbycast/bilbycast-manager-releases/releases/late
     | sudo bash
 ```
 
-Operators who'd rather review the script first can grab it once and re-run it as needed:
+Operators who'd rather review the script first can download it — fresh from the latest release each time, not a saved copy, so a fix to the upgrade itself reaches you:
 
 ```bash
 curl -fsSL -o upgrade-manager.sh \
     https://github.com/Bilbycast/bilbycast-manager-releases/releases/latest/download/upgrade-manager.sh
 chmod +x upgrade-manager.sh
 sudo ./upgrade-manager.sh                        # apply latest stable
-sudo ./upgrade-manager.sh --dry-run              # download + verify only; print plan
+sudo ./upgrade-manager.sh --dry-run              # download + verify, run the health-probe pre-flight,
+                                                 # the schema check and the DB snapshot preflight;
+                                                 # change nothing (fails where the real run would)
 sudo ./upgrade-manager.sh --target-version 0.52.2  # pin to a specific tag
 sudo ./upgrade-manager.sh --drain-secs 60        # HA pair: graceful drain via the
                                                  # `bilbycast-manager upgrade --drain-secs`
                                                  # CLI before the binary swap
 ```
 
-Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign).
+Pass `--help` for every flag, including `--service`, `--binary-path`, `--health-url`, `--health-timeout`, `--preflight-timeout`, `--no-rollback`, and `--no-verify-cosign` (for air-gapped boxes that can't install cosign). Exit status: `0` upgraded (or that release was already installed); `1` not upgraded — refused, failed before the service was touched, or rolled back to a previous release that answered; `2` rolled back but the previous release did not answer — the new binary is kept as `<binary>.failed`, for when another instance had already migrated a shared database; `3` the new release left in place without a healthy answer; `4` an unexpected step failed after the service was touched.
+
+### Going back across a migration
+
+Restoring the previous binary alone does not undo a release that applied a migration: that binary refuses to start against a database migrated past it. Going back means restoring the script's snapshot first, which discards everything written since it was taken. Use the steps the script prints; they fail closed. Do **not** use `pg_restore --clean`, which leaves tables a newer migration created and fails part-way on their foreign keys, or `bilbycast-manager restore`, which reads only its own encrypted archives. With `S` set to the snapshot the script named, without `.dump`, and `DSN` to the unit's `BILBYCAST_DATABASE_URL`:
+
+1. Stop the manager here and on every other instance that uses this database: `systemctl stop bilbycast-manager`.
+2. As root, render the snapshot to SQL. Go on only if it prints `RENDERED`:
+   ```bash
+   ( umask 077 && pg_restore --no-owner --file="$S.sql.part" "$S.dump" \
+     && tail -n 5 "$S.sql.part" | grep -qx -- '-- PostgreSQL database dump complete' \
+     && grep -q '^COPY public\._sqlx_migrations ' "$S.sql.part" \
+     && mv "$S.sql.part" "$S.sql" && echo RENDERED )
+   ```
+3. Replace the database's contents in one transaction. If any statement fails, nothing changes:
+   ```bash
+   psql --no-password -X -v ON_ERROR_STOP=1 --single-transaction \
+     -c 'DROP SCHEMA public CASCADE' -c 'CREATE SCHEMA public' \
+     -c 'GRANT USAGE ON SCHEMA public TO PUBLIC' -f "$S.sql" -d "$DSN" && rm -f "$S.sql"
+   ```
+4. Put the previous binary back and start it: `mv -Tf /usr/local/bin/bilbycast-manager.previous /usr/local/bin/bilbycast-manager && systemctl start bilbycast-manager`, with your binary's path.
 
 ### Foreground installs
 
@@ -572,6 +596,9 @@ set -a; . ./manager.env; set +a
 ./bilbycast-manager serve --config config/default.toml
 
 # Rollback (if the new version misbehaves): mv .previous back over the live binary.
+# This works only when the new release applied no migration; otherwise the previous
+# binary refuses to start until the database is restored first — see
+# "Going back across a migration" above.
 #   mv "${INSTALL_DIR}/bilbycast-manager.previous" "${INSTALL_DIR}/bilbycast-manager"
 ```
 

@@ -201,8 +201,12 @@ is reachable only by setting `bandwidth_profile` explicitly on the flow.
   │  Public:    /health, /oauth/token,   │
   │             /setup (gated by config) │
   │  Read-only: GET /api/v1/* (any role)  │
-  │  Admin:     per-handler RequireAdmin  │
-  │             extractor, NOT middleware │
+  │  Admin:     every non-GET/HEAD/       │
+  │             OPTIONS on /api/v1/*      │
+  │             (method-keyed router      │
+  │             layer + RequireAdmin)     │
+  │  NOT admin-gated: WHIP/WHEP and NMOS  │
+  │             (own routers)             │
   └────────────┬───────────────────────────┘
                ▼
   ┌────────────────────────────────────────┐
@@ -231,14 +235,17 @@ is reachable only by setting `bandwidth_profile` explicitly on the flow.
   └────────────────────────────────────────┘
 ```
 
-The Layer 3 admin check is **not** middleware. The `/api/v1` stack proves only
-that the bearer token is a valid, unexpired JWT; the role check is an opt-in
-`RequireAdmin` extractor that each handler has to take as a parameter. It is
-present on the flows, inputs and outputs handlers. Three write surfaces omit it
-and are therefore reachable by any authenticated role, `monitor` included:
+The Layer 3 admin check runs twice. A router layer on `/api/v1`, keyed on the
+method, refuses every method other than `GET` / `HEAD` / `OPTIONS` with 403
+unless the token's role is `admin`, whichever route the request reaches, so a
+write route cannot miss it; and every write handler also takes the
+`RequireAdmin` extractor, which makes the same check before the body is
+parsed. Up to and including v0.116.0 the extractor was the only check, and
+`PUT /api/v1/ptp`, `POST /api/v1/tunnels` and `DELETE /api/v1/tunnels/{id}`
+did not take it. Two surfaces sit on routers of their own, outside the layer,
+and are reachable by any authenticated role, `monitor` included:
 
-- `PUT /api/v1/ptp`
-- `POST /api/v1/tunnels` and `DELETE /api/v1/tunnels/{id}`
+- NMOS IS-04 / IS-05 / IS-08 under `/x-nmos/`.
 - `POST` / `DELETE` on the four `/api/v1/flows/{id}/whip|whep` routes. The two
   `POST` offer handlers have a substitute check, but a conditional one: the
   per-flow `bearer_token` is enforced only when one is configured on that
@@ -246,9 +253,9 @@ and are therefore reachable by any authenticated role, `monitor` included:
   all, so a configured `bearer_token` does not cover them either — any valid
   token of any role can tear down a live session.
 
-And when auth is disabled entirely — the shipped default — `RequireAdmin`
-returns `Ok` unconditionally, so the admin/read-only distinction is moot on
-every route until you turn auth on.
+And when auth is disabled entirely — the shipped default — there is no role to
+check, so the layer and `RequireAdmin` both pass every request, and the
+admin/read-only distinction is moot on every route until you turn auth on.
 
 ## Module Dependency Graph
 

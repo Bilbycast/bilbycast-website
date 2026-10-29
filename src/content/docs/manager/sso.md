@@ -79,13 +79,13 @@ BILBYCAST_OIDC_GROUP_SYNC=true
 BILBYCAST_OIDC_ROLE_MAP='{"platform-support":{"super_admin":true},"acme-ops":{"group":"acme","role":"operator"},"acme-admins":{"group":"acme","role":"admin"}}'
 ```
 
-:::caution[With `ROLE_SYNC=true`, `acme-admins` above becomes a *platform* Super Admin]
-The platform-role lookup flattens each mapped entry to a single string and takes the first one the user's own claim matches, so a structured entry whose `role` is `admin` — `acme-admins` here — promotes that user to platform **Super Admin**, not merely admin of the `acme` group. Whether it fires depends on the order the IdP lists the user's groups: a user whose claim happens to start with `acme-ops` flattens to `operator` and stays a plain User.
+:::caution[Neither sync ran before the release after v0.91.0]
+Up to and including manager v0.91.0 the ID token's groups claim was dropped while the token was decoded, so `BILBYCAST_OIDC_ROLE_SYNC` and `BILBYCAST_OIDC_GROUP_SYNC` were accepted and changed nothing (manager#131). From the next release they run, and the first SSO login after upgrading rewrites each user from the map. Check the map before you upgrade. In particular, map your platform admins as `{"super_admin": true}`, as `platform-support` is above: `acme-admins` makes its members admins of `acme` and never platform Super Admins.
 
-Leave `BILBYCAST_OIDC_ROLE_SYNC` unset if the platform role should stay manager-owned — group sync on its own never touches it.
+Leave `BILBYCAST_OIDC_ROLE_SYNC` unset if the platform role should stay manager-owned. Group sync on its own never touches it.
 :::
 
-At Keycloak, add a **Group Membership** mapper to the client's dedicated scope, claim name `groups`, "Full group path" off (so the claim reads `acme-ops`, not `/acme-ops`) and "Add to ID token" on. The manager reads the group claim out of the **ID token**, not the userinfo endpoint, and only accepts it as an array of strings.
+At Keycloak, add a **Group Membership** mapper to the client's dedicated scope, claim name `groups`, "Full group path" off (so the claim reads `acme-ops`, not `/acme-ops`) and "Add to ID token" on. The manager reads the group claim out of the **ID token**, not the userinfo endpoint, as an array of strings; a single string counts as one group. `BILBYCAST_OIDC_ROLE_CLAIM` names a **top-level** claim and is taken literally. A namespaced name such as `https://example.com/groups` works. A dotted path such as `realm_access.roles` is not traversed, so it reads as absent.
 
 Keep the file holding these out of version control and at `chmod 600` — the client secret is a credential.
 
@@ -112,37 +112,39 @@ A user who resolves but is inactive, expired or locked is refused separately, wi
 
 ## Role sync — the platform role
 
-With `BILBYCAST_OIDC_ROLE_SYNC=true`, the user's platform role is recomputed on every login: **Super Admin** if any matched entry is `{"super_admin": true}` or the first matching group maps to the string `admin` or `super_admin`, and plain **User** otherwise. Ordering in the map itself is irrelevant — it is a hash map, so the order of the user's own claim decides which mapped group is "first".
+With `BILBYCAST_OIDC_ROLE_SYNC=true`, the user's platform role is recomputed on every login. It is **Super Admin** if *any* of the user's groups maps to platform authority, meaning a legacy `"admin"` or `"super_admin"` string or `{"super_admin": true}`, and plain **User** otherwise. The order of the groups in the claim makes no difference.
 
 | Entry shape | Example | Meaning |
 |---|---|---|
-| Plain string | `"admin"`, `"operator"`, `"viewer"` | Membership of the default group at that member role — except that group sync cannot currently resolve it; see the note below. `admin` and `super_admin` also flip the platform role, when role sync is on and this is the first matched group. |
-| `{"group": …, "role": …}` | `{"group":"acme","role":"operator"}` | Membership of the named group at `viewer`, `operator` or `admin`. A `role` of `admin` **also flips the platform role to Super Admin** when role sync is on and this is the first matched group — the platform-role lookup flattens a structured entry down to its `role` string. |
+| Plain string | `"admin"`, `"operator"`, `"viewer"`, `"super_admin"` | `admin`, `operator` and `viewer` are membership of the default group at that member role, and `admin` also grants platform Super Admin when role sync is on. `super_admin` grants the platform role only, with no group membership. |
+| `{"group": …, "role": …}` | `{"group":"acme","role":"operator"}` | Membership of the named group (the default group when `group` is left out) at `viewer`, `operator` or `admin`. **Never platform authority**: `{"group":"acme","role":"admin"}` makes the user admin of `acme` and nothing more. |
 | `{"super_admin": true}` | `{"super_admin":true}` | Platform Super Admin. Implies no group membership. |
 
-:::danger[Plain-string entries grant no group membership in v0.84.0]
-The callback expands the legacy shorthand against the constant `grp_default` — which is the default group's **id** — and then resolves it **by slug**, and the default group's slug is `default`. The lookup misses (unless a group whose slug is literally `grp_default` happens to exist), so with group sync on a plain-string entry adds the user to nothing and instead lands in `auth.sso_unknown_group` with `grp_default` in `unknown_slugs`. Its effect on the platform role is unaffected.
-
-Write `{"group":"default","role":"operator"}` instead of `"operator"` to get the membership the shorthand was meant to grant.
-:::
+The manager **refuses to start** when either sync is on and something is missing or invalid: no `BILBYCAST_OIDC_ROLE_CLAIM`, a standard OIDC claim named as the groups claim, an empty map, a role other than the ones in the table, a structured entry with neither `role` nor `super_admin`, or a `{"super_admin": true}` entry that also names a `group` or `role`. It logs a warning when role sync is on and no entry grants platform authority, and it names any `{"role": "admin"}` entries.
 
 :::caution[Role sync rewrites the role, it does not only raise it]
-While role sync is on, a login whose groups map to nothing — or to anything other than `admin` / `super_admin` — sets the account back to **User**, demoting an existing Super Admin. If you turn role sync off later, set each user's role by hand afterwards; nothing restores what the sync last wrote.
+While role sync is on, a login whose groups map to no platform authority sets the account back to **User**, an empty claim included, and an existing Super Admin is demoted with it. That is how removing someone from the admins group takes effect. **The last Super Admin is not protected**, because revocation has to reach the account with the most authority too. Map your platform admins before you turn it on.
+
+Keep the break-glass local admin out of SSO. Give it no email, or one no IdP asserts as verified; otherwise its first SSO login binds it and role sync then governs it. If the last Super Admin is demoted anyway, the way back is on the database host: `UPDATE users SET role = 'super_admin' WHERE username = '<name>';`. If you turn role sync off later, set each user's role by hand. Nothing restores what the sync last wrote.
 :::
 
 ## Group sync — memberships
 
-`BILBYCAST_OIDC_GROUP_SYNC=true` makes the IdP claim authoritative over the user's [group memberships](/manager/multi-tenant-groups/). On each login the manager resolves the claim into a set of `(group, member role)` pairs, upserts every one of them, and then **removes every existing membership not in that set**. Where two mapped IdP groups point at the same manager group, the higher member role wins. Every membership it writes carries a null `allowed_node_ids` — which means *every* resource the group owns or is shared into — so an admin's per-member narrowing to a subset of the group's nodes is cleared on that user's next SSO login. The user's cached session state is then dropped on this instance and the invalidation is fanned out to every peer, so the next request rebuilds their memberships from the database rather than serving the old visibility. It does not sign them out — an open session keeps working, with the new scope.
+`BILBYCAST_OIDC_GROUP_SYNC=true` makes the IdP claim authoritative over the user's [group memberships](/manager/multi-tenant-groups/). On each login the manager turns the claim into a set of `(group, member role)` pairs. It writes each pair that is new or has a different role, then **removes every existing membership not in that set**, including one an admin added by hand. Where two mapped IdP groups point at the same manager group, the higher member role wins.
 
-Two things are dropped rather than guessed at:
+The sync writes the member role and nothing else. An admin's node restriction (`allowed_node_ids`) or page scope on a synced membership survives every login. A membership the sync creates has neither, so it reaches everything its role allows until an admin narrows it. A membership the sync **removes** takes its narrowing with it, so if the map later adds the user back, the membership returns unrestricted.
 
-- **Unknown group slugs.** There is no just-in-time group creation — create the group in the manager first. Each login that names one emits a single `auth.sso_unknown_group` audit event listing the slugs, so the gap is visible.
-- **Unknown member roles.** Only `viewer`, `operator` and `admin` are member roles. A map entry naming anything else (including `super_admin`, which is a *platform* role) contributes no membership.
+The user's cached session state is then dropped on this instance, and the invalidation is fanned out to every peer, so the next request rebuilds their memberships from the database. It does not sign them out: an open session keeps working, with the new scope.
 
-:::caution[An empty groups claim skips synchronisation entirely]
-Both sync paths are guarded on the claim being non-empty. If the IdP sends an empty array, omits the claim, or sends something that is not an array of strings, the manager treats it as *no information* rather than *no groups*: the user keeps every membership and the platform role they already had.
+- **Unknown group slugs** are dropped. There is no just-in-time group creation, so create the group in the manager first. Each login that names one writes a single `auth.sso_unknown_group` audit event listing the slugs.
+- **Every change is audited** as `auth.sso_membership_synced`, scoped to its group so that group's admins see it. A removal records the node restriction and page scope the membership carried, so they can be put back by hand.
+- **A failed database read changes nothing** for that login, the platform role included: every read runs before anything is written (`auth.sso_sync_skipped` with reason `db_error`). It is never read as "no such group".
+- **A new membership counts against the group's user limit**, like one an admin adds. A full group refuses it, audited as `auth.sso_membership_refused`, and the rest of the claim still applies.
 
-The practical consequence is that **removing someone from all of their IdP groups revokes nothing**. Revoke access by deactivating or deleting the user — in the IdP, in the manager, or both — or by moving them into a mapped lower-privilege group so the claim still carries something. Removing a *subset* of their groups does work, because the remaining groups keep the claim non-empty.
+:::caution[An empty claim revokes; an absent one does not]
+If the claim is present it is synced, even when it is empty. Removing someone from all of their IdP groups therefore demotes them and removes every membership. If the IdP **omits** the claim, sends something that is not a list of strings, or sends an overage reference instead (Entra's `_claim_names`), the manager treats it as *no information*. The user keeps everything they had, and `auth.sso_sync_skipped` records why.
+
+Some IdPs omit the claim for a user in no matching group. Okta does this when its groups filter matches nothing, so keep the filter at `.*`. Entra does it for a user with no group of the selected type, so prefer "Groups assigned to the application" and assign a group every manager user is in. Either way, a user who ends up with no claim at all is revoked by deactivating the account, not by group removal.
 :::
 
 ## Checking what is live
@@ -150,10 +152,10 @@ The practical consequence is that **removing someone from all of their IdP group
 | Surface | Who can see it | What it tells you |
 |---|---|---|
 | `GET /api/v1/auth/oidc/status` | public | `{"enabled": …}` — the same signal that decides whether the login page shows the SSO button. |
-| `GET /api/v1/settings/sso` | Super Admin | `enabled`, `licensed`, `configured_via_env`, plus the resolved issuer, client ID, redirect URL, provider ID, `role_sync_enabled`, `role_claim` and the role-map **keys**. Never the client secret. |
+| `GET /api/v1/settings/sso` | Super Admin | `enabled`, `licensed`, `configured_via_env`, plus the resolved issuer, client ID, redirect URL, provider ID, `role_sync_enabled`, `group_sync_enabled` (from the release after v0.91.0), `role_claim` and the role-map **keys**. Never the client secret. |
 | Administration → Settings → **Single Sign-On (OIDC)** → View (`/admin/settings/sso`) | Super Admin | The same values, rendered. Read-only — configuration lives in the environment. |
 
-`enabled: false` with `configured_via_env: true` means the licence is the blocker. `enabled: false` with `configured_via_env: false` means `BILBYCAST_OIDC_ENABLED` is not set on the running process — check the process environment, not just the file you edited. Note that the settings endpoint does not echo `BILBYCAST_OIDC_GROUP_SYNC`; confirm that one against the environment directly.
+`enabled: false` with `configured_via_env: true` means the licence is the blocker. `enabled: false` with `configured_via_env: false` means `BILBYCAST_OIDC_ENABLED` is not set on the running process — check the process environment, not just the file you edited. Up to v0.91.0 the settings endpoint does not echo `BILBYCAST_OIDC_GROUP_SYNC`; on those releases, check that one against the environment directly.
 
 ## Sign-in errors
 
@@ -176,12 +178,18 @@ The manager sends every failure back to `/login?error=<code>` with a deliberatel
 | `auth.sso_refused` | Strict-provisioning refusal | IP, `details.subject`, `details.email`, `details.reason` |
 | `auth.sso_blocked` | Matched user is inactive, expired or locked | `user_id`, IP, `details.reason` |
 | `auth.sso_unknown_group` | Group sync saw slugs that do not exist | `user_id`, IP, `details.provider`, `details.unknown_slugs` |
+| `auth.sso_role_synced` | Role sync changed the platform role | `user_id`, IP, `details.provider`, `details.from`, `details.to` |
+| `auth.sso_membership_synced` | Group sync added, re-roled or removed one membership | `user_id`, `group_id`, IP, `details.op`, `details.from_role`, `details.to_role`; on a removal also `details.allowed_node_ids` and `details.allowed_pages` |
+| `auth.sso_membership_refused` | Group sync would have added a membership to a group at its user limit | `user_id`, `group_id`, IP, `details.reason`, `details.to_role`, `details.current`, `details.limit` |
+| `auth.sso_sync_skipped` | Sync is on, but the claim was absent, malformed or an overage reference, or a database read failed. Nothing was changed. | `user_id`, IP, `details.provider`, `details.reason`, `details.claim` |
+
+These are on the **Audit Log** page, not on Events, because an event belongs to a node. A run of `auth.sso_sync_skipped` rows means the IdP has stopped sending the claim.
 
 A run of `auth.sso_refused` events sharing one subject almost always means someone was added at the IdP and never provisioned in the manager.
 
 ## What SSO does not change
 
-- **Local password login.** Still available. Keep one local admin as a break-glass account.
+- **Local password login.** Still available. Keep one local admin as a break-glass account, and keep it out of SSO so role sync never governs it.
 - **MFA.** An SSO login skips the manager's TOTP step entirely — the IdP owns the second factor for those users. Password logins still go through it.
 - **Everything after authentication.** Session cookies, CSRF, session revocation, group scoping and per-node RBAC are identical whichever way the user signed in.
 - **Node connections.** Edges, relays and gateway sidecars authenticate over their own WebSocket protocol and are untouched by SSO.

@@ -162,7 +162,7 @@ The flow is:
 4. Strict provisioning — the manager **does not auto-create users from SSO**. An admin must pre-create a local user whose email matches the IdP's verified email claim; the first SSO login binds the IdP identity to that user row.
 5. On success, the same session cookie + CSRF cookie used by local login are issued.
 
-Optional role sync maps IdP group claims onto local roles — but only when the IdP actually sends a **non-empty** group claim. Removing a user from every IdP group sends an empty (or absent) claim, which skips the sync entirely: the user keeps the platform role and every manager group membership they already had. Revoke access by deactivating or deleting the local user, or by moving them into a mapped lower-privilege group — not by removing them from their IdP groups.
+Optional role and group sync map IdP group claims onto the platform role and group memberships on every login. Up to manager v0.91.0 neither ran, because the claim was dropped while the ID token was decoded (manager#131). From the next release, a claim that is present is synced, even an empty one, so removing a user from every IdP group demotes them and removes their memberships. A claim the IdP omits changes nothing and is audited as `auth.sso_sync_skipped`, so a user whose IdP omits it is revoked by deactivating the account. Only `{"super_admin": true}` or a legacy `"admin"` / `"super_admin"` string grants platform Super Admin. See [SSO](/manager/sso/).
 
 ---
 

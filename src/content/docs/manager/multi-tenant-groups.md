@@ -95,7 +95,7 @@ The caller must be the native owner in the source group AND Admin in the destina
 }
 ```
 
-With `BILBYCAST_OIDC_GROUP_SYNC=true` the manager idempotently replaces the user's `group_members` rows from the IdP claim on every login. An **empty** groups claim is treated as "no information", not as "no groups" — the sync block is skipped entirely and the user keeps every existing membership and their current platform role. Removing a user from all mapped IdP groups therefore does **not** revoke their access; de-provision by disabling or deleting the user in the IdP, or by removing the membership in the manager. Unknown group slugs are dropped with a single `auth.sso_unknown_group` audit event — there's no JIT group creation, so an IdP misconfiguration can never silently provision a new tenant.
+With `BILBYCAST_OIDC_GROUP_SYNC=true` the manager idempotently replaces the user's `group_members` rows from the IdP claim on every login. Up to manager v0.91.0 neither sync ran at all, because the claim was dropped while the ID token was decoded (manager#131). From the next release, an **empty** groups claim leaves the user in no group, so removing a user from every mapped IdP group revokes their memberships. A claim the IdP **omits** is treated as "no information" and changes nothing. If your IdP omits the claim for a user in no groups, revoke that user by disabling the account. Each membership the sync changes is audited as `auth.sso_membership_synced`, scoped to its group. Unknown group slugs are dropped with a single `auth.sso_unknown_group` audit event — there's no JIT group creation, so an IdP misconfiguration can never silently provision a new tenant.
 
 ## Worked example: a managed service provider
 

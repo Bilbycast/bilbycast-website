@@ -1346,8 +1346,9 @@ Publishes to an RTMP/RTMPS server (e.g., Twitch, YouTube Live, Facebook Live). D
 | `audio_encode` / `transcode` / `video_encode` | object | No | `null` | Optional egress re-encode blocks. RTMP audio is AAC-family only — see the [codec matrix below](#audio-gateway-extensions). |
 
 **Limitations:**
-- Output only. RTMP input is not supported.
-- Only H.264 video and AAC audio are supported (no HEVC/VP9).
+- Video: H.264 over classic FLV and HEVC over Enhanced RTMP v2 (`hvc1`), passed through or re-encoded with `video_encode`. No VP9 or AV1.
+- Audio: AAC only. MP2, AC-3, E-AC-3 and AAC-LATM sources reach RTMP re-encoded through `audio_encode`; AC-4 and Opus-in-TS are never published.
+- To receive RTMP, use the [RTMP input](#rtmp-input).
 
 ### HLS Output
 

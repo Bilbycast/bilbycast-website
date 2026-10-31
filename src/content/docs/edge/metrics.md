@@ -240,11 +240,16 @@ members alike — not the active member alone. Per-member figures exist only as
 | `bilbycast_edge_flow_iat_avg_us` | gauge | Mean RTP inter-arrival time, microseconds. Emitted only when a sample exists |
 
 `packets_lost` is not one measurement. On an RTP input, and on an SRT input carrying
-RTP-over-TS, it counts gaps in the RTP sequence number. On a RIST input it is the larger of
+RTP-over-TS, it counts gaps in the RTP sequence number; an SRT input adds libsrt's
+too-late drops while it is on air. On a SMPTE 2022-7 RTP input it counts what the pair
+lost — a packet neither leg delivered, once its number leaves the merger's 1024-number
+window, or with `path_differential_ms` one a leg delivered only after the hold released past
+it — and a jump of a whole window or more counts nothing; up to and including v0.116.0
+such an input counted nothing, so it can now raise the `packet_loss` health reasons. On a RIST input it is the larger of
 that and the RIST legs' unrecovered-loss totals — the same losses
-`bilbycast_edge_rist_packets_lost_total` reports per leg. A raw-TS SRT input and a plain UDP
-input carry no wire sequence number to gap-check, so it stays at `0` on both no matter how
-bad the path is.
+`bilbycast_edge_rist_packets_lost_total` reports per leg. A raw-TS SRT input carries no wire
+sequence number to gap-check, so libsrt's too-late drops are all it can report, and a plain UDP
+input carries none either, so it stays at `0` there no matter how bad the path is.
 
 `packets_filtered` is the one to watch when a feed looks dead but the socket is receiving:
 a source-IP filter silently discarding an otherwise-healthy stream shows up here and

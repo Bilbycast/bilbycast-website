@@ -141,6 +141,7 @@ Source-codec rules:
 - **AAC** (LC / HE-AACv1 / HE-AACv2) rides through untouched.
 - **MP2 / AC-3 / E-AC-3** reach CMAF only via `audio_encode` — the edge decodes them and re-encodes to AAC. Without an `audio_encode` block the frames are discarded.
 - **Opus** is dropped; there is no CMAF path for it.
+- **Which track:** on a program carrying several audio streams, the output takes the first one it can publish — without `audio_encode`, the first AAC stream ahead of one it would have to re-encode — unless `audio_encode.source_audio_pid` pins another. A pin it cannot use (absent, or AC-4 / Opus-in-TS) falls back to that track with the Warning `audio_source_pid_not_found`. When the program carries no audio stream CMAF can publish, the output stays on the first one, publishes none of its audio, and raises the Warning `audio_codec_unpublishable` once per episode. Up to and including v0.116.0 the output took the first audio stream whatever its codec, ignored the pin, and said nothing. See [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](/edge/audio-gateway/#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes).
 - **MPEG-2 video** is dropped. CMAF video must be H.264 or HEVC.
 
 `audio_encode.codec` on a CMAF output accepts `aac_lc`, `he_aac_v1` or `he_aac_v2` only. A `transcode` block (channel shuffle / sample-rate / bit-depth) sits between the decoder and the encoder and is **rejected without `audio_encode`**, because on its own it would do nothing. See [Audio gateway](/edge/audio-gateway/).

@@ -90,7 +90,7 @@ The A/V quality watcher and the PCR-ingress sampler both file under `flow`. The 
 | info | `av_interleave_recovered` | Windowed p95 back under 900 ms. |
 | warning | `egress_pcr_accuracy_exceeded` | A UDP or RTP output that **re-encodes video** and runs `forward` egress pacing (auto-resolved or explicit) has a `pcr_trust` p99 above 30 ms (gate 4's operational tier 2) on two consecutive 5 s polls — judged only once the reservoir has rotated its first 1024 samples out, a few minutes after start, so an encoder's open never raises it. Advisory: one constant message naming `egress_pacing: "pcr"` as the fix and its latency cost; the edge changes no pacing. Output-scoped. Details carry `egress_pacing_effective`, `wire_pacing_tier`, `p99_us` / `p95_us` / `max_us`, `samples`, `threshold_us` (30000), `recover_below_us` (20000), `suggested_egress_pacing`, `estimated_added_latency_ms` (a floor) and `transcode_pcr`. See [Outputs that re-encode video](/edge/configuration/#outputs-that-re-encode-video). |
 | info | `egress_pcr_accuracy_recovered` | Clears the warning: `reason: "within_limit"` (p99 back under 20 ms) or `"no_longer_applies"` (the output restarted on `pcr` or `servo`, without its video re-encode, or as a type that is not UDP/RTP). Not raised when the flow itself restarts or the output moves to another flow. |
-| warning | `source_pcr_discontinuity` | Source PCR jumped by > 500 ms in either direction. |
+| warning | `source_pcr_discontinuity` | Source PCR jumped by > 500 ms in either direction. The flow's continuity fixer sets the discontinuity indicator on that PID's next PCR and leaves CC as the source sent it (up to and including v0.116.0 the first such step switched the fixer into renumbering every CC for the rest of the flow, which hid later loss). |
 | warning | `source_pts_discontinuity` | A per-PID PES PTS jumped by > 500 ms in either direction — forward and backward alike, same as PCR. |
 | warning | `source_dts_discontinuity` | A per-PID PES DTS jumped by > 500 ms in either direction (video reorder streams). |
 
@@ -133,19 +133,20 @@ The `flow` category additionally carries the PES-splice family (`pes_splice_comp
 |----------|---------|---------|
 | info | SRT input connected (mode=listener) | Listener accepted a caller connection |
 | info | SRT input connected (mode={mode}) | Caller connected to remote |
-| info | SRT input connected (mode=listener, redundant leg 1) | Redundant leg 1 accepted |
+| info | SRT input connected (mode={Mode}, redundant leg {n}) | A leg of a SMPTE 2022-7 input attached — on every attach of either leg, its first and each re-acquisition after a loss. `{Mode}` is that leg's configured mode (`Listener` / `Caller` / `Rendezvous`), as is `details.mode`. Details `{ mode, leg, local_addr, remote_addr, stream_id }`. Up to and including v0.116.0 only leg 1 raised it, once per connect cycle, reading `mode=listener` whatever its mode |
+| warning | SRT input 2022-7 leg {n} did not connect within 15s; still trying | A **listener** leg of a SMPTE 2022-7 input has had no caller 15 s into its first acquisition, once per leg. The leg keeps waiting and the other leg carries meanwhile; a caller leg reports through the connect-failure latch below instead. Details `{ mode, leg, local_addr, after_ms, other_leg }`, `other_leg` `connected` / `down`. Replaces `SRT input 2022-7 leg 2 did not connect within 15s; running single-leg` (details `{ mode, leg, reason, budget_ms }`) |
 | warning | SRT input disconnected, reconnecting | Peer disconnected, reconnection in progress |
-| critical | SRT input connection failed: {error} | Listener accept or caller connect failed |
+| critical | SRT input connection failed: {error} | Listener accept or caller connect failed. A caller latches it after 5 consecutive failed attempts, once per connect cycle. On a SMPTE 2022-7 input each caller leg latches its own (leg 2's attempts were silent up to and including v0.116.0), a **Warning** while the other leg is connected and Critical otherwise, with `leg` and `other_leg` (`connected` / `down`) in its details; a listener leg whose listener has closed for good raises it once and is not retried, while the other leg carries on |
 
 #### SRT Output
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
-| info | SRT output '{id}' connected | Peer connected (listener) or caller connected. On a SMPTE 2022-7 output this is leg 1 (`details.leg: 1`) |
-| info | SRT output '{id}' 2022-7 leg 2 connected | Leg 2 of a 2022-7 output connected, once per connect cycle. Its own message, so the manager's deduplication does not fold it into leg 1's row |
-| warning | SRT output '{id}' 2022-7 leg 2 did not connect within 15s; running single-leg | Leg 2 missed its 15 s connect budget and counts as gone for the rest of the cycle: leg 1, if still up, carries on alone and its loss reconnects the pair, which tries leg 2 again. If leg 1 was already lost while leg 2 was connecting, the pair reconnects at once. Details `{ mode, leg, reason, budget_ms }` |
-| warning | SRT output '{id}' disconnected | Peer disconnected or connection lost |
-| warning | SRT output '{id}' stale connection detected | No ACK received after timeout, re-accepting |
+| info | SRT output '{id}' connected | Peer connected (listener) or caller connected. On a SMPTE 2022-7 output this is leg 1 (`details.leg: 1`), raised on every attach of leg 1 — its first and each re-acquisition after a loss |
+| info | SRT output '{id}' 2022-7 leg 2 connected | Leg 2 of a 2022-7 output connected, on every attach of leg 2. Its own message, so the manager's deduplication does not fold it into leg 1's row |
+| warning | SRT output '{id}' 2022-7 leg {n} did not connect within 15s; still trying | Either leg of a SMPTE 2022-7 output, in either mode, has not accepted a caller or reached its peer 15 s into its first acquisition, once per leg. The leg never gives up: it keeps accepting or dialling while the other leg carries, and attaches whenever its peer comes. A re-acquisition after a loss raises no such Warning, since the leg-lost event has already said the leg is down. Details `{ mode, leg, after_ms, other_leg }`, `other_leg` `carrying` / `down`. Replaces `SRT output '{id}' 2022-7 leg 2 did not connect within 15s; running single-leg` (details `{ mode, leg, reason, budget_ms }`), raised up to and including v0.116.0 when leg 2 missed its one 15 s attempt per connect cycle |
+| warning | SRT output '{id}' disconnected | Peer disconnected or connection lost. On a SMPTE 2022-7 output, the moment a loss leaves neither leg attached; each leg is already being re-acquired on its own, and the output, still subscribed, discards what it receives without counting it as drops |
+| warning | SRT output '{id}' stale connection detected | A listener-mode output judges a new caller by the ACKs to what it sends: none within 3 s of the **first datagram it sent** reads as a stale connection (a caller that timed out its handshake and retried), which is closed and re-accepted. Not raised when it had nothing to send within 3 s of the accept — an input still silent, whose keepalives an SRT output holds back until its media has gone out raw TS — since no ACK could come; such a connection is kept, and a stale one breaks on the peer idle timeout (`peer_idle_timeout_secs`, 30 s by default) and raises `disconnected` instead. An output that transcodes, runs SMPTE 302M, filters a program, rewrites PIDs or delays its stream judges the ACKs to its own first datagrams, with the same 3 s. Up to and including v0.116.0 the 3 s ran from the accept and the keepalives were sent and ACKed, so a silent input's stale caller was caught within 3 s |
 | critical | SRT output '{id}' connection failed: {error} | Caller can't reach remote, or bind fails |
 
 Two SRT events carry a structured `details.error_code`:
@@ -175,17 +176,17 @@ A bond whose members open but never complete a handshake — every member pinned
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
-| warning | Redundant leg 1 lost | SRT redundant leg 1 stopped receiving |
-| warning | Redundant leg 2 lost | SRT redundant leg 2 stopped receiving |
-| critical | Both redundant legs lost | No data from either leg, will reconnect |
+| warning | Redundant leg 1 lost | Leg 1 of a SMPTE 2022-7 SRT input broke. It is re-acquired about 1 s later — a listener leg re-accepts on its listener, a caller leg re-dials with back-off (capped at 30 s) — while leg 2 carries on in the same merger. Details `{ leg, mode, other_leg }`, `other_leg` `connected` / `down`. Up to and including v0.116.0 a lost leg was not redialled while the other was up |
+| warning | Redundant leg 2 lost | The same for leg 2 |
+| critical | Both redundant legs lost | A loss left neither leg of a SMPTE 2022-7 SRT input connected. Each leg is being re-acquired on its own, and the input starts its merger, failover and format detection afresh. With `redundancy.path_differential_ms` set, what the merger already holds still goes out at its own release time, ahead of anything the legs bring back (at once and in order, should they bring back raw TS), and `buffered_hitless` is withdrawn until the legs bring RTP back. When both legs break together it fires once, on the second loss. A leg that connects and drops again while the other is down raises it on each flap (the manager folds the repeats into one row). Up to and including v0.116.0 it also fired when a lone leg 1 was lost after leg 2 had blipped, since leg 2 was never redialled |
 
 Three redundancy events carry a structured `details.error_code`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
-| warning | `redundancy_failover_mode` | SRT redundancy landed on **raw TS**, which has no shared cross-leg sequence — the input runs active-leg failover, not hitless 2022-7 dedup. Configure the publisher to send RTP/TS (SMPTE ST 2022-2) for true hitless behaviour. | `{ error_code, format, fix_hint }` |
+| warning | `redundancy_failover_mode` | SRT redundancy landed on **raw TS**, which has no shared cross-leg sequence — the input runs active-leg failover, not hitless 2022-7 dedup. Configure the publisher to send RTP/TS (SMPTE ST 2022-2) for true hitless behaviour. Raised when the pair settles its payload format as raw TS: once per pair, on the first datagram either leg delivers that is not NULL packets alone (data that is neither RTP nor TS counts as raw TS), and afresh after both legs are lost. A sender's idle keepalive settles nothing. Up to and including v0.116.0 a keepalive arriving first settled raw TS, raising this Warning on an RTP pair, and data that was neither RTP nor TS raised it on every datagram. With `redundancy.path_differential_ms` set, which holds and orders RTP/TS only, the details carry it and `fix_hint` says it does nothing on raw TS. | `{ error_code, format, fix_hint, path_differential_ms? }` |
 | warning | `redundancy_ssrc_mismatch` | The two RTP legs carry different SSRCs; 2022-7 needs byte-identical RTP including SSRC. | `{ error_code, mismatch_count }` |
-| warning | `redundancy_output_leg_lost` | A leg of a SMPTE 2022-7 **SRT output** failed a send — message `SRT output '{id}' 2022-7 leg {n} lost; down until the pair reconnects`, once per leg per connect cycle. That leg's stats disappear, and it returns only when the pair reconnects (once both legs are gone), so meanwhile the output runs unprotected on the other leg. After leg 1 is lost, leg 2 counts `packets_sent` / `bytes_sent`, so the output still reads `active`. **Output-scoped** (no `flow_id`), and distinct from the RTP input's flow-scoped `redundancy_leg_dropped`. `other_leg` is `carrying`, `connecting` (leg 2 still inside its 15 s budget; it takes over if it connects) or `down` (the pair reconnects). | `{ error_code, leg, mode, other_leg }` |
+| warning | `redundancy_output_leg_lost` | A leg of a SMPTE 2022-7 **SRT output** failed a send (its peer closed or the connection broke), or — on a keepalive the output held back, all it has while its input is silent — libsrt has given its socket up. Message `SRT output '{id}' 2022-7 leg {n} lost; reconnecting`. That leg's stats disappear, and the leg is re-acquired on its own about 1 s later (a caller leg then backs off up to 30 s) while the other leg carries on; its connected Info fires again when it attaches. While leg 1 is down, leg 2 counts `packets_sent` / `bytes_sent`, so the output still reads `active`. **Output-scoped** (no `flow_id`), and distinct from the RTP input's flow-scoped `redundancy_leg_dropped`. `other_leg` is `carrying` or `down`, decided from both legs' verdicts on the same payload, so two legs lost on one payload both read `down`, followed by `SRT output '{id}' disconnected`. | `{ error_code, leg, mode, other_leg }` |
 
 **Source**: `src/engine/input_srt.rs`, `src/engine/input_rtp.rs`, `src/engine/output_srt.rs`
 
@@ -199,7 +200,13 @@ Three redundancy events carry a structured `details.error_code`:
 | warning | RTMP publisher disconnected | Publisher disconnected |
 | critical | RTMP server error: {error} | Server bind or accept failure |
 
-**Source**: `src/engine/input_rtmp.rs`
+An RTMP **output** raises one event with a structured `details.error_code` for its audio track (the full output lifecycle catalogue is in the [in-repo reference](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md)):
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `audio_codec_unpublishable` | Message `RTMP output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which RTMP cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published`. The audio track the output is on is in a codec RTMP can neither carry nor re-encode — AC-4, Opus-in-TS, or on a build without `media-codecs` anything but AAC — which, pinned or not, happens only when the program carries no audio stream RTMP can publish. The source's audio is not published. **Once per episode**: not again while the output stays on that PID and codec, re-armed once it is on audio it can publish, kept across reconnects. Under `silent_fallback` the output lays silence meanwhile. Output-scoped. Up to and including v0.116.0 the output took the first audio stream whatever its codec and published no audio without a word. See [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](/edge/audio-gateway/#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes) | `{ error_code, audio_pid, stream_type, source_codec, flow_id }` — `source_codec` is `"AC-4"`, `"Opus"`, `"MP2"`, `"AC-3"`, `"E-AC-3"` or `"AAC-LATM"` |
+
+**Source**: `src/engine/input_rtmp.rs`, `src/engine/output_rtmp.rs`
 
 ---
 
@@ -242,6 +249,7 @@ CMAF and low-latency CMAF output lifecycle plus manifest / segment upload failur
 | warning | CMAF output '{id}': LL chunk enqueue full (seg {n}) — aborting | The low-latency chunk queue filled; the in-flight segment upload is aborted. |
 | warning | CMAF output '{id}': m3u8 / mpd upload failed: {error} | Manifest publish failed. Separate events exist for the LL variants (`LL m3u8` / `LL mpd`). |
 | warning | CMAF output '{id}': thumbnail capture failed ({error}); the scrub preview will be missing | Thumbnail sheet capture failed — one warning per output, not one per tick. |
+| warning | CMAF output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which CMAF cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published | The audio track the output is on is AC-4 or Opus-in-TS (or, on a build without `media-codecs`, anything but AAC), which happens only when the program carries no audio stream CMAF can publish. **Once per episode.** Unlike most rows here it carries `error_code: "audio_codec_unpublishable"`, with `details.audio_pid`, `details.stream_type`, `details.source_codec` and `details.flow_id`; output-scoped. Up to and including v0.116.0 the output published no audio without a word. |
 
 **Source**: `src/engine/cmaf/mod.rs`, `src/engine/cmaf/thumbnails.rs`
 
@@ -300,6 +308,7 @@ Bind failures surface under the unified `port_conflict` / `bind_failed` categori
 | info | WHEP viewer disconnected | WHEP viewer left an output |
 | warning | WebRTC session failed: {error} | ICE failure, DTLS error, or session creation error |
 | warning | WebRTC session creation failed: {error} | Output session could not be created |
+| warning | WebRTC output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which WebRTC cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published | `error_code: "audio_codec_unpublishable"`. The audio track the output is on is AC-4, which nothing here decodes, or on a build without `media-codecs` anything but Opus and AAC — which happens only when the program carries no audio stream WebRTC can publish. **Once for the output**, not per WHEP viewer or WHIP connection, once per episode, and never on a `video_only` output. Under `silent_fallback` the output lays silence meanwhile; up to and including v0.116.0 it said nothing, and AC-4 frames held the silence off. Output-scoped, details `{ error_code, audio_pid, stream_type, source_codec, flow_id }` |
 
 **Source**: `src/engine/input_webrtc.rs`, `src/engine/output_webrtc.rs`
 
@@ -320,7 +329,13 @@ Audio encoder lifecycle for the compressed-audio egress on RTMP, HLS, and WebRTC
 | critical | output '{id}': audio_encode is set but the flow input cannot carry TS audio (PCM-only source) | `compressed_audio_input` is false (e.g. ST 2110-30, `rtp_audio` input) |
 | critical | output '{id}': audio_encode encoder spawn failed: {error} | `AudioEncoder::spawn` failed for any other reason — the in-process encoder refused to initialise for this codec / sample-rate / channel layout. |
 
-**Source**: `src/engine/audio_encode.rs`, `src/engine/output_rtmp.rs`, `src/engine/output_hls.rs`, `src/engine/output_webrtc.rs`.
+A pinned audio track that cannot be used raises a Warning under category **`flow`**, not `audio_encode`:
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `audio_source_pid_not_found` | `audio_encode.source_audio_pid` names a PID the output or input cannot use — absent from the PMT, not audio, or a codec it cannot decode or publish — so it fell back to another track. Raised by the TS transcode replacers, and by the RTMP, CMAF, WebRTC and HLS outputs, which honour the pin after v0.116.0 (always output-scoped there, with a message naming the track they fell back to). Once per distinct (pinned, actual) pair, re-armed when the pin reappears; a WebRTC output raises it once, not per viewer. See [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](/edge/audio-gateway/#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes) | `{ error_code, pinned_pid, actual_pid, actual_stream_type }` |
+
+**Source**: `src/engine/audio_encode.rs`, `src/engine/output_rtmp.rs`, `src/engine/output_hls.rs`, `src/engine/output_webrtc.rs`, `src/engine/transcode_engage.rs`.
 
 ---
 
@@ -787,16 +802,16 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 |----------|-------------|
 | `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, A/V quality + source-clock discontinuities, PES splice, MXL, multiviewer compositor) |
 | `bandwidth` | Per-flow bandwidth monitoring (alarm, block, recovery) |
-| `srt` | SRT input and output connection state, including a 2022-7 output's leg 2 and native SRT bonding members |
+| `srt` | SRT input and output connection state, including each SMPTE 2022-7 leg attaching or slow to connect (inputs and outputs) and native SRT bonding members |
 | `redundancy` | SMPTE 2022-7 dual-leg status, including a 2022-7 SRT output's lost leg |
-| `rtmp` | RTMP publisher connections |
+| `rtmp` | RTMP publisher connections, and an RTMP output's `audio_codec_unpublishable` |
 | `rtsp` | RTSP input state |
 | `hls` | HLS output failures |
-| `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures |
+| `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures, and `audio_codec_unpublishable` |
 | `rtp` | RTP input bind and lifecycle |
 | `udp` | UDP input bind and lifecycle |
 | `rist` | RIST Simple Profile input/output connection lifecycle |
-| `webrtc` | WHIP/WHEP session lifecycle |
+| `webrtc` | WHIP/WHEP session lifecycle, and `audio_codec_unpublishable` |
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
 | `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`) |
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |

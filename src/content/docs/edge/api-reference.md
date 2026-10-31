@@ -1079,9 +1079,10 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `packets_lost` | integer | Packets lost (sequence gaps) |
 | `packets_filtered` | integer | Packets dropped by ingress filters |
 | `packets_recovered_fec` | integer | Packets rebuilt by SMPTE 2022-1 FEC. On a single-leg RTP input, only those published: a rebuilt packet ahead of every packet already published (a late repair is withheld and not counted). On a 2022-7 RTP input, every packet an FEC datagram on either leg rebuilds, whether or not the other leg delivered it, and not those rebuilt as a media packet arrives |
-| `srt_stats` | object/null | SRT leg 1 stats (if SRT input) |
-| `srt_leg2_stats` | object/null | SRT leg 2 stats (if redundancy enabled) |
+| `srt_stats` | object/null | The active input's SRT stats when it is a single-socket SRT input, or its leg 1's when it is a SMPTE 2022-7 one. Present while that socket is connected, absent while it reconnects |
+| `srt_leg2_stats` | object/null | Leg 2's (the `redundancy` leg's) SRT stats, when the active input is a SMPTE 2022-7 SRT input whose leg 2 is connected. Each leg is acquired and re-acquired on its own, so either block can be present without the other |
 | `redundancy_switches` | integer | SMPTE 2022-7 leg switch count |
+| `buffered_hitless` | object/absent | Buffered SMPTE 2022-7 merger stats, on an RTP or SRT 2022-7 input whose `redundancy.path_differential_ms` is set — on SRT only while its legs carry RTP, from the first packet that shows it until both legs are lost, and never on raw TS. `{ max_path_diff_ms, current_path_diff_us, max_observed_path_diff_us, packets_emitted, packets_via_both_legs, packets_via_leg1_only, packets_via_leg2_only, dups_dropped, gap_lost, late_dropped, buffer_overflow_dropped, stream_resets, failovers, current_buffer_depth, ssrc_mismatch, leg1_packets_received, leg2_packets_received, leg1_health, leg2_health }`. The flow's **active** input's merger only, read live: absent while the active input has none or is off air (a passive 2022-7 input's merger shows under no other input), and on a PID-bus assembled flow only while the assembly plays from that input. Up to and including v0.116.0 a passive RTP input's merger showed under whichever input was active, and one removed or edited in place left its last values on the flow. Leg health is 0 unknown, 1 up, 3 down (no packet on that leg for 1 s). `max_observed_path_diff_us` is measured between two copies that meet within the hold, so it never reads above the hold: a reading near it says the hold is too small to measure the skew. An SRT input checks no SSRC, so its `ssrc_mismatch` stays 0 |
 
 **Output stats fields:**
 
@@ -1091,15 +1092,15 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `output_name` | string | Display name |
 | `output_type` | string | Output variant — a free-form string such as `udp`, `rtp`, `rtp_audio`, `srt`, `rist`, `rtmp`, `webrtc`, `hls`, `cmaf`, `bonded`, `display`, or `st2110_20` / `st2110_23` / `st2110_30` / `st2110_31` / `st2110_40` (plus `mxl_*` / `sdi` under their features). A WHIP push reports as `webrtc`; there is no `rtsp` or `whip` output |
 | `state` | string | Connection state |
-| `packets_sent` | integer | Total packets sent. On a SMPTE 2022-7 SRT output, which sends every packet on both legs, each is counted once: by leg 1, or by leg 2 once leg 1 has been lost, so a pair carried by leg 2 alone still counts |
+| `packets_sent` | integer | Total packets sent. On a SMPTE 2022-7 SRT output, which sends every packet on both legs, each is counted once: by leg 1 while it is connected, else by leg 2, so a pair carried by leg 2 alone still counts. Around a handoff a few packets can be counted twice or not at all, bounded by the legs' queues (stats only) |
 | `bytes_sent` | integer | Total bytes sent, counted as `packets_sent` is |
 | `bitrate_bps` | integer | Current bitrate in bits/sec |
 | `packets_dropped` | integer | Packets dropped (channel full) |
 | `fec_packets_sent` | integer | FEC packets generated: one per column and per row of the matrix (columns and rows 0-7 only, no row FEC when `columns` is 1, and none for a column or row holding a sequence number never sent or datagrams of mixed sizes) |
 | `wire_pacing_tier` | string | Active wire-pacing release tier — `"so_txtime"`, `"clock_nanosleep_fifo"`, or `"clock_nanosleep"`. Set once at output startup. Default is `"clock_nanosleep_fifo"`; the SO_TXTIME tier activates only when `BILBYCAST_ENABLE_TXTIME=1` is set on the edge process AND the kernel accepts the setsockopt (requires `CAP_NET_ADMIN`). See [Wire-Time Precision](/edge/wire-pacing/). Absent on outputs that don't own a UDP socket directly (SRT, RIST, RTMP, HLS, CMAF, WebRTC). |
 | `wire_pacing_late` | integer | Datagrams the kernel rejected as late on the SO_TXTIME path (target tx time landed in the past — `EOVERFLOW`). Always 0 on userspace-sleep release paths (no errqueue). |
-| `srt_stats` | object/null | SRT stats of a single-socket SRT output, or of leg 1 of a SMPTE 2022-7 one. Present while the socket is connected; absent while it reconnects, and on a 2022-7 output from the moment leg 1 is lost until the pair reconnects |
-| `srt_leg2_stats` | object/null | Leg 2's (the `redundancy` leg's) SRT stats on a SMPTE 2022-7 SRT output. Present while leg 2 is connected; absent before it connects, and from the moment it is lost until the pair reconnects |
+| `srt_stats` | object/null | SRT stats of a single-socket SRT output, or of leg 1 of a SMPTE 2022-7 one. Present while the socket is connected; absent while it reconnects, and on a 2022-7 output from the moment leg 1 is lost until that leg reconnects |
+| `srt_leg2_stats` | object/null | Leg 2's (the `redundancy` leg's) SRT stats on a SMPTE 2022-7 SRT output. Present while leg 2 is connected; absent before it connects, and from the moment it is lost until that leg reconnects |
 
 **SRT leg stats fields:**
 

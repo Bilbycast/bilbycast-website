@@ -515,7 +515,7 @@ an ffmpeg subprocess for the affected codecs. Outputs without
 
 | Output | Allowed `codec` | Default | Notes |
 |---|---|---|---|
-| `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. |
+| `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. Each re-encoded tag (`silent_fallback` silence included) carries the raw access unit, the encoder's ADTS header removed, and the sequence header names the format that header does — for `he_aac_v1` / `he_aac_v2` its core: half the output rate (24 kHz for a 48 kHz output) and, for v2, mono, with SBR / PS signalled implicitly, as passthrough of an HE-AAC source always announced it. Up to and including v0.116.0 every re-encoded tag carried its 7-byte ADTS header, which ffmpeg read past and GStreamer's faad decoded nothing from, and an HE-AAC sequence header named the output rate and channels. The same-codec fast path, which passes the source's frames through, was never affected. |
 | `hls` | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | HLS-TS supports MP2 (stream type 0x04) and AC-3 (private_stream_1) so long as the consumer's player does. |
 | `cmaf` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | AAC family only — MP2 / AC-3 / Opus are rejected. A `transcode` block on a CMAF output is rejected unless `audio_encode` is also set. Full field table: [CMAF Output](/edge/configuration/#cmaf-output). |
 | `webrtc` | `opus` | `opus` | WebRTC realistically only does Opus. Validation also rejects `audio_encode` + `video_only=true` (an audio MID must be negotiated in SDP). |
@@ -549,7 +549,7 @@ carries:
 
 | Field | Meaning |
 |---|---|
-| `source_audio_pid` | Pin the transcoder to a specific audio PID (`0x0010`..=`0x1FFE`). Unset locks onto the **first** audio elementary stream in the active program's PMT. A configured PID that is absent from the live PMT falls back to that first-match behaviour and logs `audio_source_pid_not_found` rather than failing. The in-place transcoder is single-program, so producing two language variants needs one output per track, each with its own `program_number` filter and `source_audio_pid`. |
+| `source_audio_pid` | Pin the transcoder to a specific audio PID (`0x0010`..=`0x1FFE`). Unset locks onto the **first** audio elementary stream in the active program's PMT. A configured PID that is absent from the live PMT falls back to that first-match behaviour and raises the Warning `audio_source_pid_not_found` rather than failing. The in-place transcoder is single-program, so producing two language variants needs one output per track, each with its own `program_number` filter and `source_audio_pid`. RTMP, CMAF, WebRTC and HLS outputs, which pick their track themselves, honour the pin too — see [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes) below. |
 | `silent_fallback` | Inject a continuous zero-filled PCM track whenever the source has no audio PID, or stops delivering audio mid-stream. Default `false`. Required by ingest services that gate their live-preview thumbnailer on the presence of audio, and by segmenters (WebRTC / CMAF-LL) that expect monotonic audio timestamps per segment. |
 | `opus_vbr_mode` | `"vbr"` (constrained VBR) or `"cbr"`. Unset uses libopus's default (VBR). Opus only. |
 | `opus_fec` | In-band forward error correction for the previous frame. Default off. Opus only. |
@@ -566,6 +566,24 @@ subprocess** backend, where they become `-vbr` / `-fec` / `-dtx` /
 default build uses for Opus is opened with codec / sample rate /
 channels / bitrate only, so on every published release artefact the
 `opus_*` fields validate but change nothing.
+
+### Which audio track an RTMP, CMAF, WebRTC or HLS output takes
+
+These four outputs pick their audio track themselves rather than through the TS replacer, with or without `audio_encode`, and honour `audio_encode.source_audio_pid` when it is set:
+
+- **RTMP, CMAF and WebRTC** take, unpinned, the program's **first audio stream they can publish**, and the first audio stream of all only when the program carries none. Without `audio_encode` the first stream they pass through comes first — AAC on RTMP and CMAF, Opus-in-TS on WebRTC — so an RTMP output on an ATSC program carrying AC-3 then AAC publishes the AAC; a program with none falls to the first stream they could publish through the block. A pin is taken when it names a track the output can publish; otherwise (absent from the PMT, not audio, or a codec the output cannot publish) the output takes the track it would take unpinned, and a later PMT that carries the pin moves it back.
+- **HLS** takes, unpinned, the **last** audio stream it can decode, as before. A pin is taken when it names one it can decode; otherwise (absent, or AC-4 / DTS) it falls back to that last one. This is the in-process remux every release build runs; the ffmpeg-subprocess fallback of a build without `media-codecs` still takes ffmpeg's own choice and ignores the pin.
+
+What each can publish: **RTMP and CMAF** carry AAC as it is, and MP2 / AC-3 / E-AC-3 / AAC-LATM re-encoded through `audio_encode` (on a `media-codecs` build; without one, AAC only) — never Opus-in-TS or AC-4. **WebRTC** carries Opus-in-TS, and AAC (plus MP2 / AC-3 / E-AC-3 / AAC-LATM on a `media-codecs` build) re-encoded to Opus through `audio_encode` — never AC-4.
+
+Two Warnings say what happened:
+
+- **`audio_source_pid_not_found`** (category `flow`, output-scoped, details `{ error_code, pinned_pid, actual_pid, actual_stream_type }`) whenever the output is on a track other than its pin, with a message naming the track it fell back to. Once per (pinned, actual) pair for the output's lifetime, re-armed when the pin reappears: a WebRTC output raises it once, not per WHEP viewer or WHIP reconnect, and an RTMP output not again on a reconnect.
+- **`audio_codec_unpublishable`** (category `rtmp`, `cmaf` or `webrtc`, output-scoped, details `{ error_code, audio_pid, stream_type, source_codec, flow_id }`) when an RTMP, CMAF or WebRTC output is on a track it cannot publish. Pinned or not, that happens only when the program carries no audio stream the output can publish, which leaves it on the program's first. The output publishes none of the source's audio. Once per episode — not again while it stays on that PID and codec — and on WebRTC once for the output, not per viewer, and never on a `video_only` output. Under `silent_fallback`, RTMP and WebRTC now lay silence on such a track, which an AC-4 track used to hold off. A pin on that first stream raises this Warning alone; a pin on another stream raises `audio_source_pid_not_found` as well.
+
+:::caution[Upgrading from v0.116.0 or earlier: check each pin]
+Up to and including v0.116.0 these four outputs ignored `source_audio_pid`: RTMP, CMAF and WebRTC published the program's first audio stream whatever its codec — so an MPTS whose first audio track is AC-4 (or, on RTMP and CMAF, Opus-in-TS) published no audio, without a word — and HLS the last one it could decode. An output that carries a pin now publishes the pinned track, so check before upgrading that each pin names the track you want.
+:::
 
 ### Same-codec passthrough fast path (RTMP only)
 

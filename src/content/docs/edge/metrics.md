@@ -366,7 +366,7 @@ gaps rather than reporting zero. PCR is split across two families — there is n
 |--------|------|-------------|
 | `bilbycast_edge_tr101290_ts_packets_total` | counter | TS packets examined — the denominator for every rate below |
 | `bilbycast_edge_tr101290_sync_byte_errors_total` | counter | `0x47` sync-byte mismatches |
-| `bilbycast_edge_tr101290_cc_errors_total` | counter | Continuity-counter discontinuities |
+| `bilbycast_edge_tr101290_cc_errors_total` | counter | Continuity-counter discontinuities. A break signalled by `discontinuity_indicator` — on the packet, or on an adaptation-field-only packet just ahead of it — is not counted (ISO/IEC 13818-1 §2.4.3.4), nor is a duplicate packet. Up to and including v0.116.0 a signalled break was, so a Take whose first packet on a PID carries the switch's DI, and an input restart within a running flow, now count one fewer per such PID |
 | `bilbycast_edge_tr101290_pat_errors_total` | counter | PAT errors |
 | `bilbycast_edge_tr101290_pmt_errors_total` | counter | PMT errors |
 | `bilbycast_edge_tr101290_pid_errors_total` | counter | PID errors — an advertised ES PID is absent |

@@ -517,7 +517,7 @@ an ffmpeg subprocess for the affected codecs. Outputs without
 |---|---|---|---|
 | `rtmp` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | FLV only carries AAC. With the default `fdk-aac` feature, all AAC profiles are encoded in-process. Without it, HE-AAC v2 requires an ffmpeg build with `libfdk_aac`. Each re-encoded tag (`silent_fallback` silence included) carries the raw access unit, the encoder's ADTS header removed, and the sequence header names the format that header does — for `he_aac_v1` / `he_aac_v2` its core: half the output rate (24 kHz for a 48 kHz output) and, for v2, mono, with SBR / PS signalled implicitly, as passthrough of an HE-AAC source always announced it. Up to and including v0.116.0 every re-encoded tag carried its 7-byte ADTS header, which ffmpeg read past and GStreamer's faad decoded nothing from, and an HE-AAC sequence header named the output rate and channels. The same-codec fast path, which passes the source's frames through, was never affected. |
 | `hls` | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | HLS-TS supports MP2 (stream type 0x04) and AC-3 (private_stream_1) so long as the consumer's player does. |
-| `cmaf` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | AAC family only — MP2 / AC-3 / Opus are rejected. A `transcode` block on a CMAF output is rejected unless `audio_encode` is also set. Full field table: [CMAF Output](/edge/configuration/#cmaf-output). |
+| `cmaf` | `aac_lc`, `he_aac_v1`, `he_aac_v2` | `aac_lc` | AAC family only — MP2 / AC-3 / Opus are rejected. A `transcode` block on a CMAF output is rejected unless `audio_encode` is also set. Each re-encoded sample is the raw access unit and the track's `esds` names what the encoder's ADTS header does — for HE-AAC its core rate (also the track timescale) and, for v2, mono, SBR / PS signalled implicitly. Up to and including v0.116.0 every sample kept its 7-byte ADTS header inside the `mdat` and the track named the output rate under AAC-LC. Full field table: [CMAF Output](/edge/configuration/#cmaf-output). |
 | `webrtc` | `opus` | `opus` | WebRTC realistically only does Opus. Validation also rejects `audio_encode` + `video_only=true` (an audio MID must be negotiated in SDP). |
 | `srt`, `rist`, `udp`, `rtp` (TS outputs) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` | `aac_lc` | `TsAudioReplacer` rewrites the PMT stream_type in place and leaves video / other PIDs untouched. Mutually exclusive with `transport_mode: audio_302m`. **Opus is not in the allowed set on any of the four** — the validator refuses `codec: "opus"` on a TS output; use a `webrtc` output for Opus egress. |
 
@@ -539,7 +539,10 @@ without touching the running flows.
 If `sample_rate` is unset, the encoder uses the input PCM sample rate.
 **Opus is always carried at 48 kHz on the wire** regardless of
 `sample_rate`, per RFC 7587. If `channels` is unset, the encoder uses
-the input channel count; when set, the ceiling is per codec (see the
+the input channel count, mixed down to the codec's most when the codec takes
+fewer (AC-3 to 5.1, the second surround pair folded into the first at
+−3 dB; MP2 to stereo; WebRTC's Opus to stereo); when set, the ceiling is
+per codec (see the
 [validation quick reference](#validation-rules-quick-reference)).
 
 ### Other `audio_encode` fields
@@ -567,11 +570,21 @@ default build uses for Opus is opened with codec / sample rate /
 channels / bitrate only, so on every published release artefact the
 `opus_*` fields validate but change nothing.
 
+### AAC layouts, wider sources and configuration changes
+
+- **7.1 targets.** An `aac_lc` target at `channels: 8` is written as channel configuration 0 with the program_config_element (PCE) of its layout — centre, front pair, surround pair, rear pair, LFE — in every frame (9 bytes a frame), and CMAF and RTMP carry that PCE in the track configuration too. fdk-aac's 7.1 mode is channel configuration 12, which an ADTS header cannot hold, so up to and including v0.116.0 every 7.1 AAC target (TS outputs, HLS, CMAF, RTMP) announced 4.0 with no layout. ffmpeg decodes it as 7.1, each input channel on its own output channel; receivers that followed the 4.0 header now get eight channels.
+- **7.1 sources.** The AAC decoders hand out all eight channels of a 7.1 source, which the channel stage converts to what each output carries: an AAC target with no `channels` keeps 7.1, AC-3 is mixed down to 5.1 and MP2 to stereo. Up to and including v0.116.0 the decoder mixed anything wider than six channels down to 5.1, and an AC-3 or MP2 target with no `channels` lost the audio of a 7.1 E-AC-3 source.
+- **PCE-signalled sources** (channel configuration 0 — ISDB-T 1seg, such as NHK's service). Such a source names its layout in a PCE that only some frames carry. RTMP and CMAF passthrough, and the replay MP4 export, copy the PCE into the track configuration, and a re-encode on RTMP, CMAF or WebRTC builds its decoder from it. RTMP, CMAF and WebRTC hold the audio back until the first frame that carries it (about half a second on NHK) and publish every frame from there; with none within 5 s of audio they raise the Warning `aac_channel_layout_missing` (once per wait) and go on holding. Up to and including v0.116.0 RTMP and CMAF published a two-byte configuration naming channel configuration 0 and no layout, which ffmpeg, GStreamer and faad refuse to open, and a re-encode refused the source.
+- **Sources wider than stereo on RTMP and WebRTC.** With `audio_encode`, a 5.1 or 7.1 AAC source is decoded whole and goes through the channel stage, as an AC-3 one does: on RTMP kept at its layout or converted to `channels` / the `transcode` block's; on WebRTC mixed down to stereo for its Opus stream unless a count is set (an MP2, AC-3 or E-AC-3 source too, which used to open a multichannel Opus encoder no WebRTC peer reads). Up to and including v0.116.0 both outputs refused a wider AAC source with only a log line and published no audio.
+- **A source whose AAC configuration changes** (a switch to another feed). An RTMP output sends a new sequence header with the first frame of the new configuration, as FLV publishers do; RTMP, CMAF and WebRTC re-encodes rebuild their decoder for it. Each frame is taken under the configuration it carries. A CMAF passthrough output cannot follow such a change, since its init is committed, and raises the Warning `aac_config_changed` (category `cmaf`, once per change); restart it, or set `audio_encode`, where sources of different configurations are switched. Up to and including v0.116.0 an RTMP output announced the first configuration for the whole connection (a 44.1 kHz source switched in after a 48 kHz one decoded 9 % fast) and the re-encodes kept their first decoder.
+- **Opus as a source.** An `audio_encode` on a TS output or input now re-encodes a single mono or stereo Opus stream (the "Opus" registration descriptor, with no Opus extension descriptor or one naming channel configuration 1 or 2) to the configured codec, so an ingress `audio_encode` on a WHIP or WHEP input, whose audio is always Opus, now does what it says. Multistream Opus still passes through with `audio_transcode_source_not_found` (reason `codec_not_replaceable`). Up to and including v0.116.0 every Opus stream passed through that way.
+
 ### Which audio track an RTMP, CMAF, WebRTC or HLS output takes
 
 These four outputs pick their audio track themselves rather than through the TS replacer, with or without `audio_encode`, and honour `audio_encode.source_audio_pid` when it is set:
 
 - **RTMP, CMAF and WebRTC** take, unpinned, the program's **first audio stream they can publish**, and the first audio stream of all only when the program carries none. Without `audio_encode` the first stream they pass through comes first — AAC on RTMP and CMAF, Opus-in-TS on WebRTC — so an RTMP output on an ATSC program carrying AC-3 then AAC publishes the AAC; a program with none falls to the first stream they could publish through the block. A pin is taken when it names a track the output can publish; otherwise (absent from the PMT, not audio, or a codec the output cannot publish) the output takes the track it would take unpinned, and a later PMT that carries the pin moves it back.
+- **A PMT update that drops every audio stream** leaves an output that demuxes the TS (RTMP, CMAF, WebRTC, the local display, SDI) on none: it stops demuxing the old PID, and a later PMT bringing audio back is selected afresh by the same rule. The same goes for the video and SCTE-35 PIDs. Only a PMT section whose CRC checks counts, so one damaged in transit changes nothing. Up to and including v0.116.0 the output stayed on the dropped PID and demuxed whatever still came on it.
 - **HLS** takes, unpinned, the **last** audio stream it can decode, as before. A pin is taken when it names one it can decode; otherwise (absent, or AC-4 / DTS) it falls back to that last one. This is the in-process remux every release build runs; the ffmpeg-subprocess fallback of a build without `media-codecs` still takes ffmpeg's own choice and ignores the pin.
 
 What each can publish: **RTMP and CMAF** carry AAC as it is, and MP2 / AC-3 / E-AC-3 / AAC-LATM re-encoded through `audio_encode` (on a `media-codecs` build; without one, AAC only) — never Opus-in-TS or AC-4. **WebRTC** carries Opus-in-TS, and AAC (plus MP2 / AC-3 / E-AC-3 / AAC-LATM on a `media-codecs` build) re-encoded to Opus through `audio_encode` — never AC-4.
@@ -595,6 +608,17 @@ behaviour for "I want to confirm the config schema accepts
 audio_encode but I don't actually need to re-encode anything." Any
 field override (`bitrate_kbps`, `sample_rate`, `channels`) forces the
 full decode/encode chain.
+
+An HE-AAC source carries the AAC-LC profile in its ADTS header too (SBR /
+PS are signalled implicitly), so the source is told by what its first frame
+decodes to — twice its header's rate, or stereo from a mono core — and an
+HE-AAC source is re-encoded to the AAC-LC the block asks for, at the cost of
+a decode and an encode. The judgement is made again whenever the source's
+AAC configuration changes (a switch to another feed); a switch from an
+AAC-LC feed to an HE-AAC one leaves the fast path for the re-encode, and up
+to a frame of audio may be garbled at that switch. Up to and including
+v0.116.0 an HE-AAC source went out as HE-AAC under a config asking for
+AAC-LC.
 
 HLS does **not** implement this fast path because we'd have to inspect
 the source TS to detect AAC-LC vs HE-AAC, which requires PMT + audio
@@ -621,7 +645,13 @@ category event to the manager (Critical severity) when:
   mono/stereo. Two per-output exceptions hold on every build: an RTMP
   output discards an Opus source outright, and HLS refuses
   `codec: opus` as a target. The output drops audio
-  and emits the failure event so the operator sees the problem.
+  and emits the failure event so the operator sees the problem. The
+  only AAC profile refused is one whose ADTS header is not AAC-LC
+  (AAC-Main, SSR, LTP): HE-AAC, multichannel and PCE-signalled sources
+  are decoded. What the WebRTC Opus re-encode still refuses (a reserved
+  sampling-frequency index, a configuration its decoder will not open)
+  raises a Warning `audio_encode` event; up to and including v0.116.0
+  it was a log line only.
 - **`compressed_audio_input` is false**: the flow input cannot carry
   TS audio (e.g. ST 2110-30, `rtp_audio` are PCM-only). The output
   drops audio.
@@ -766,7 +796,7 @@ the running flows.
 |---|---|
 | `transcode.sample_rate` | 32000, 44100, 48000, 88200, 96000 |
 | `transcode.bit_depth` | 16, 20, 24 |
-| `transcode.channels` | 1..=16 |
+| `transcode.channels` | 1..=16; beside an AAC `audio_encode`, 1..=6 or 8 for `aac_lc` / `he_aac_v1` and exactly 2 for `he_aac_v2` |
 | `transcode.channel_map.length` | must equal `transcode.channels` |
 | `transcode.channel_map[i][j]` | must be `< input.channels` |
 | `transcode.channel_map_with_gain.length` | must equal `transcode.channels` |
@@ -793,11 +823,13 @@ the running flows.
 | `audio_encode.codec` (SRT / RIST / UDP / RTP) | `aac_lc`, `he_aac_v1`, `he_aac_v2`, `mp2`, `ac3` |
 | `audio_encode.bitrate_kbps` | 16..=512 |
 | `audio_encode.sample_rate` | 8000, 16000, 22050, 24000, 32000, 44100, 48000 |
-| `audio_encode.channels` | per codec: `aac_lc` 1..=8; `ac3` 1..=6; `he_aac_v1` / `opus` / `mp2` 1..=2; `he_aac_v2` exactly 2 (Parametric Stereo — mono is rejected); `s302m` (accepted only on a PCM **input**'s `audio_encode`) 2, 4, 6 or 8 |
+| `audio_encode.channels` | per codec: `aac_lc` 1..=6 or 8 (7 is refused: fdk-aac has no 6.1 mode); `ac3` 1..=6; `he_aac_v1` / `opus` / `mp2` 1..=2; `he_aac_v2` exactly 2 (Parametric Stereo — mono is rejected); `s302m` (accepted only on a PCM **input**'s `audio_encode`) 2, 4, 6 or 8 |
 | `audio_encode.source_audio_pid` | `0x0010`..=`0x1FFE` |
 | `audio_encode.opus_vbr_mode` | `"vbr"`, `"cbr"` (rejected on a non-Opus codec, as are the other three `opus_*` fields) |
 | `audio_encode.opus_frame_duration_ms` | 5, 10, 20, 40, 60 |
 | `audio_encode` on WebRTC + `video_only=true` | rejected (audio MID required in SDP) |
+
+**One exception: AAC channel counts on a whole config are repaired, not refused.** An edit that names an input or output with `audio_encode.channels: 7` and `aac_lc`, or a `transcode` block's `channels` of 7 or 9–16 beside `aac_lc` / `he_aac_v1` (other than 2 beside `he_aac_v2`), is refused. Releases up to and including v0.116.0 accepted those counts and then carried no audio, with a Critical `audio_encode` event, so a whole config that still holds one — at load, on `POST /api/v1/config/reload`, `PUT /api/v1/config` or a manager `update_config` push — is repaired instead: 7 becomes 6, 9–16 become 8, HE-AAC v2 becomes 2. The load and the reload write the repair back to `config.json`, and each repair raises a Warning `config` event (`aac_channels_repaired`, with `details.field`, `.codec`, `.was` and `.now`). Check that the count it sets is the one you want.
 
 ---
 

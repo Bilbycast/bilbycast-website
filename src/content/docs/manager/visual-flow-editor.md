@@ -52,6 +52,8 @@ Nodes older than **edge v0.101.0** are refused, with a message saying so. Pushin
 
 A node that has simply never reported in is **not** refused — it is accepted and held pending, which is the ordinary offline case.
 
+A deployment is also judged against the version-gated fields the input and output routes check (an SRT input's Path differential, interlaced scan, DVB AC-3 signalling — see [Config Reconciliation](/manager/config-reconciliation/#version-gated-fields)) **when it is dispatched**: by the deploy itself, and by the retry of one accepted while its unit was away (reconnect reconciliation, the 300 s periodic retry, or an operator's Retry). The judge is what the unit reports over its current connection, on this manager instance or on the peer holding its socket. Refused, the deployment moves to **failed** with a Warning `visual_deployment` event, `Visual deployment not sent: {reason}`, and an operator's Retry judges it again. A unit that is offline, or connected and not yet reported, holds the deployment at **pending** with no event: its persisted health is never taken as its word, since it may predate an upgrade, so a Retry or a reconcile while it is away no longer fails a deployment it would accept once upgraded. Under HA the editor's validation reads the same capabilities as the other routes, so a unit connected to another instance is refused at **Preview** rather than passed.
+
 ## Master graphs
 
 A master graph puts several units on one canvas and lets you wire transport between them.

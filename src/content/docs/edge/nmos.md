@@ -101,6 +101,14 @@ node that refused it: a Warning event on category `nmos` with
 `"receiver_activation_refused"`, `resource_id`, `entity_id` and the
 validator's `error` string.
 
+An accepted receiver activation restarts the flow from the configuration as
+it stands once the old run has stopped, so a PID-bus plan swap saved during
+the restart is never left beside a flow running another plan. If the flow
+no longer resolves after the change, the activation reports the failure — a
+Critical `nmos` event (`action: "receiver_activation_failed"`) and HTTP 500
+— as a failed restart does. Up to and including v0.116.0 such an
+activation left the flow stopped and raised an "activated" event.
+
 ## IS-08 audio channel mapping
 
 The IS-08 endpoints expose every ST 2110-30/-31 audio input and output

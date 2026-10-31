@@ -69,7 +69,7 @@ The display path also relies on KMS atomic-commit zero-copy via DRM PRIME (see [
 
 | Codec | Encode | Decode | Sample rates | Channels | Notes |
 |---|---|---|---|---|---|
-| **AAC-LC** | FDK-AAC in-process (`fdk-aac`) | FDK-AAC | 8 k – 48 k | 1 – 8 | Production AAC, lowest latency. |
+| **AAC-LC** | FDK-AAC in-process (`fdk-aac`) | FDK-AAC | 8 k – 48 k | 1 – 6, 8 (7 is refused) | Production AAC, lowest latency. 7.1 goes out as channel configuration 0 with a program_config_element; decoded, 7.1 is eight channels (fdk-aac's default downmix to six is switched off). |
 | **HE-AAC v1** | FDK-AAC | FDK-AAC | 8 k – 48 k | 1 – 2 | SBR adds chroma-bandwidth dependency. |
 | **HE-AAC v2** | FDK-AAC | FDK-AAC | 8 k – 48 k | 2 (stereo only) | Parametric Stereo — manager UI hard-filters mono. |
 | **Opus** | libopus via libavcodec | libopus via libavcodec | 48 k | 1 – 2 | Decode wired; transcode-from-Opus-on-TS works. |

@@ -285,7 +285,7 @@ Create a new input. The definition is validated and persisted.
 
 | Status | Condition |
 |--------|-----------|
-| 400 | Validation failure (invalid addresses, empty ID/name, bad FEC params) |
+| 400 | Validation failure (invalid addresses, empty ID/name, bad FEC params), or an input that a seq-aware Hitless slot already names as a leg (a flow can be created naming a leg not yet defined) but that would reach the PID bus without the upstream sequence number that slot merges on (`hitless_seq_aware_leg_unsequenced`, as on an update). Up to and including v0.116.0 such an input was created, and only the merger's run-time fallback to primary preference caught it |
 | 409 | An input with the same ID already exists |
 | 500 | Failed to persist config to disk |
 
@@ -414,6 +414,8 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/flows/main-f
 
 Create a new flow. The flow is validated, persisted to the config file, and (if `enabled: true`) started immediately. The `input_ids` and `output_ids` must reference inputs/outputs that already exist as top-level entities — create them first via `POST /api/v1/inputs` and `POST /api/v1/outputs`.
 
+An enabled flow naming an input that another enabled or running flow already holds is refused 400 (`input '…' is already assigned to another flow ('…')`), on this route and on `PUT /api/v1/flows/{flow_id}`, before anything starts or is saved. A flow that runs while saved disabled (one that `POST /api/v1/flows/{flow_id}/start` or the WS `create_flow` started) holds its inputs too. Up to and including v0.116.0 both routes saved such a flow, and the next load refused the whole config.
+
 **Auth:** Requires `admin` role.
 
 **Request body:**
@@ -436,7 +438,7 @@ Returns the created flow configuration in the standard envelope.
 
 | Status | Condition |
 |--------|-----------|
-| 400 | Validation failure (invalid addresses, empty ID/name, bad FEC params) |
+| 400 | Validation failure (invalid addresses, empty ID/name, bad FEC params), or an input another enabled or running flow already holds |
 | 409 | A flow with the same ID already exists |
 | 500 | Failed to persist config to disk |
 
@@ -543,7 +545,7 @@ curl -X DELETE http://localhost:8080/api/v1/flows/old-flow \
 
 ### POST /api/v1/flows/{flow_id}/start
 
-Start a stopped flow. Reads the flow configuration and starts it in the engine.
+Start a stopped flow. Reads the flow configuration and starts it in the engine, whatever its `enabled` says (the flow stays saved as it was). It is judged as running, so it is refused 400 while another enabled or running flow holds one of its inputs. Up to and including v0.116.0 nothing was checked, and a second runtime of an input another flow ran could start — two SRT callers to one peer, say.
 
 **Auth:** Requires `admin` role.
 
@@ -566,6 +568,7 @@ Start a stopped flow. Reads the flow configuration and starts it in the engine.
 
 | Status | Condition |
 |--------|-----------|
+| 400 | Another enabled or running flow holds one of its inputs |
 | 404 | Flow not found in configuration |
 | 409 | Flow is already running |
 | 500 | Engine failed to start the flow |
@@ -619,7 +622,7 @@ curl -X POST http://localhost:8080/api/v1/flows/main-feed/stop \
 
 ### POST /api/v1/flows/{flow_id}/restart
 
-Restart a flow (stop + start). Destroys the running instance (if any) and creates a fresh one from the current configuration. Useful for picking up config changes or recovering from transient errors.
+Restart a flow (stop + start). Destroys the running instance (if any) and creates a fresh one from the configuration as it stands once the old instance has gone, so a PID-bus plan swap saved while the restart runs is either the plan the flow restarts on or refused (`pid_bus_assembly_swap_superseded`), never saved beside a flow running another plan. A flow missing from the configuration answers 404 and one that does not resolve 400, both before anything stops. Up to and including v0.116.0 the configuration was read before the stop. Useful for picking up config changes or recovering from transient errors.
 
 **Auth:** Requires `admin` role.
 
@@ -642,6 +645,7 @@ Restart a flow (stop + start). Destroys the running instance (if any) and create
 
 | Status | Condition |
 |--------|-----------|
+| 400 | The flow does not resolve (checked before anything stops) |
 | 404 | Flow not found in configuration |
 | 500 | Engine failed to create the new flow instance |
 
@@ -1052,7 +1056,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `bandwidth_blocked` | boolean | `true` if the flow is currently gated (packets dropped) due to bandwidth limit enforcement. Omitted when `false`. |
 | `bandwidth_limit_mbps` | float/null | Configured bandwidth limit in Mbps (for display). Absent if no limit configured. |
 | `pcr_trust_flow` | object/absent | Flow-wide PCR-accuracy rollup — percentiles over the union of every output's PCR trust reservoir, so a multi-output flow still has one summary number. This is what broadcast quality gate 4 reads. Absent until an output has collected enough samples |
-| `master_clock` | object/absent | Master-clock telemetry: which clock the flow is paced against, whether it is locked, and recovered jitter / rate offset for PLL masters. Every running flow has one — see [Clocking](/edge/clocking/) |
+| `master_clock` | object/absent | Master-clock telemetry: which clock the flow is paced against, whether it is locked, and recovered jitter / rate offset for PLL masters — `{ kind, locked, rate_offset_ppm, jitter_us, lipsync_offset_90k, configured_kind?, fallback_active, fallback_reason?, active_input_id?, rate_source? }`. Every running flow has one. `rate_source` names what last fed the source-PCR PLL (`sender_timestamp`, `pcr` or `none`) while the PLL is the clock and no fallback has fired; `configured_kind` is not a fallback signal — an `auto`, `sender_timestamp` or `contribution` flow always carries it — so read `fallback_active` for that. See [Clocking](/edge/clocking/#telemetry) |
 | `av_skew` | object/absent | Edge-added A/V skew — the lip-sync error this edge's PTS-touching stages introduce, measured on the active input's path |
 | `av_interleave_flow` | object/absent | Flow-wide A/V **mux-interleave** rollup (worst-case p95 across outputs). This is interleave, not lip-sync — `av_skew` is the lip-sync number |
 | `content_analysis` | object/absent | In-depth content-analysis snapshot; present when the flow enables `content_analysis` at the `lite`, `audio_full` or `video_full` tier. Each sub-field is independently optional, so a Lite-only selection returns a minimal payload |
@@ -1082,7 +1086,7 @@ Retrieve aggregated system-wide and per-flow statistics. Running flows include l
 | `srt_stats` | object/null | The active input's SRT stats when it is a single-socket SRT input, or its leg 1's when it is a SMPTE 2022-7 one. Present while that socket is connected, absent while it reconnects |
 | `srt_leg2_stats` | object/null | Leg 2's (the `redundancy` leg's) SRT stats, when the active input is a SMPTE 2022-7 SRT input whose leg 2 is connected. Each leg is acquired and re-acquired on its own, so either block can be present without the other |
 | `redundancy_switches` | integer | SMPTE 2022-7 leg switch count |
-| `buffered_hitless` | object/absent | Buffered SMPTE 2022-7 merger stats, on an RTP or SRT 2022-7 input whose `redundancy.path_differential_ms` is set — on SRT only while its legs carry RTP, from the first packet that shows it until both legs are lost, and never on raw TS. `{ max_path_diff_ms, current_path_diff_us, max_observed_path_diff_us, packets_emitted, packets_via_both_legs, packets_via_leg1_only, packets_via_leg2_only, dups_dropped, gap_lost, late_dropped, buffer_overflow_dropped, stream_resets, failovers, current_buffer_depth, ssrc_mismatch, leg1_packets_received, leg2_packets_received, leg1_health, leg2_health }`. The flow's **active** input's merger only, read live: absent while the active input has none or is off air (a passive 2022-7 input's merger shows under no other input), and on a PID-bus assembled flow only while the assembly plays from that input. Up to and including v0.116.0 a passive RTP input's merger showed under whichever input was active, and one removed or edited in place left its last values on the flow. Leg health is 0 unknown, 1 up, 3 down (no packet on that leg for 1 s). `max_observed_path_diff_us` is measured between two copies that meet within the hold, so it never reads above the hold: a reading near it says the hold is too small to measure the skew. An SRT input checks no SSRC, so its `ssrc_mismatch` stays 0 |
+| `buffered_hitless` | object/absent | Buffered SMPTE 2022-7 merger stats, on an RTP or SRT 2022-7 input whose `redundancy.path_differential_ms` is set — on SRT only while its legs carry RTP, from the first packet that shows it until both legs are lost, and never on raw TS. `{ max_path_diff_ms, current_path_diff_us, max_observed_path_diff_us, packets_emitted, packets_via_both_legs, packets_via_leg1_only, packets_via_leg2_only, dups_dropped, gap_lost, late_dropped, buffer_overflow_dropped, stream_resets, failovers, current_buffer_depth, ssrc_mismatch, leg1_packets_received, leg2_packets_received, leg1_health, leg2_health, late_duplicates }`. `dups_dropped` counts copies that met their twin within the hold; `late_duplicates` copies that came after their twin was released, which is no loss; `late_dropped` packets that came after the hold passed them and that the merger cannot place as a released packet's copy — a gap fill too late (real loss, its number also in `gap_lost`), or a copy more than 2048 sequence numbers back, too far for the merger to remember and usually a harmless duplicate; `gap_lost` is what the output actually missed. Up to and including v0.116.0 `late_dropped` counted the late duplicates too. The flow's **active** input's merger only, read live: absent while the active input has none or is off air (a passive 2022-7 input's merger shows under no other input), and on a PID-bus assembled flow only while the assembly plays from that input. Up to and including v0.116.0 a passive RTP input's merger showed under whichever input was active, and one removed or edited in place left its last values on the flow. Leg health is 0 unknown, 1 up, 3 down (no packet on that leg for 1 s). `current_path_diff_us` / `max_observed_path_diff_us` are the time between a packet's two copies, measured whether the second found the first still held or already released (as far back as 2048 sequence numbers), so a maximum above `max_path_diff_ms` is a hold shorter than the legs' skew; up to and including v0.116.0 only copies that met within the hold were measured, and it never read above the hold. `ssrc_mismatch` counts each episode of the legs carrying different SSRCs for the merger's stale time with both delivering, on an SRT pair as on an RTP input (up to and including v0.116.0 an SRT input checked no SSRC, and an RTP input counted a source changing its SSRC as one) |
 
 **Output stats fields:**
 
@@ -1356,7 +1360,7 @@ Prometheus-compatible metrics endpoint. Returns metrics in the Prometheus text e
 |--------|------|-------------|
 | `bilbycast_edge_tr101290_ts_packets_total` | counter | TS packets analyzed |
 | `bilbycast_edge_tr101290_sync_byte_errors_total` | counter | Sync byte errors |
-| `bilbycast_edge_tr101290_cc_errors_total` | counter | Continuity counter errors |
+| `bilbycast_edge_tr101290_cc_errors_total` | counter | Continuity counter errors. A break signalled by `discontinuity_indicator` (on the packet, or on an adaptation-field-only packet just ahead of it) is not counted, nor is a duplicate packet; up to and including v0.116.0 a signalled break was |
 | `bilbycast_edge_tr101290_pat_errors_total` | counter | PAT timeout errors |
 | `bilbycast_edge_tr101290_pmt_errors_total` | counter | PMT timeout errors |
 | `bilbycast_edge_tr101290_tei_errors_total` | counter | Transport error indicator errors |

@@ -40,8 +40,9 @@ Each column moves through these states:
 | `pending` | Manager has recorded the desired state but has not yet pushed it (or the node was offline at push time) |
 | `pushed` | Push succeeded; the node acknowledged it |
 | `failed` | Push failed; the manager has the error in `push_error` and will retry on the next reconnect |
+| `refused` | `managed_inputs` / `managed_outputs` only: the manager would not send the definition, because the node reports capabilities that would silently ignore one of its fields. See [Version-gated fields](#version-gated-fields) |
 
-There is no in-flight state — a push is `pending` until the node answers, then `pushed` or `failed`. When a node disconnects the manager resets that node's `managed_flows`, `managed_inputs`, `managed_outputs` and `flow_groups` rows from `pushed` back to `pending`, and its tunnel legs back to `pending` from whatever they held, so a reconnect always re-asserts the manager's view; `service_steps` rows are left where they are. `service_steps` is also the one table with a fourth value, `drifted`, written by the services reconciler when a step that was pushed no longer matches the node's config.
+There is no in-flight state — a push is `pending` until the node answers, then `pushed` or `failed`. When a node disconnects the manager resets that node's `managed_flows`, `managed_inputs`, `managed_outputs` and `flow_groups` rows from `pushed` back to `pending`, and its tunnel legs back to `pending` from whatever they held, so a reconnect always re-asserts the manager's view; `service_steps` rows are left where they are. `service_steps` also has a value of its own, `drifted`, written by the services reconciler when a step that was pushed no longer matches the node's config.
 
 The UI shows these states as small badges next to each flow/tunnel so operators can see at a glance whether the manager's view matches reality.
 
@@ -56,6 +57,22 @@ When a node reconnects to the manager (after a network blip, restart, or first-e
 5. **Detect and report drift** — anything in the database that isn't in the config (or vice versa) becomes a drift event.
 
 The whole pipeline runs on a per-node basis whenever the WebSocket transitions from disconnected to connected. The retry interval for transient failures is 30 seconds.
+
+## Version-gated fields
+
+Some fields are honoured only by edges that advertise a capability for them, and an older edge accepts such a field and silently ignores it, which looks exactly like success. The manager refuses them for a node that does not advertise the capability:
+
+| Field | Capability | Refusal `error_code` |
+|---|---|---|
+| An SRT input's `redundancy.path_differential_ms` | `srt-path-differential` (edges after v0.116.0) | `srt_path_differential_not_supported` |
+| `video_encode.scan: "interlaced"` | `video-encode-scan` | `encoder_scan_not_supported` |
+| `audio_encode.ts_signalling: "dvb"` | `audio-ts-signalling` or `video-encode-scan` | `audio_encode_ts_signalling_not_supported` |
+
+The refusal is `422` with the `error_code`, naming the capability and the edge version, and it applies on every route that sends an input, an output or a whole configuration: creating, editing and hot-adding an input or output, saving the whole configuration, the same commands sent through the generic command route, restoring a configuration-history snapshot, and a visual-editor deploy. The AI assistant applies through those routes, so it is held to the same rule. Earlier managers refused the scan and signalling values only on the input and output routes and the visual editor, and the SRT field not at all — hiding it in the form was the only guard.
+
+**A node that has not reported yet.** A write ahead of a node's first contact is allowed, so a node that has not reported its capabilities is not refused at save time. Instead the definition is held: the 30 s retry and the push on reconnect send it only once the node has reported over its current connection — never on the persisted health of an offline node, which may predate an upgrade. If the node then reports capabilities that would ignore one of its fields, the row gets push status `refused` and one Warning `config_sync` event, `Input '…' / Output '…' was not sent to the node: {reason}` (`details = { error_code, field }`). The retry keeps judging `refused` rows, so the definition goes out within 30 s of the node first reporting that it honours the field — after an upgrade, say — and an edit through the routes replaces it. Ghost cleanup leaves `refused` rows alone, and reconciliation marks one `pushed` only if it turns up on the node. Earlier managers sent such a definition unjudged.
+
+A visual deployment is judged the same way when it is dispatched — see [Visual Flow Editor](/manager/visual-flow-editor/#requirements-on-the-target-node).
 
 ## Ghost cleanup
 
@@ -117,6 +134,7 @@ In the failure cases:
 |---|---|
 | Flow stuck on `pending` for a long time | Node is offline; will retry on reconnect |
 | Flow shows `failed` with an error message | Push reached the node but the node rejected it (validation error, conflict) — read the error and edit the flow |
+| Input or output shows `refused`, with a `config_sync` event reading "… was not sent to the node" | The node runs an edge too old for a field in it — upgrade the node (the definition then goes out by itself) or edit the field out |
 | Flow disappears, with a `config_sync` event reading "Ghost flow … deleted" | Manager auto-deleted a ghost; this is normal cleanup |
 | New flow appears, with a `config_sync` event reading "New flow … detected on node" | Someone created it directly on the node — decide whether to ingest or delete |
 

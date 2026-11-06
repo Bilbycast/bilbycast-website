@@ -734,7 +734,7 @@ Retrieve a single output definition. Returns 404 if not found.
 
 ### PUT /api/v1/outputs/{output_id}
 
-Replace an output definition.
+Replace an output definition. The stored `active` flag stands whatever the body says: an edit to a passive output only persists, and it starts on the edited definition when it is switched on. After v0.117.0.
 
 **Auth:** Requires `admin` role.
 
@@ -754,7 +754,9 @@ Delete an output. Fails if the output is still referenced by a flow.
 
 ### POST /api/v1/outputs/{output_id}/active
 
-Toggle an output on or off at runtime without removing it from the flow. A disabled output stops emitting but stays configured.
+Toggle an output on or off at runtime without removing it from the flow. A disabled output stops emitting but stays configured. After v0.117.0 this and the manager's `activate_output` are the only routes that change `active` on an output that exists.
+
+A socket failure is not reported here: an output opens its socket on its own task, after the answer, so a port held by another process answers success with nothing sending. Pressing on again retries the start.
 
 **Auth:** Requires `admin` role.
 
@@ -771,6 +773,7 @@ Toggle an output on or off at runtime without removing it from the flow. A disab
 | Status | Condition |
 |--------|-----------|
 | 404 | Output not found |
+| 500 | The engine refused the start (`output_activate_failed`): this build does not carry the output type, or an MXL host's libmxl probe failed. The flag stays as it was. After v0.117.0 |
 
 ---
 

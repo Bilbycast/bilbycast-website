@@ -79,7 +79,7 @@ the process environment directly.
 | `BILBYCAST_MASTER_KEY` | Yes | 64-char hex string (32 bytes) for envelope encryption at rest (derives per-domain KEKs via HKDF) |
 | `BILBYCAST_NEW_MASTER_KEY` | No | New master key for `rotate-master-key` CLI command (rotation only) |
 | `BILBYCAST_TLS_CERT` | Conditional | TLS certificate PEM path (file-based TLS mode). Refused unless `BILBYCAST_TLS_KEY` is set too — the manager bails at startup rather than mix a cert from the environment with a key from the config file. |
-| `BILBYCAST_TLS_KEY` | Conditional | TLS private key PEM path (file-based TLS mode). Same pairing rule as `BILBYCAST_TLS_CERT`. |
+| `BILBYCAST_TLS_KEY` | Conditional | TLS private key PEM path (file-based TLS mode). Same pairing rule as `BILBYCAST_TLS_CERT`. The PEM header must match the key's encoding (`PRIVATE KEY` PKCS#8, `RSA PRIVATE KEY` PKCS#1, `EC PRIVATE KEY` SEC1) or `serve` stops at startup — see [TLS deployment](/manager/tls-deployment/). |
 | `BILBYCAST_TLS_MODE` | No | `"direct"` (default) or `"behind_proxy"` |
 | `BILBYCAST_TRUST_PROXY_HEADER` | No | Set to `"1"`/`"true"` to honour `X-Forwarded-For` for client-IP resolution (login rate-limit bucket key + audit IP). **Off by default.** Required in `behind_proxy` mode — without it the rate limiter buckets on the load balancer's IP. Only enable behind a trusted LB that strips inbound XFF before adding its own, or a client can forge its own bucket key. |
 | `BILBYCAST_TRUSTED_PROXIES` | No | Comma-separated CIDR allowlist of proxies whose `X-Forwarded-For` is trusted (only when `BILBYCAST_TRUST_PROXY_HEADER` is on). Default: `127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`. |

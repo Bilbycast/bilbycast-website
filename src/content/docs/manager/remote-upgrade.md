@@ -76,7 +76,7 @@ The manager has authority over **scheduling** an upgrade (which node, when, whic
 
 1. The manager sends `upgrade_binary { version, channel }` over the existing authenticated WebSocket.
 2. The target node fetches `manifest.json` + `manifest.sig.bundle` from GitHub Releases.
-3. The node verifies the manifest signature against its compiled-in `ALLOWED_SIGNERS` allowlist (Sigstore Fulcio cert binding the workflow run identity, plus a Rekor transparency log lookup).
+3. The node verifies the manifest signature against its compiled-in `ALLOWED_SIGNERS` allowlist (Sigstore Fulcio cert binding the workflow run identity, plus the Rekor transparency-log entry the bundle carries, checked offline by its Signed Entry Timestamp). The Fulcio and Rekor keys it checks against are loaded through Sigstore's TUF repository at every verification, so the node also needs outbound HTTPS to `tuf-repo-cdn.sigstore.dev`.
 4. Only then does it use the SHA-256 in the verified manifest to download the tarball, recheck the hash, extract, and atomically swap.
 5. systemd respawns into the new binary via the `current` symlink.
 
@@ -95,7 +95,7 @@ Every upgrade attempt is recorded in the audit log (`/admin/audit-log`):
 | `group.upgrade.paused` | rollout pause-on-failure | `{wave, failures, version}` |
 | `group.upgrade.complete` | rollout finished | `{version}` |
 
-Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_staged`, `upgrade_completed`, `upgrade_rolled_back`, `upgrade_*_failed`) ride the normal events stream under `category: upgrade` for dashboard / SIEM consumption.
+Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_staged`, `upgrade_staged_manual`, `upgrade_completed`, `upgrade_rolled_back`) ride the normal events stream under `category: upgrade` for dashboard / SIEM consumption. A failed check is not an event: its code (`upgrade_signature_invalid`, `upgrade_network_error`, …) rides the `upgrade_binary` command's ack — see [the edge's upgrade codes](/edge/events-and-alarms/#remote-upgrade-upgrade).
 
 ## Troubleshooting
 
@@ -107,6 +107,7 @@ Plus the lifecycle events (`upgrade_started`, `upgrade_downloaded`, `upgrade_sta
 | `upgrade_channel_not_allowed` | Node's `[upgrade] allowed_channels` doesn't include the requested channel | Add the channel locally and restart. |
 | `upgrade_version_too_old` | Node's `[upgrade] min_version` is higher than the requested version | Pick a newer version. |
 | `upgrade_signature_invalid` / `upgrade_identity_not_allowed` | The manifest's Sigstore signature didn't pass — either tampering or a release workflow path that doesn't match the node's compiled-in allowlist | If you renamed the release workflow recently, you must publish a new release from the OLD workflow first that carries the new allowlist. |
+| `upgrade_network_error` naming the Sigstore trust root | The node could not load Sigstore's trust root through its TUF repository, so it checked nothing about the release. An edge on v0.117.0 or earlier reports this as `upgrade_signature_invalid` with the message `Sigstore Fulcio + Rekor verification failed`: the code comes from the node's running binary | Open outbound HTTPS from the node to `tuf-repo-cdn.sigstore.dev`, then retry. |
 | `upgrade_failed` with a "manifest fetch failed" / download error | The node couldn't fetch `manifest.json` or the release tarball from GitHub. Causes: transient network / DNS / TLS trouble, a proxy or firewall between the node and GitHub, or an **older node build whose upgrader doesn't recognise GitHub's current release-CDN host** (GitHub answers a release download with a `302` redirect to `*.githubusercontent.com` and renames that host from time to time). | Confirm the node has outbound HTTPS to **both** `github.com` and the `*.githubusercontent.com` release CDN, then retry. If the node's own upgrader is too old to follow GitHub's current redirect, a UI upgrade can't self-heal it — [recover it out-of-band](#recovering-a-node-whose-upgrader-is-stuck). |
 | `upgrade_checksum_mismatch` | The downloaded tarball's SHA-256 doesn't match what the verified manifest claims | Network corruption or release-asset tampering. Retry; if it persists, file a security issue. |
 | `upgrade_disk_full` | Less than ~3× the tarball size free on the install root | Free up disk on the node. |

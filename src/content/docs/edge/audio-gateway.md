@@ -53,7 +53,7 @@ operation, WAN transport, and compressed-audio egress.
 | Atomically start a multi-essence broadcast group (audio + ANC) | `start_flow_group` manager command |
 | Send 24-bit LPCM to a hardware decoder that expects MPEG-TS over UDP | UDP output with `transport_mode: "audio_302m"` |
 | Send 24-bit LPCM to a hardware decoder that expects RTP/MP2T (RFC 2250) | `rtp_audio` output with `transport_mode: "audio_302m"` |
-| Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; symphonia fallback: AAC-LC mono/stereo) |
+| Ingest AAC contribution from an RTMP / RTSP / SRT / UDP / RTP-TS source and land it as PCM on ST 2110-30/-31 or SMPTE 302M | Phase A in-process `audio_decode` bridge (FDK AAC: AAC-LC, HE-AAC v1/v2, multichannel; on a build with the opt-in `aac-symphonia` feature in place of `fdk-aac`, symphonia: AAC-LC mono/stereo) |
 | Re-encode audio for YouTube / Twitch / HLS / WebRTC / SRT / RIST / UDP / RTP egress (AAC-LC, HE-AAC v1/v2, MP2, AC-3; Opus on `webrtc` only) | Phase B `audio_encode` block — AAC codecs encode in-process via FDK AAC, Opus / MP2 / AC-3 encode in-process via libavcodec on the default `media-codecs` build (ffmpeg subprocess fallback otherwise) |
 | Deliver an AAC contribution to browsers as Opus in one hop | Combined Phase A + Phase B chain — RTMP AAC input → WebRTC WHEP Opus output |
 
@@ -449,9 +449,12 @@ the `srt`, `udp`, and `rtp_audio` 302M output modes).
 
 **Default (`fdk-aac` feature, on by default):** Fraunhofer FDK AAC
 via FFI. Supports AAC-LC, HE-AAC v1 (SBR), HE-AAC v2 (PS), AAC-LD,
-AAC-ELD, and multichannel up to 7.1. **Fallback (no `fdk-aac`
-feature):** `symphonia-codec-aac` — AAC-LC mono/stereo only; HE-AAC
-and multichannel are rejected with an `audio_decode` Critical event.
+AAC-ELD, and multichannel up to 7.1. **Fallback (the opt-in
+`aac-symphonia` feature, built in place of `fdk-aac`):**
+`symphonia-codec-aac` — AAC-LC mono/stereo only; HE-AAC and
+multichannel are rejected with an `audio_decode` Critical event. A
+build needs one of the two: with neither, it stops with a
+`compile_error!`. With both on, FDK AAC decodes.
 
 No ffmpeg is required for this path. The decoder is part of the
 bilbycast-edge binary itself.
@@ -640,9 +643,9 @@ category event to the manager (Critical severity) when:
 - **Input audio is unsupported**: on a default build the decoder
   handles AAC (AAC-LC, HE-AAC v1/v2, multichannel up to 7.1, via FDK
   AAC) plus MP2, AC-3, E-AC-3 and AAC-LATM via the libavcodec bridge.
-  Without `media-codecs`, only the AAC family decodes; without
-  `fdk-aac` as well, the symphonia fallback narrows that to AAC-LC
-  mono/stereo. Two per-output exceptions hold on every build: an RTMP
+  Without `media-codecs`, only the AAC family decodes; with
+  `aac-symphonia` in place of `fdk-aac` as well, the symphonia
+  fallback narrows that to AAC-LC mono/stereo. Two per-output exceptions hold on every build: an RTMP
   output discards an Opus source outright, and HLS refuses
   `codec: opus` as a target. The output drops audio
   and emits the failure event so the operator sees the problem. The
@@ -873,8 +876,9 @@ cases in this guide that are marked READY.
 4. **AAC family coverage.** With the default `fdk-aac` feature, the
    Phase A in-process decoder handles **AAC-LC, HE-AAC v1 (SBR),
    HE-AAC v2 (PS), AAC-LD, AAC-ELD, and multichannel up to 7.1**.
-   Only when `fdk-aac` is disabled does the `symphonia-codec-aac`
-   fallback restrict the input to **AAC-LC mono / stereo** — under
+   Only on a build with the opt-in `aac-symphonia` feature in place
+   of `fdk-aac` does the `symphonia-codec-aac` fallback restrict the
+   input to **AAC-LC mono / stereo** — under
    that fallback, HE-AAC v1/v2 and multichannel AAC are rejected with
    an `audio_decode` Critical event.
 

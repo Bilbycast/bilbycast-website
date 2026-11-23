@@ -99,6 +99,29 @@ or neither and use the [tls] block in the config file.
 The half-override is what this refuses: an env cert paired with the key from the config file's `[tls]` block is two different certificate pairs mixed into one listener, and the failure surfaces as a TLS handshake error rather than as the config mistake it is.
 :::
 
+:::caution[The key file's PEM header must match the key under it]
+The manager takes the key's type from its PEM header: `BEGIN PRIVATE KEY` is PKCS#8, `BEGIN RSA PRIVATE KEY` is PKCS#1, `BEGIN EC PRIVATE KEY` is SEC1. A key under a header naming another encoding — a PKCS#8 key under `BEGIN RSA PRIVATE KEY`, say — loaded on v0.92.0 and stops `serve` at startup on the releases after it:
+
+```text
+Failed to load TLS cert/key: unexpected error: failed to parse private key as RSA, ECDSA, or EdDSA
+```
+
+Only a key you supply (`BILBYCAST_TLS_KEY` or `[tls].key_path`) can be affected: the keys the manager writes itself — for `init`, for ACME, and for the self-signed certificate it serves while ACME requests one — are all PKCS#8 under `BEGIN PRIVATE KEY`. To be sure before upgrading, rewrite yours as PKCS#8 under `BEGIN PRIVATE KEY` — it is the same key, so this is harmless for one that was already right:
+
+```bash
+openssl pkey -in server.key -out server-pkcs8.key
+```
+
+That reads a PKCS#8 key under any of the three headers, and an RSA or EC key under its own. If it cannot read the key, the file holds an RSA (PKCS#1) or EC (SEC1) key under another type's header, typically `BEGIN PRIVATE KEY`. Give it back its own header as you convert it: try the RSA line, and if that fails too, the EC one. A wrong guess fails and writes nothing.
+
+```bash
+sed -E 's/^-----(BEGIN|END) .*PRIVATE KEY-----/-----\1 RSA PRIVATE KEY-----/' server.key | openssl pkey -out server-pkcs8.key
+sed -E 's/^-----(BEGIN|END) .*PRIVATE KEY-----/-----\1 EC PRIVATE KEY-----/' server.key | openssl pkey -out server-pkcs8.key
+```
+
+Then use the new file where the old key was named — in `[tls].key_path` if the key is set in the config file, in `BILBYCAST_TLS_KEY` if it is set in the environment — or copy it over the old file. Keep the key where it was set: on an install whose cert and key are in the `[tls]` block, setting `BILBYCAST_TLS_KEY` alone stops `serve`, because the two must be set together (above). `openssl` writes the new file readable by its owner only; copying it over the old file keeps that file's owner and mode.
+:::
+
 ### Renewal
 
 bilbycast-manager **does not** watch the cert file for changes in this mode (yet). When you renew the cert, restart the manager process — for example, via your certbot deploy hook:

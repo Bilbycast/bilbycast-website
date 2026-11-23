@@ -273,9 +273,24 @@ Optional sub-object of `server`. The `tls` feature is enabled by default.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `cert_path` | string | Yes | Path to PEM-encoded TLS certificate file (or fullchain). Cannot be empty. |
-| `key_path` | string | Yes | Path to PEM-encoded TLS private key file. Cannot be empty. |
+| `key_path` | string | Yes | Path to PEM-encoded TLS private key file. Cannot be empty. Its PEM label must match its encoding — see below. |
 
 If TLS is configured but the binary was built without the `tls` feature, a warning is logged and the server starts without TLS.
+
+**The private key's PEM label must match its encoding.** The edge takes the key's type from the label: `-----BEGIN PRIVATE KEY-----` is PKCS#8, `-----BEGIN RSA PRIVATE KEY-----` is PKCS#1 RSA, `-----BEGIN EC PRIVATE KEY-----` is SEC1 EC. A key under a label naming another encoding (a PKCS#8 key under `BEGIN RSA PRIVATE KEY`, say) does not load, and the edge stops at startup with `Failed to load TLS cert/key`; under the packaged systemd unit with the default `upgrades.max_boot_attempts`, a manager-driven upgrade onto such a key fails its boots and is rolled back (`upgrade_rolled_back`). v0.117.0 read the type from the key itself, so such a file loaded there: check the label before upgrading from it. Keys OpenSSL writes (`openssl req`, `openssl genpkey`) carry the right label. To repair one, rewrite it as PKCS#8 under `BEGIN PRIVATE KEY`:
+
+```bash
+openssl pkey -in key.pem -out key-fixed.pem
+```
+
+That reads a PKCS#8 key under any of the three labels, and an RSA or EC key under its own. If it cannot read the key, the file holds an RSA (PKCS#1) or EC (SEC1) key under another type's label, typically `BEGIN PRIVATE KEY`. Give it back its own label as you convert it: try the RSA line, and if that fails too, the EC one. A wrong guess fails and writes nothing.
+
+```bash
+sed -E 's/^-----(BEGIN|END) .*PRIVATE KEY-----/-----\1 RSA PRIVATE KEY-----/' key.pem | openssl pkey -out key-fixed.pem
+sed -E 's/^-----(BEGIN|END) .*PRIVATE KEY-----/-----\1 EC PRIVATE KEY-----/' key.pem | openssl pkey -out key-fixed.pem
+```
+
+Then point `server.tls.key_path` at `key-fixed.pem`, or copy it over `key.pem`. `openssl` writes the new file readable by its owner only, and the packaged unit runs the edge as user `bilbycast`; copying it over the old file keeps that file's owner and mode.
 
 ---
 
@@ -2822,7 +2837,7 @@ The `rtp_audio` input/output type is wire-identical to ST 2110-30 (same RFC 3551
 
 `srt`, `udp`, and `rtp_audio` outputs accept `transport_mode: "audio_302m"` to ship 48 kHz LPCM as SMPTE 302M-in-MPEG-TS. Mutually exclusive with `packet_filter` (SRT), `program_number`, and SRT `redundancy`.
 
-**Phase A compressed-audio ingress:** when a flow input carries AAC in MPEG-TS (RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into PCM so ST 2110-30/-31, `rtp_audio`, and the SMPTE 302M outputs can consume it without ffmpeg. Default FDK AAC backend supports AAC-LC, HE-AAC v1/v2, and multichannel up to 7.1; symphonia fallback supports AAC-LC mono/stereo only.
+**Phase A compressed-audio ingress:** when a flow input carries AAC in MPEG-TS (RTMP / RTSP / SRT / UDP / RTP), the in-process `engine::audio_decode::AacDecoder` turns it into PCM so ST 2110-30/-31, `rtp_audio`, and the SMPTE 302M outputs can consume it without ffmpeg. Default FDK AAC backend supports AAC-LC, HE-AAC v1/v2, and multichannel up to 7.1; the symphonia fallback, built with the opt-in `aac-symphonia` feature in place of `fdk-aac`, supports AAC-LC mono/stereo only.
 
 **Phase B `audio_encode` block on RTMP / HLS / WebRTC outputs:**
 

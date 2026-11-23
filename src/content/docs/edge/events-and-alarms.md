@@ -659,27 +659,33 @@ Read-only Starlink dish telemetry events for an interface that egresses over a S
 
 ### Remote Upgrade (`upgrade`)
 
-Lifecycle events for the `upgrade_binary` command. Manager UI gates the per-node "Upgrade" button on the `"upgrade"` capability bit. Every event carries `details.error_code`.
+Lifecycle events for the `upgrade_binary` command. Manager UI gates the per-node "Upgrade" button on the `"upgrade"` capability bit. Seven events reach the feed. The six below each carry `details.error_code`; the seventh, a Warning with no code, is described after the second table:
 
 | Severity | Error code | Trigger |
 |----------|------------|---------|
 | info | `upgrade_started` | Manager command accepted, staging begins. |
 | info | `upgrade_downloaded` | Manifest verified, tarball downloaded, SHA-256 matched. |
 | info | `upgrade_staged` | Tarball extracted, symlink swapped; edge about to drain + exit for systemd respawn. |
+| info | `upgrade_staged_manual` | `manual_only` is set: the release was verified and downloaded, and the node stops before extracting it and fails the command with the same code. The event's message says the swap awaits `SIGUSR1`, but nothing handles that signal — see [`manual_only` is not a staging mode](/edge/upgrade/#manual_only-is-not-a-staging-mode). |
 | info | `upgrade_completed` | New binary booted, authenticated, healthy for the boot health window — status flipped to `stable`. |
 | critical | `upgrade_rolled_back` | Boot watchdog reverted to `previous` after failed boots, or the new binary failed to authenticate in time. |
-| critical | `upgrade_signature_invalid` | Sigstore bundle signature did not verify against the manifest. |
-| critical | `upgrade_identity_not_allowed` | Bundle signed but the cert identity does not match the compiled-in `ALLOWED_SIGNERS` allowlist. |
-| critical | `upgrade_rekor_invalid` | Rekor inclusion proof missing or malformed. |
-| warning | `upgrade_url_invalid` / `upgrade_checksum_mismatch` / `upgrade_network_error` / `upgrade_arch_mismatch` | Download / verification guard failures (retryable). |
-| warning | `upgrade_disabled` / `upgrade_channel_not_allowed` / `upgrade_version_too_old` / `upgrade_sequence_too_old` | Policy rejections (audit only). |
-| warning | `upgrade_version_invalid` | The requested version string could not be parsed. |
-| warning | `upgrade_in_progress` | The single-flight guard rejected a second stage while one was already running. |
-| warning | `upgrade_manifest_invalid` | The manifest fetched or parsed, but did not satisfy the schema. |
-| warning | `upgrade_extract_failed` | Tarball extraction failed. `upgrade_disk_full` is the classified sub-case — see [Remote Upgrade](/manager/remote-upgrade/). |
-| info | `upgrade_staged_manual` | `manual_only` is set, so staging completed and the symlink swap is deferred until the operator sends `SIGUSR1`. |
 
-Only six of these actually reach the event feed: `upgrade_started`, `upgrade_downloaded`, `upgrade_staged`, `upgrade_staged_manual` and `upgrade_completed` (Info) plus `upgrade_rolled_back` (Critical). Every other row is a `command_ack.error_code` returned on the failed `upgrade_binary` command, not an event with its own severity — build the alarm on the ack, not on an events-page filter.
+Every other upgrade code is a `command_ack.error_code` returned on the failed `upgrade_binary` command. **None of them is emitted as an event**, at any severity, so an alarm rule or events-page filter keyed on one never matches — build the alarm on the ack:
+
+| Error code | Trigger |
+|------------|---------|
+| `upgrade_network_error` | Manifest, bundle or tarball fetch failed after retries — or Sigstore's trust root could not be loaded through its TUF repository (`tuf-repo-cdn.sigstore.dev` unreachable, or what it served did not verify), in which case the release itself was never checked and the message names the trust root. |
+| `upgrade_signature_invalid` | The Sigstore bundle did not parse, its certificate does not chain to a trusted Fulcio CA, or the manifest signature does not verify under the certificate's key. |
+| `upgrade_identity_not_allowed` | Bundle signed but the cert identity does not match the compiled-in `ALLOWED_SIGNERS` allowlist. |
+| `upgrade_rekor_invalid` | The bundle's Rekor entry is missing, was logged outside the certificate's validity window, does not bind this manifest and certificate, or carries a Signed Entry Timestamp that no trusted Rekor key verifies. The entry is checked offline; no inclusion proof is involved. |
+| `upgrade_url_invalid` / `upgrade_checksum_mismatch` / `upgrade_arch_mismatch` | Download / verification guard failures. |
+| `upgrade_disabled` / `upgrade_channel_not_allowed` / `upgrade_version_too_old` / `upgrade_sequence_too_old` | Policy rejections. |
+| `upgrade_version_invalid` | The requested version string could not be parsed. |
+| `upgrade_in_progress` | The single-flight guard rejected a second stage while one was already running. |
+| `upgrade_manifest_invalid` | The manifest fetched or parsed, but did not satisfy the schema. |
+| `upgrade_extract_failed` | Tarball extraction failed. `upgrade_disk_full` is the classified sub-case — see [Remote Upgrade](/manager/remote-upgrade/). |
+
+The Sigstore codes are chosen by the binary doing the verifying, which is the one already running. They read as above from the first upgrade made **from** a release later than v0.117.0. An edge on v0.117.0 or earlier reports a trust root that did not load, and every Rekor failure, as `upgrade_signature_invalid` with the message `Sigstore Fulcio + Rekor verification failed`, and never reports `upgrade_rekor_invalid`. See [Remote Upgrade (Edge Side)](/edge/upgrade/#the-trust-chain).
 
 One further Warning rides this category with **no error code at all**, so it appears in the feed but matches no filter built from the table above: when the manager names a `target_arch` that disagrees with the host, `UpgradeCoordinator::stage` emits `Manager requested cross-arch install: arch=…, host=…` and then carries on to the artefact lookup, which is where `upgrade_arch_mismatch` is decided. Seeing it does not by itself mean the upgrade failed.
 
@@ -868,6 +874,6 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 
 | Severity | Typical events |
 |----------|----------------|
-| critical | Service-impacting: flow/tunnel failures, manager auth rejection, both redundant legs lost, bandwidth block, audio/video encoder build & restart-cap failures, PID-bus bring-up errors, RTP/UDP/RIST bind failures, bond media-plane offline, SDI encode failure, upgrade rollback / signature-invalid |
+| critical | Service-impacting: flow/tunnel failures, manager auth rejection, both redundant legs lost, bandwidth block, audio/video encoder build & restart-cap failures, PID-bus bring-up errors, RTP/UDP/RIST bind failures, bond media-plane offline, SDI encode failure, upgrade rollback (an upgrade refused for its signature is an ack code, not an event) |
 | warning | Degradation: disconnects, stale connections, upload failures, reconnects, bandwidth exceeded, encoder restart / per-segment HLS remux failure, PID-bus stream_type mismatch, master-clock PLL fallback, bond path dead / degraded, SDI signal lost, cellular/starlink degradation, NMOS heartbeat lost |
 | info | State changes: connections established, flows started, config updated, bandwidth recovery, encoder started, input/output CRUD, master-clock PLL recovery, bond path/aggregate recovery, SDI signal restored, upgrade lifecycle progress |

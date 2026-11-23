@@ -288,7 +288,7 @@ Each entry records: timestamp, user ID, action, target type, target ID, optional
 
 Binaries are trusted by **Sigstore keyless signing**, not by a long-lived signing key. The release workflow signs each `manifest.json` — which binds `(version, channel, sequence)` to a `(arch, variant) → url + sha256` table — with an ephemeral key; a Fulcio certificate binds that signature to the workflow run, and the signing event is recorded in the public Rekor transparency log.
 
-Before installing anything, a node chains the certificate to a Fulcio root, checks the Rekor inclusion proof, matches the certificate's workflow identity against its own compiled-in `ALLOWED_SIGNERS` allowlist (per binary, so one product's release workflow cannot sign another's), verifies the signature over the manifest bytes, and only then downloads the tarball and rechecks the SHA-256 the verified manifest names. A fully compromised manager can schedule an upgrade but cannot choose what code runs.
+Before installing anything, a node loads Sigstore's Fulcio and Rekor keys through Sigstore's TUF repository (fail-closed when it cannot reach `tuf-repo-cdn.sigstore.dev`), chains the certificate to a Fulcio CA, checks the bundle's Rekor entry — its Signed Entry Timestamp under a Rekor key, and that it binds this manifest and this certificate — matches the certificate's workflow identity against its own compiled-in `ALLOWED_SIGNERS` allowlist (per binary, so one product's release workflow cannot sign another's), verifies the signature over the manifest bytes, and only then downloads the tarball and rechecks the SHA-256 the verified manifest names. A fully compromised manager can schedule an upgrade but cannot choose what code runs.
 
 See [Remote upgrade — trust model](/manager/remote-upgrade/) for the full chain, and [Verify the Sigstore signature](/edge/getting-started/#verify-the-sigstore-signature-optional) for the manual `cosign verify-blob` recipe.
 
@@ -302,7 +302,7 @@ See [Remote upgrade — trust model](/manager/remote-upgrade/) for the full chai
 | Compromised edge host | `secrets.json` encrypted at rest with machine-specific key | Protected |
 | Compromised relay | Zero-knowledge — ChaCha20-Poly1305 E2E encryption | Protected |
 | Token replay | Registration tokens are single-use, consumed on first auth | Protected |
-| Tampered or substituted release binary | Sigstore keyless manifest signature verified against the per-binary compiled-in `ALLOWED_SIGNERS` allowlist (Fulcio workflow identity + Rekor inclusion), then the SHA-256 taken from the signed manifest | Protected |
+| Tampered or substituted release binary | Sigstore keyless manifest signature verified against the per-binary compiled-in `ALLOWED_SIGNERS` allowlist (Fulcio workflow identity + a Rekor entry whose Signed Entry Timestamp verifies), then the SHA-256 taken from the signed manifest | Protected |
 | Brute force login | Argon2id + rate limiting (5/60s) + lockout | Protected |
 | Brute force node auth | Rate limiting (5/60s) + lockout per node_id | Protected |
 | Session hijacking | HttpOnly+Secure cookies, CSRF double-submit, JWT revocation | Protected (revocation is immediate on the serving instance; an HA peer that misses the broadcast is bounded by `session_cache_freshness_secs`) |
@@ -336,7 +336,7 @@ See [Remote upgrade — trust model](/manager/remote-upgrade/) for the full chai
 | `BILBYCAST_JWT_SECRET` | Yes (manager) | 64-char hex string for JWT HMAC-SHA256 signing |
 | `BILBYCAST_MASTER_KEY` | Yes (manager) | 64-char hex string for AES-256-GCM encryption at rest |
 | `BILBYCAST_TLS_CERT` | Conditional (direct mode, file-based certs only) | Path to TLS certificate PEM file. Must be set together with `BILBYCAST_TLS_KEY` — half a pair is refused at startup. Not needed when ACME is enabled |
-| `BILBYCAST_TLS_KEY` | Conditional (direct mode, file-based certs only) | Path to TLS private key PEM file. Must be set together with `BILBYCAST_TLS_CERT` |
+| `BILBYCAST_TLS_KEY` | Conditional (direct mode, file-based certs only) | Path to TLS private key PEM file. Must be set together with `BILBYCAST_TLS_CERT`. Its PEM header must match the key's encoding, or `serve` stops at startup — see [TLS deployment](/manager/tls-deployment/) |
 | `BILBYCAST_TLS_MODE` | No | `"direct"` (default) or `"behind_proxy"` |
 | `BILBYCAST_ALLOW_INSECURE` | No | Set to `"1"` to allow `accept_self_signed_cert` (dev/testing only) |
 | `BILBYCAST_PORT` | No | Override manager listen port (default 8443) |

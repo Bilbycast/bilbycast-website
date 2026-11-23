@@ -44,8 +44,10 @@ If you build the edge from source, the matching dev packages are `libdrm-dev lib
 
 ```bash
 cargo build --release            # display feature is on by default
-cargo build --release --no-default-features --features tls,webrtc   # explicit opt-out
+cargo build --release --no-default-features --features tls,webrtc,fdk-aac,media-codecs,replay   # every default except display
 ```
+
+`display` turns on `fdk-aac` and `media-codecs` itself, so an opt-out has to name them again to keep them. A build also needs an AAC decoder: with neither `fdk-aac` nor its pure-Rust stand-in `aac-symphonia` (AAC-LC mono / stereo only) it stops with a `compile_error!`. A plain `--features tls,webrtc` build is therefore refused.
 
 ## Adding a display output via the manager UI
 

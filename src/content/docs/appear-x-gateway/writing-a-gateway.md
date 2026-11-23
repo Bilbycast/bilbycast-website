@@ -356,13 +356,16 @@ Wiring it up, in order:
 | `upgrade_version_invalid` / `upgrade_version_too_old` | Bad semver, or outside the version window. |
 | `upgrade_sequence_too_old` | Manifest `sequence` ≤ the last installed sequence. |
 | `upgrade_identity_not_allowed` | Signing identity not in `allowed_signers`. |
-| `upgrade_signature_invalid` / `upgrade_rekor_invalid` | Bundle or transparency-log verification failed. |
+| `upgrade_signature_invalid` | The bundle did not parse, its certificate does not chain to a trusted Fulcio CA, or the manifest signature does not verify under the certificate's key. |
+| `upgrade_rekor_invalid` | The bundle's Rekor entry is missing, was logged outside the certificate's validity window, does not bind the manifest and certificate, or carries a Signed Entry Timestamp no trusted Rekor key verifies. |
 | `upgrade_manifest_invalid` | Version, channel or `device_type` mismatch, or unparseable manifest. |
 | `upgrade_url_invalid` | The release base URL derived from `repo` fails the host/scheme check. A bad host on an *artefact* URL is caught by the manifest check instead and surfaces as `upgrade_manifest_invalid`. |
 | `upgrade_arch_mismatch` | No artefact in the manifest for this `(arch, variant)` pair. A variant miss raises this same code — `upgrade_variant_mismatch` is defined in `error_codes` but no call site emits it. |
 | `upgrade_checksum_mismatch` | Downloaded tarball does not match the signed SHA-256. |
-| `upgrade_network_error` / `upgrade_extract_failed` | Transport failure fetching the manifest, bundle or tarball; or a failure unpacking and staging the tarball — a full disk lands on `upgrade_extract_failed` too, since `upgrade_disk_full` is likewise defined but never emitted. |
+| `upgrade_network_error` / `upgrade_extract_failed` | Transport failure fetching the manifest, bundle or tarball, or Sigstore's trust root not loading through its TUF repository (`tuf-repo-cdn.sigstore.dev`; the ack's message names the trust root); or a failure unpacking and staging the tarball — a full disk lands on `upgrade_extract_failed` too, since `upgrade_disk_full` is likewise defined but never emitted. |
 | `upgrade_staged_manual` | `manual_only = true` — returned as a *failed* ack even though the download verified. |
+
+The Sigstore codes are chosen by the SDK built into the gateway that is running, not the one being installed, and read as above from the SDK release after 0.10.7. A gateway built on SDK 0.10.7 or earlier reports every trust-root, certificate-chain and Rekor failure as `upgrade_signature_invalid` with the message `Sigstore Fulcio + Rekor verification failed`, and never reports `upgrade_rekor_invalid`.
 
 Release-side, the shared `scripts/build-manifest.sh` in the SDK produces the canonical `manifest.json` from your per-arch tarballs; sign it with `cosign sign-blob --bundle` (workflow `permissions:` needs `id-token: write`), then self-verify with `cosign verify-blob` and an identity regexp for your workflow *before* publishing. That is cosign's matcher, not the SDK's verifier, so it cannot tell you whether your compiled-in allowlist accepts the release — SDK 0.10.0 to 0.10.4 refused every genuine release while it passed. Pin that with a unit test that feeds a real release certificate through the verifier. See [Remote Upgrade](/manager/remote-upgrade/) for the manager-side controls.
 

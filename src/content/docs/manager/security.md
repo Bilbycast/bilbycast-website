@@ -227,7 +227,7 @@ At startup, the manager detects self-signed certificates and surfaces a warning 
 Three methods are available, from most to least recommended:
 
 1. **ACME / Let's Encrypt** — automatic provisioning and renewal. Private keys generated on-server using ECDSA P-256 and never transmitted. HTTP-01 challenge on port 80. Certificates hot-reload without restart.
-2. **File-based (certbot)** — manual management via `BILBYCAST_TLS_CERT` / `BILBYCAST_TLS_KEY`.
+2. **File-based (certbot)** — manual management via `BILBYCAST_TLS_CERT` / `BILBYCAST_TLS_KEY`. The key file's PEM header must match its encoding, or `serve` stops at startup — see [TLS deployment](/manager/tls-deployment/).
 3. **Behind proxy** — LB terminates TLS; no certificates needed on the manager.
 
 ### Edge and Relay Node Connections

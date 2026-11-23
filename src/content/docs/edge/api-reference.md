@@ -1789,4 +1789,4 @@ Bounds: at most 1024 outputs per map, at most 64 channels per output. A controll
 
 ### mDNS-SD discovery
 
-On startup the edge registers `_nmos-node._tcp.local.` via the `mdns-sd` crate. Failures (no multicast on the selected interface, daemon errors) are logged once and swallowed; flow startup is never blocked.
+On startup the edge registers `_nmos-node._tcp.local.` via the `mdns-sd` crate, naming the addresses the API server binds (`server.listen_addrs`, else `server.listen_addr`, after any `--bind` / `--bind-addrs` override): a `0.0.0.0` bind names every IPv4 address of every interface that is up, a `[::]` bind every IPv6 one except link-local, and any other address itself. A loopback bind, the default, keeps the record on loopback, where only this host sees it. See [mDNS-SD registration](/edge/nmos/#mdns-sd-registration). Failures (no multicast on the selected interface, daemon errors) are logged once and swallowed; flow startup is never blocked.

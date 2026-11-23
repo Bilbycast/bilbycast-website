@@ -237,15 +237,17 @@ The 96-bit nonce is drawn from a CSPRNG per message, which puts the collision bo
 
 The manager has authority over **scheduling** an upgrade — which node, when, which version and channel. It has none over **what code runs**. The node builds the download URL itself and will only install a release that verifies under Sigstore.
 
-### Trust roots compiled into the binary
+### Trust roots
+
+Two anchors are compiled into the binary — Sigstore's TUF root and the identity allowlist. The Fulcio and Rekor keys are not anchors: the `sigstore` crate embeds a copy of the `trusted_root.json` that holds them, but trusts it only while its hash matches the one in TUF metadata fetched at every verification, and fetches the current file when it does not.
 
 | Root | Source | Rotates |
 |------|--------|---------|
-| Sigstore TUF root (`root.json`) | embedded in the `sigstore` crate at build time — the anchor everything else is checked against | only on a Sigstore root rotation, which needs a new edge build |
-| Fulcio CA certs + Rekor public keys | shipped as an embedded `trusted_root.json` snapshot, but re-checked against Sigstore's TUF repository at verification time and re-fetched if the snapshot is stale | automatically, as Sigstore rotates them |
+| Sigstore TUF root (`root.json`) | embedded in the `sigstore` crate at build time — the anchor everything else is checked against | through TUF: a node walks Sigstore's signed root chain forward from the embedded root at every verification, so a root rotation needs no new edge build |
+| Fulcio CA certs + Rekor public keys | Sigstore's `trusted_root.json`, vouched for by TUF metadata fetched from Sigstore's TUF repository at every verification. The crate's embedded copy is used only while its hash matches the TUF-signed one; otherwise the current one is fetched | automatically, as Sigstore rotates them |
 | `ALLOWED_SIGNERS` identity allowlist | bilbycast-specific, in `src/upgrade/trust.rs` | only when the release workflow path changes |
 
-Loading that trust root contacts `https://tuf-repo-cdn.sigstore.dev`, so a node that cannot reach it fails the upgrade closed rather than falling back to the embedded snapshot unchecked.
+Loading that trust root contacts `https://tuf-repo-cdn.sigstore.dev` on every verification — the TUF metadata is fetched afresh each time, so there is no offline mode — and a node that cannot reach it fails the upgrade closed (`upgrade_network_error`, naming the trust root, from a release later than v0.117.0) rather than falling back to the embedded snapshot unchecked.
 
 The allowlist pins four claims, all of which must match: the OIDC issuer `https://token.actions.githubusercontent.com`, the repository `https://github.com/Bilbycast/bilbycast-edge`, the workflow `.github/workflows/nightly-release.yml`, and the ref pattern `refs/tags/v*`. That last pin is what makes a manually dispatched run from a branch unusable — it mints a `refs/heads/*` certificate every deployed edge rejects.
 

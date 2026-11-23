@@ -17,7 +17,7 @@ The manager never chooses bytes. It names a `(version, channel)` pair; everythin
 
 1. **Policy gate.** The node checks the request against its own `upgrades` block before touching the network.
 2. **Deterministic URL.** The release base URL is built from the version alone: `https://github.com/Bilbycast/bilbycast-edge/releases/download/v<version>`. The manager cannot influence it.
-3. **Verify the manifest.** `manifest.json` + `manifest.sig.bundle` are fetched and the Sigstore keyless signature is checked — Fulcio certificate chain, Rekor transparency-log entry, then the workflow identity against the compiled-in `ALLOWED_SIGNERS` allowlist.
+3. **Verify the manifest.** `manifest.json` + `manifest.sig.bundle` are fetched and the Sigstore keyless signature is checked — Sigstore's trust root loaded through its TUF repository, then the Fulcio certificate chain, the Rekor transparency-log entry, and the workflow identity against the compiled-in `ALLOWED_SIGNERS` allowlist.
 4. **Download by verified hash.** The tarball for this host's `(arch, variant)` is streamed and SHA-256'd against the digest inside the *verified* manifest.
 5. **Stage atomically.** Extract to `versions/<v>.partial/`, `rename(2)` to `versions/<v>/`, rotate `current` → `previous`, `rename(2)` a new `current` symlink into place.
 6. **Drain and exit.** Emit `upgrade_staged`, wait 5 seconds for in-flight packets, `exit(0)`. systemd respawns through the `current` symlink.
@@ -98,7 +98,7 @@ Everything below happens before a single byte of the new binary is written to di
 | 5 | Version window: `≥ min_version`, not the version already running, same major, no further back than `rollback_grace` minors | `upgrade_version_too_old` |
 | 6 | Constructed URL passes the exact-match host allowlist | `upgrade_url_invalid` |
 | 7 | Manifest + bundle fetch (1 MiB cap each, 30 s timeout, 3 attempts) | `upgrade_network_error` |
-| 8 | Sigstore verification — see [the trust chain](#the-trust-chain) | `upgrade_signature_invalid`, `upgrade_identity_not_allowed`, `upgrade_rekor_invalid` |
+| 8 | Sigstore verification — see [the trust chain](#the-trust-chain) | `upgrade_network_error` (Sigstore's trust root did not load), `upgrade_signature_invalid`, `upgrade_identity_not_allowed`, `upgrade_rekor_invalid` |
 | 9 | Manifest cross-check: `version`, `channel`, `device_type == "edge"`, non-empty artefacts, well-formed URLs and 64-hex digests | `upgrade_manifest_invalid` |
 | 10 | `manifest.sequence > state.last_sequence` (replay defence) | `upgrade_sequence_too_old` |
 | 11 | An artefact exists for this host's `(arch, variant)` | `upgrade_arch_mismatch` |
@@ -107,16 +107,18 @@ Everything below happens before a single byte of the new binary is written to di
 
 Check 5 is worth reading twice: `upgrade_version_too_old` is the code for *every* version-window rejection, including "you asked for the version already running" and "that crosses a major boundary". The human-readable message in the ack says which.
 
+Check 8's codes are chosen by the binary doing the verifying — the one already running, not the one being installed — so they hold from the first upgrade **after** a node is on a release later than v0.117.0. An edge on v0.117.0 or earlier reports a trust root that did not load, and every Rekor failure, as `upgrade_signature_invalid` with the bare message `Sigstore Fulcio + Rekor verification failed`, and never reports `upgrade_rekor_invalid`; it raises `upgrade_identity_not_allowed` as described here. Later releases put the whole cause in the ack's message.
+
 Network fetches make up to three attempts on 5xx, 429 and 408, backing off 250 ms and then 500 ms between them. Any other status fails immediately.
 
 ## The trust chain
 
-Three roots decide whether a manifest is genuine. Only one of them is Bilbycast's.
+Three roots decide whether a manifest is genuine. Only one of them is Bilbycast's, and only it and the TUF root the other two are fetched from are compiled into the binary as anchors. The `sigstore` crate also embeds a copy of the `trusted_root.json` that holds the other two, but trusts it only while its hash matches the TUF-signed one. The TUF timestamp, snapshot and targets metadata are fetched afresh on every verification and not kept between verifications, so there is no offline mode: a node with no route to `tuf-repo-cdn.sigstore.dev` fails the upgrade closed.
 
 | Root | Where it comes from | How it rotates |
 |---|---|---|
-| Fulcio CA certificates | The Sigstore Public Good TUF repository, loaded through the `sigstore` crate at verification time | Sigstore's own rotation, announced in advance |
-| Rekor public keys | Same source, same load | Same |
+| Fulcio CA certificates | Sigstore's `trusted_root.json`, fetched through the Sigstore Public Good TUF repository by the `sigstore` crate at every verification and trusted only once TUF metadata, walked forward from the TUF root (`root.json`) embedded in the binary, vouches for it. The crate's embedded copy of `trusted_root.json` is used only while its hash matches the TUF-signed one | Through TUF: Sigstore rotates or revokes a key there and deployed nodes follow with no new release, a TUF root rotation included (the node walks Sigstore's signed root chain forward) |
+| Rekor public keys | Same `trusted_root.json`, same TUF check | Same |
 | `ALLOWED_SIGNERS` identity allowlist | Compiled into this binary — `src/upgrade/trust.rs` | Only when the release workflow path itself changes |
 
 The allowlist is a single entry, and all four of its claims must match the Fulcio certificate:
@@ -132,15 +134,19 @@ AllowedSigner {
 
 `issuer` and `repo` are exact string equality against the certificate's Fulcio extensions — `1.3.6.1.4.1.57264.1.8` (issuer) and `.1.12` (source repository URI, `https://github.com/<owner>/<repo>`), falling back to the deprecated `.1.1` and `.1.5` (bare `<owner>/<repo>`, read with `https://github.com/` in front) on a certificate without them; `ref_pattern` is a `*`-suffix glob against `.1.14`, falling back to `.1.6`; `workflow` is a prefix of the certificate's SAN URI that must be followed directly by `@`. A release built from `main` rather than a `v*` tag produces a `refs/heads/main` certificate and fails — which is why the release workflow is driven by a tag push, not a schedule.
 
-Verification runs these steps and every one must pass:
+Verification runs these steps and every one must pass. Each names the `error_code` its failure reports:
 
-1. Parse the cosign bundle — `cert` (PEM), `base64Signature`, `rekorBundle`. A bundle with no Rekor entry is rejected outright; transparency is not optional.
-2. Chain the leaf certificate to a trusted Fulcio CA. This is the anti-forgery check: without it, anyone could self-sign a certificate carrying the right workflow identity.
-3. Require the Rekor entry's `integratedTime` to fall inside the certificate's `[notBefore, notAfter]` window — Fulcio issues short-lived certificates, so this pins the signature to the moment the workflow ran.
-4. Require the Rekor entry body to bind **this** manifest's SHA-256 and **this** certificate, so a valid entry for some other artefact cannot be replayed alongside a forged manifest.
-5. Verify the Rekor Signed Entry Timestamp under a trusted Rekor key.
-6. Match the certificate's identity claims against `ALLOWED_SIGNERS`.
-7. Verify the ECDSA signature over the raw manifest bytes.
+1. Parse the cosign bundle — `cert` (PEM), `base64Signature`, `rekorBundle` (`upgrade_signature_invalid`).
+2. Load Sigstore's trust root: TUF metadata fetched from `tuf-repo-cdn.sigstore.dev`, walked forward from the TUF root embedded in the binary, vouches for the Fulcio CA certificates and Rekor keys (`upgrade_network_error`, the message naming the trust root). Nothing about the release has been checked yet, which is why this is not a signature failure.
+3. Require a Rekor entry. A bundle without one is rejected outright (`upgrade_rekor_invalid`); transparency is not optional.
+4. Chain the leaf certificate to a trusted Fulcio CA (`upgrade_signature_invalid`). This is the anti-forgery check: without it, anyone could self-sign a certificate carrying the right workflow identity.
+5. Require the Rekor entry's `integratedTime` to fall inside the certificate's `[notBefore, notAfter]` window — Fulcio issues short-lived certificates, so this pins the signature to the moment the workflow ran (`upgrade_rekor_invalid`).
+6. Require the Rekor entry body to bind **this** manifest's SHA-256 and **this** certificate, so a valid entry for some other artefact cannot be replayed alongside a forged manifest (`upgrade_rekor_invalid`).
+7. Verify the Rekor Signed Entry Timestamp under a trusted Rekor key (`upgrade_rekor_invalid`). The entry the bundle carries is checked offline, by that signature and the body binding above: Rekor is not queried and no inclusion proof is checked.
+8. Match the certificate's identity claims against `ALLOWED_SIGNERS` (`upgrade_identity_not_allowed`).
+9. Verify the ECDSA signature over the raw manifest bytes (`upgrade_signature_invalid`).
+
+These codes are the ones a release later than v0.117.0 reports; see the note under [What the node checks](#what-the-node-checks-in-order) for older edges.
 
 There is no long-lived signing key anywhere in this path. The release workflow requests a short-lived OIDC token, Fulcio mints a certificate against it, an ephemeral keypair signs and is thrown away, and the signing event is recorded permanently in Rekor against a specific commit and tag.
 
@@ -396,7 +402,7 @@ Installing cosign, and the same recipe against `releases/latest`, are covered in
 | `upgrade_arch_mismatch` | The node's `(arch, variant)` has no row in the manifest — usually a self-built binary reporting `variant: default`. Check the variant rules above. |
 | `upgrade_sequence_too_old` | The target release is not newer than the last one installed on this node. Check `.last_sequence` in `state.json`. |
 | `upgrade_network_error` on the manifest fetch | Egress to `github.com` blocked, or blocked at the CDN redirect. See [Egress the node needs](#egress-the-node-needs). |
-| `upgrade_signature_invalid` with a trust-root message | `tuf-repo-cdn.sigstore.dev` unreachable, so the Fulcio / Rekor roots could not be loaded. Verification is fail-closed: an unreachable trust root is a rejection, not a bypass. |
+| `upgrade_network_error` naming the Sigstore trust root | `tuf-repo-cdn.sigstore.dev` unreachable (or what it served did not verify), so the Fulcio / Rekor keys could not be loaded. Offline, the message can read `root metadata is expired` rather than name a failed fetch: the TUF root embedded in the binary has expired, and a live node walks Sigstore's signed root chain forward from it. Verification is fail-closed: an unreachable trust root is a rejection, not a bypass. An edge on v0.117.0 or earlier reports the same fault as `upgrade_signature_invalid` with the message `Sigstore Fulcio + Rekor verification failed`. |
 | `upgrade_identity_not_allowed` | The manifest is signed, but not by the Bilbycast release workflow. Treat this as a security event, not a transient failure. |
 | Status stuck at `pending_health` | Expected with the default 120 s window on a node that stays connected — see the [promotion rule](#promotion-and-the-60-second-freshness-check). Otherwise the new binary is not authenticating: check the manager URL, node secret and TLS settings. |
 | Repeated `upgrade_rolled_back` | The staged build cannot complete `max_boot_attempts` boots. `journalctl -u bilbycast-edge` from the failing boots is the record; the node is running the previous version in the meantime. |

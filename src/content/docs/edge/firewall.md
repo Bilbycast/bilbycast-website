@@ -28,11 +28,11 @@ initiative. They are the same on every edge.
 |------|-------|-----------|-----------------|--------------|
 | `8080` | TCP | Inbound | Local HTTP API, `/health`, `/metrics`, `/setup`, WHIP/WHEP signalling, `/x-nmos/**` | Always. Binds **loopback only** on a fresh node — see below |
 | *(no default)* | TCP | Inbound | Monitor dashboard — a **second** HTTP server, separate from the API | Only when a `monitor` block is present. `monitor.listen_port` is required, not defaulted; examples use `9090` |
-| `5353` | UDP (multicast) | In/out | mDNS-SD `_nmos-node._tcp`, advertising the API port above | Always — registered unconditionally at startup, not gated on any NMOS config |
+| `5353` | UDP (multicast) | In/out | mDNS-SD `_nmos-node._tcp`, advertising the API port above | Always — registered unconditionally at startup, not gated on any NMOS config. The record names the API's bind addresses and is announced only on the interfaces holding them, so under the default loopback bind it stays on loopback — see [mDNS-SD registration](/edge/nmos/#mdns-sd-registration). Up to v0.117.0 it named `127.0.0.1` whatever the bind |
 | From the `wss://` URL — `443` if none is given | TCP | **Outbound** | Manager control plane (WebSocket) | Only with `manager.enabled: true`. The client dials `manager.urls[0]` and rotates through the rest on every close. A manager installed with defaults listens on `8443` |
 | From `relay_addrs` — the relay's own default is `4433` | UDP | **Outbound** | QUIC or native-UDP tunnel to `bilbycast-relay` | Per tunnel with `mode: relay`, and per bond leg with `type: relay` |
 | From `peer_addr` — whatever the far edge pinned as its `direct_listen_addr` | UDP | **Outbound** | Tunnel straight to the peer edge, no relay in the path | Per tunnel with `mode: direct` **and** `direction: egress` (the dialling side) |
-| `443` | TCP | **Outbound** | Remote upgrade — manifest, cosign bundle and tarball. Manifest URLs are allowlisted to `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com`; redirects are then followed to any `*.githubusercontent.com` host | Only while an `upgrade_binary` command is running |
+| `443` | TCP | **Outbound** | Remote upgrade — manifest, cosign bundle and tarball. Manifest URLs are allowlisted to `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com`; `github.com` answers each download with a redirect to its release CDN, and redirects are followed only to `github.com` or a `*.githubusercontent.com` host. Also `tuf-repo-cdn.sigstore.dev`, Sigstore's TUF repository, from which every verification loads the Fulcio and Rekor keys — without it the upgrade fails closed | Only with `upgrades.enabled: true`, while an `upgrade_binary` command is running. See [Egress the node needs](/edge/upgrade/#egress-the-node-needs) |
 | `319`, `320` | UDP | In/out | PTP (IEEE 1588). **Bound by `ptp4l`, not by the edge** — the edge reads PTP state from linuxptp's Unix socket at `/var/run/ptp4l` | ST 2110 / MXL hosts. See [Time (PTP)](/edge/ptp/) |
 | `9200` | TCP | **Outbound** | Starlink dish gRPC (`get_status`), default host `192.168.100.1` | Only with `starlink_uplinks` configured |
 | From `registry_url` | TCP | **Outbound** | NMOS IS-04 registration + 5 s heartbeat | Only with `nmos_registration.enabled: true` |
@@ -100,7 +100,9 @@ bonded relay legs) and every output as a push. The node then only ever
 
 - **Inbound:** none.
 - **Outbound:** the manager's `wss://` port, plus whatever your sources and
-  destinations listen on.
+  destinations listen on. An edge that takes manager-driven upgrades also
+  needs 443 TCP to GitHub's release hosts and to `tuf-repo-cdn.sigstore.dev`
+  (see the table above).
 - Firewall: `default deny incoming`, `default allow outgoing`. Done.
 
 This is the right shape for an edge on the public internet or in a hostile
@@ -263,7 +265,12 @@ each line against [Configuration](/edge/configuration/).
   ports that no static rule can cover.
 - **mDNS is always on.** The `_nmos-node._tcp` advertisement is registered at
   startup regardless of NMOS configuration, so the node joins the 5353 multicast
-  group on every boot.
+  group on every interface that is up, point-to-point links aside, on every
+  boot. It announces the record, and answers queries for it, only on the
+  interfaces holding an address the record names: a loopback-bound node (the
+  default) keeps it on loopback, and a `0.0.0.0` bind announces it on each of
+  those interfaces that has an IPv4 address. See
+  [mDNS-SD registration](/edge/nmos/#mdns-sd-registration) for `[::]`.
 - **Multicast is not just a firewall question.** A multicast `bind_addr` triggers
   an IGMP/MLD join; `source_addr` makes it source-specific (IGMPv3). Switch and
   router configuration matters at least as much as the host rules.

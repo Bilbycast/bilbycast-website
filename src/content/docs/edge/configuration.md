@@ -823,11 +823,11 @@ Pulls H.264 or H.265/HEVC video and AAC audio from RTSP sources (IP cameras, med
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `type` | string | Yes | - | Must be `"rtsp"`. |
-| `rtsp_url` | string | Yes | - | RTSP source URL. Must start with `rtsp://` or `rtsps://`. |
+| `rtsp_url` | string | Yes | - | RTSP source URL. Must start with `rtsp://`: the RTSP client speaks no TLS, so an edit refuses `rtsps://`. Credentials in the URL (`rtsp://user:pass@camera/…`) are used unless `username` and `password` are both set; percent-encode a `#`, `/`, `?` or `@` in them (`%23`, `%2F`, `%3F`, `%40`), or use the two fields. Logs, events and stats never show the password. |
 | `username` | string | No | `null` | RTSP authentication username (Digest or Basic). |
 | `password` | string | No | `null` | RTSP authentication password. |
 | `transport` | string | No | `"tcp"` | `"tcp"` (interleaved, reliable) or `"udp"` (lower latency). |
-| `timeout_secs` | integer | No | `10` | Connection timeout in seconds. |
+| `timeout_secs` | integer | No | `10` | Bound on session setup (connect, DESCRIBE, SETUP and PLAY together), 1–300 seconds. Past it the attempt is retried after `reconnect_delay_secs`. |
 | `reconnect_delay_secs` | integer | No | `5` | Delay between reconnection attempts on failure. |
 
 ### WebRTC/WHIP Input

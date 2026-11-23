@@ -335,7 +335,10 @@ netplan.
 `ip rule` priorities **10000–10255** (base from `BILBYCAST_BOND_RT_PRIO_BASE`),
 one slot per leg, so **256 concurrent gateway-mode legs** per host. Override
 either base if it collides with tables you already use — see
-[Environment Variables](/reference/environment-variables/). The edge sweeps
+[Environment Variables](/reference/environment-variables/). Both are bounded
+(tables 256–4294967040, priorities 1–744 or 1001–32510, clear of the kernel's
+own tables and rules); a whole number outside them disables gateway routing,
+with a Critical event at boot, rather than falling back to the default. The edge sweeps
 orphaned entries out of those ranges once per process, before it programs the
 first leg (so a crash doesn't leak routes), and tears down each leg's table and
 rule when its flow stops.

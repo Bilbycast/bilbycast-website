@@ -96,7 +96,7 @@ Every other field maps to a counter or gauge of the obvious name, and those do r
 
 ### Series catalogue
 
-31 metric families, in the order `/metrics` emits them.
+33 metric families, in the order `/metrics` emits them.
 
 **Relay-level — always emitted**
 
@@ -135,6 +135,8 @@ Every other field maps to a counter or gauge of the obvious name, and those do r
 | `bilbycast_relay_distribution_bytes_out_total` | counter | Media bytes fanned out to viewers |
 | `bilbycast_relay_distribution_origin_bytes` | gauge | Bytes currently held in the LL-HLS origin cache |
 | `bilbycast_relay_distribution_offpath_sessions` | counter | WHEP sessions that had a datagram refused by the media source pin — a spoofed ICE reflection attempt, or a viewer whose IP changed mid-session. Counted once per session |
+| `bilbycast_relay_distribution_other_path_datagrams_total` | counter | Datagrams the media source pin dropped from another of a peer's paths (an address named in its SDP, seen before DTLS completed, or advertised by the session) inside the grace after the pin armed, which raise no alarm. WHEP, WHIP and cascade sessions alike. Past the grace such a datagram is off-path |
+| `bilbycast_relay_distribution_superseded_frames_total` | counter | Frames a live ingest published while a newer ingest held its stream, dropped. Non-zero while two publishers push one stream id |
 
 **Manager link** — emitted only when a manager is configured.
 

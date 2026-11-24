@@ -388,7 +388,7 @@ Optional connection to a bilbycast-manager instance for centralized monitoring a
 3. Start the edge. It connects to the manager, sends the token, and receives `node_id` + `node_secret`.
 4. Credentials are saved automatically: `secrets.json` first and on its own, holding `node_secret` and the `node_id` it was issued for, then `config.json`, holding `node_id`. A restart reads the pair from `secrets.json`, so a `config.json` that could not be rewritten (a full disk fails the bigger file alone) does not lock the node out, and the setup wizard the registration closed stays closed: a `config.json` that does not hold the node ID `secrets.json` names predates the registration, so its `setup_enabled: true` is not read. One registration cannot be told apart this way — one the manager answers with the node ID `config.json` already holds, a token regenerated for the same node — and after it the wizard reopens until `setup_enabled` is set back to `false`. A `secrets.json` that cannot be written raises a Warning `manager_credentials_not_saved` (`during: registration`): the node stays connected on the issued credentials and the next config save that succeeds writes them, but a restart before then presents the spent token.
 5. The registration token is cleared. Future connections use `node_id` + `node_secret`.
-6. If the connection drops, the edge auto-reconnects with exponential backoff (1s to 60s).
+6. If the connection drops or an attempt fails, the edge dials the next entry in `urls` after a fixed 5 s, and keeps doing so until one answers.
 
 ### Validation Rules
 
@@ -802,7 +802,7 @@ Accepts incoming RTMP publish connections from OBS, ffmpeg, Wirecast, etc.
 | `external_address` | string | No | `null` | Public `host:port` this listener is reachable on from outside. Advertised to the manager's topology matcher only — the edge binds `listen_addr` regardless. |
 | `app` | string | No | `"live"` | The RTMP URL's application (path) component. A publisher connecting to another app is refused. |
 | `stream_key` | string | No | `null` | Expected stream key. `null` accepts any key. |
-| `max_publishers` | integer | No | `1` | **Accepted but currently inert** — nothing in the RTMP server reads it. The real ceiling is a hard-coded 8 concurrent connections per RTMP input, enforced by a semaphore in the accept loop and not operator-settable, with a separate single-publisher gate on top. |
+| `max_publishers` | integer | No | `1` | **Accepted but currently inert** — nothing in the RTMP server reads it. The real ceiling is a hard-coded 8 concurrent connections per RTMP input, enforced by a semaphore in the accept loop and not operator-settable. One publish is on air at a time: the newest takes over with its first H.264 or AAC frame, and what an older one still sends is dropped until the newer ends. Up to and including v0.117.0 two publishers at once were muxed into each other. |
 
 `audio_encode`, `transcode`, `video_encode`, `program_number`, `pid_map` and `pid_overrides` are also accepted here — see the sections those fields link to elsewhere on this page. `passthrough_clock` and `ingress_delay_ms` are covered by the [shared input-field table](#fields-shared-across-input-types).
 

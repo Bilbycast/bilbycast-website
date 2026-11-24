@@ -201,6 +201,8 @@ curl -H "Authorization: Bearer <token>" \
 
 Force-tears-down a QUIC tunnel: revokes its bind authorisation **and** removes the live tunnel entry, notifying any still-bound peer with `TunnelDown`. This is an administrative escape hatch for orphaned tunnels — the normal teardown path is the manager's `close_tunnel` WebSocket command.
 
+An edge that still has the tunnel configured binds it again about a second later (edges after v0.117.0), and the tunnel is listed again. With `require_bind_auth: true` that bind is refused until the manager authorises the tunnel again, which it does when the relay reconnects to it. Delete the tunnel on the edge, or in the manager, to be rid of it.
+
 **Fail-closed:** this route returns `403` unless `api_token` is configured, regardless of whether a token is presented (a destructive route must never be reachable unauthenticated). Invalid UUID → `400`; unknown tunnel → `404`.
 
 ```bash

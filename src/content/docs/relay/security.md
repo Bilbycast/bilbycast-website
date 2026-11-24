@@ -52,9 +52,9 @@ The end-to-end encryption protects the **payload**, but it doesn't on its own pr
 3. The manager distributes the secret to both edges.
 4. When an edge binds to the tunnel, it computes the same HMAC and includes it in the `TunnelBind` message as `bind_token`.
 5. The relay compares the bind token to its stored authorisation **with constant-time comparison** (so timing attacks can't recover the secret bit by bit).
-6. Mismatched or missing tokens cause the bind to be rejected with a `TunnelDown` notification, which surfaces to the manager as an event.
+6. Mismatched or missing tokens cause the bind to be rejected with a `TunnelDown` notification, which surfaces to the manager as an event. The edge tries again after 1 s, doubling to 60 s, and raises `Tunnel bind rejected by relay` each time. (Up to edge v0.117.0 it did not read the refusal, and stayed `connecting` until it was restarted.)
 
-To revoke an authorisation, the manager sends `revoke_tunnel` — subsequent binds with the old token are rejected.
+To revoke an authorisation, the manager sends `revoke_tunnel`. What is bound or latched already stays, until `close_tunnel` or its own end: the manager sends both when a tunnel is deleted. Subsequent binds are rejected if `require_bind_auth` is on, and taken with any token or none if it is not.
 
 ### The permissive default, and what it costs
 
@@ -62,7 +62,7 @@ To revoke an authorisation, the manager sends `revoke_tunnel` — subsequent bin
 
 **The consequence differs per plane, and this is the part worth reading twice.**
 
-- On the **QUIC carrier**, an unauthenticated `TunnelBind` lets a stranger *join* a tunnel.
+- On the **QUIC carrier**, an unauthenticated `TunnelBind` lets a stranger *take a side* of a tunnel: it is sent the ciphertext meant for that side, and the edge it took it from is not told.
 - On the **native plain-UDP carrier**, the rendezvous latch turns a source address into a *send* target — so an unauthenticated `Register` can *move* a slot and redirect live media to the sender. That is media hijack, not merely eavesdropping on ciphertext. Both halves of the shipped defaults put a zero-config relay in this posture: `require_bind_auth` is false and `udp_relay_enabled` is true, so a config that simply omits `udp_relay_enabled` is still exposed.
 
 Two mitigations ship, and neither is a substitute for bind auth:
@@ -70,7 +70,15 @@ Two mitigations ship, and neither is a substitute for bind auth:
 - **A live slot is held down.** A `Register` from a *different* source IP is refused for 12 seconds after that slot's last forwarded media datagram, so a flowing session cannot be stolen. Same-IP moves are always allowed — a NAT port rebind, a socket rotation and an edge restart on the same host are all legitimate and all keep the IP — and a slot that has never carried media stays last-writer-wins.
 - **The relay says so out loud.** A relay in this posture emits a Warning `relay_native_plane_unauthenticated` event at startup, which lands on the manager's Events page. A relay is headless; journald is not where an operator looks.
 
-To close it, either:
+When the authorisation does come, it is applied to the binds and registers that came before it. The relay remembers the token each showed:
+
+- An edge that showed the right one keeps its side, with no interruption.
+- A stranger loses a side to the edge it took it from, at once, if that edge had shown the right token and is still connected (QUIC), and to the edge's next `Register`, within 5 s (native). Each raises a Warning `relay_unproven_holder_replaced`.
+- A holder that has not shown the right token, while no edge that has is there, keeps the side until one comes. It is not cut off at once because an edge the manager could not reach with a new bind secret, or one that has no bind secret at all, looks the same.
+
+Up to relay v0.20.0 the tokens were not applied to what was already bound: a stranger that took a side in that window kept it for as long as it stayed connected, or on the native plane went on sending.
+
+To close the window itself, either:
 
 - **Set `require_bind_auth: true`** — but only on a relay driven by a manager that pushes bind secrets. Strict mode fails **closed on both planes** for every tunnel with no pushed authorisation, so on a manager-less relay it refuses every bind and takes the relay off air.
 - **Or disable the native plane** with `udp_relay_enabled: false` (`--no-udp-relay` on the command line), if you do not carry native SRT/RIST or bond legs over this relay.

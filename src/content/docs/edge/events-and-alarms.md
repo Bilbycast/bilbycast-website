@@ -457,10 +457,12 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | info | Tunnel '{name}' stopped | Tunnel stopped by command or config change |
 | info | Tunnel connected to relay | QUIC connection established and TunnelReady received |
 | warning | Tunnel disconnected from relay: {reason} | QUIC connection lost or forwarder exited |
-| warning | Tunnel peer disconnected: {reason} | Relay reported peer unbound (TunnelDown) |
+| warning | Tunnel peer disconnected: {reason} | The relay says the peer is gone. The connection and this edge's bind stay, and the state is `waiting`. Never raised up to v0.117.0 |
+| warning | Tunnel removed on relay: {reason} | The relay removed this edge's side (the manager's `close_tunnel`, a delete on the relay's REST API). The state is `down`, and the edge binds again on the same connection after 1 s, doubling to 60 s |
+| info | Tunnel ready again | The peer is back, or the removed side is bound again, with no new connection. At most four of this and the two above at once per connection, and then one every 30 s; the last says how the tunnel stands |
 | warning | Tunnel connection to relay failed: {error} | QUIC connect or TLS error |
 | critical | Tunnel '{name}' failed: {error} | Tunnel task exited with fatal error |
-| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed |
+| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed, or no token is registered on a relay with `require_bind_auth`. Tried again after 1 s, doubling to 60 s. Never raised up to v0.117.0, where the tunnel stayed `connecting` |
 
 These tunnel events carry a structured `details.error_code`:
 
@@ -947,7 +949,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
 | `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`), an interlaced encode that fell back to progressive, and a frame-rate mismatch |
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
-| `tunnel` | Tunnel connection state, a tunnel's gateway route not programmed, and datagrams the kernel dropped |
+| `tunnel` | Tunnel connection state, what the relay says of a tunnel that is up, a tunnel's gateway route not programmed, and datagrams the kernel dropped |
 | `manager` | Manager WebSocket connection |
 | `config` | Configuration changes, deprecated environment variables, repaired or unplayable config values, reserved input ids, gateway-routing bases, restart-required `tuning` pushes |
 | `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW encoder/decoder oversubscription + the display path's HW-decode lifecycle |

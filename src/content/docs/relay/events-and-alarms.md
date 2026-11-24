@@ -77,12 +77,14 @@ When the structured-JSON log shipper is configured it sees every event *before* 
 | info | Tunnel waiting: {direction} side bound | Only one side has bound, waiting for peer | `{ direction }` |
 | info | Tunnel unbound by edge | Edge sent TunnelUnbind | |
 | warning | Tunnel bind rejected: invalid token | HMAC-SHA256 bind token verification failed | `{ remote_addr }` |
-| warning | Tunnel bind rejected: per-connection cap exceeded | `TunnelBind` rejected — per-connection tunnel-bind cap (`max_tunnels_per_connection`, default 100) reached on this connection. DoS mitigation; relay replies `TunnelDown { reason: "per-connection tunnel limit exceeded" }` | `{ error_code: "relay_dos_suspect", remote_addr, active_binds, cap }` |
+| warning | Tunnel bind rejected: per-connection cap exceeded | `TunnelBind` rejected — per-connection tunnel-bind cap (`max_tunnels_per_connection`, default 100) reached on this connection: it has that many sides bound, and this is another. DoS mitigation; relay replies `TunnelDown { reason: "per-connection tunnel limit exceeded" }` | `{ error_code: "relay_dos_suspect", remote_addr, active_binds, cap }` |
 | warning | Tunnel down: edge disconnected | Edge QUIC connection lost, affecting bound tunnel | |
 | warning | Native-UDP register rejected: invalid token | `Register` on the native plain-UDP plane (`:4434`) failed bind-token verification | `{ remote_addr, transport: "udp" }` |
 | warning | Native-UDP register rejected: per-IP session cap exceeded | `Register` on the native plain-UDP plane dropped — per-IP session cap reached. DoS mitigation | `{ error_code: "relay_dos_suspect", remote_addr, remote_ip, transport: "udp" }` |
 | warning | Native-UDP register rejected: implausible source address | `Register` on the native plain-UDP plane arrived from an address that can never be a legitimate slot occupant. `reason: "unroutable_source"` — an address no host can own (unspecified / multicast / broadcast / port 0); `reason: "both_slots_same_address"` — the tunnel's *opposite* slot already holds exactly this address, which would make the session forward to its own source (an unbounded loop if that address routes back to the relay). Not latchable — a slot is a send target | `{ error_code: "relay_invalid_source_addr", reason, remote_addr, remote_ip, transport: "udp" }` |
 | warning | Native-UDP register refused: slot held by a live peer | `Register` tried to move a slot that is currently carrying media from a *different* source IP. Refused for 12 s after that slot's last media datagram, so a flowing contribution feed cannot be redirected by one unauthenticated datagram. A same-IP port rebind is always allowed; a genuine WAN-IP change recovers once the incumbent goes quiet | `{ error_code: "relay_slot_takeover_refused", remote_addr, remote_ip, transport: "udp" }` |
+| warning | Tunnel side given back to the edge that showed its token | `authorize_tunnel` came for a QUIC tunnel with a side that had been taken over, while no token was registered, by a connection that has not shown the token, from one that has and is still connected. The side is that one's again. `held_by` is the address of the one that had taken it, `null` if it has left | `{ error_code: "relay_unproven_holder_replaced", transport: "quic", direction, remote_addr, held_by }` |
+| warning | Native-UDP slot taken over by the edge that showed its token | A `Register` showed the registered token for a slot whose holder, at another IP, is carrying media and has not shown it. The slot is the edge's at once; without the token it would have been refused (`relay_slot_takeover_refused`) | `{ error_code: "relay_unproven_holder_replaced", transport: "udp", direction, remote_addr, held_by }` |
 | warning | Native-UDP plane accepts unauthenticated registers | Emitted **once at startup** when `require_bind_auth: false` *and* `udp_relay_enabled: true`. For any tunnel the manager has not pre-authorised, a `Register` on the native plane can *move* a slot (media hijack), not merely join a tunnel as on QUIC. See [Security — the permissive default](/relay/security/#the-permissive-default-and-what-it-costs) | `{ error_code: "relay_native_plane_unauthenticated", require_bind_auth: false, udp_relay_enabled: true }` |
 
 The `flow_id` field contains the tunnel UUID for all tunnel events.
@@ -152,12 +154,12 @@ These are generated server-side in `bilbycast-manager/crates/manager-server/src/
 | Category | Count | Description |
 |----------|-------|-------------|
 | `edge` | 6 | Edge QUIC connection lifecycle (with structured details), incl. per-IP DoS cap and QUIC accept failures |
-| `tunnel` | 11 | Tunnel state changes, authentication, lifecycle (waiting, unbound), per-connection DoS cap, native plain-UDP register rejections (invalid token + per-IP session cap + implausible source address), live-slot takeover refusals, and the startup posture warning |
+| `tunnel` | 13 | Tunnel state changes, authentication, lifecycle (waiting, unbound), a side taken back by the edge that showed its token (both planes), per-connection DoS cap, native plain-UDP register rejections (invalid token + per-IP session cap + implausible source address), live-slot takeover refusals, and the startup posture warning |
 | `manager` | 6 | Manager connection and credential management |
 | `distribution` | 7 | Viewer-distribution ingest lifecycle, per-IP viewer cap, the WHEP media source-pin drop, a spent clip-export allowance, and clip deletes (only on `viewer-distribution` builds) |
-| **Total** | **30** | |
+| **Total** | **32** | |
 
-The always-compiled `edge`, `tunnel`, and `manager` categories account for 23 events. The `distribution` category (7 events) is present only when the relay is built with the optional `viewer-distribution` role.
+The always-compiled `edge`, `tunnel`, and `manager` categories account for 25 events. The `distribution` category (7 events) is present only when the relay is built with the optional `viewer-distribution` role.
 
 Three of these — the per-IP connection cap (`edge`), the per-connection tunnel-bind cap (`tunnel`), and the native-UDP per-IP session cap (`tunnel`) — carry the structured `error_code: "relay_dos_suspect"` in their `details`. This is the identifier the security-hardening guidance tells operators to monitor for DoS-cap rejections.
 
@@ -166,7 +168,7 @@ Three of these — the per-IP connection cap (`edge`), the per-connection tunnel
 | Severity | Count | Description |
 |----------|-------|-------------|
 | critical | 1 | Manager authentication failure |
-| warning | 18 | Disconnects, bind rejections, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, implausible source addresses, live-slot takeover refusals, the unauthenticated-native-plane posture warning, per-IP viewer cap, WHEP source-pin drops, a spent clip-export allowance |
+| warning | 20 | Disconnects, bind rejections, sides taken back by the edge that showed their token, protocol mismatches, QUIC accept failures, persistence failures, DoS-cap rejections (per-IP + per-connection + native-UDP session cap), native-UDP token rejections, implausible source addresses, live-slot takeover refusals, the unauthenticated-native-plane posture warning, per-IP viewer cap, WHEP source-pin drops, a spent clip-export allowance |
 | info | 11 | Connections, tunnel activation/waiting/unbound, secret rotation, distribution ingest lifecycle, clip deletes |
 
-The always-compiled event surface (excluding the optional `distribution` category) tallies 23: critical=1, warning=15, info=7.
+The always-compiled event surface (excluding the optional `distribution` category) tallies 25: critical=1, warning=17, info=7.

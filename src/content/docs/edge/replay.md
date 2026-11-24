@@ -216,7 +216,7 @@ Retention never deletes the just-finalized segment id — a too-tight `max_bytes
 |---|---|---|
 | `recording_started` | Info | A flow with `recording.enabled = true` and no `pre_buffer_seconds` brought up its writer, or `start_recording` promoted a **PreBuffer** writer to **Armed**. A `start_recording` on an `idle` writer arms it silently. |
 | `recording_pre_buffer_started` | Info | A flow with `pre_buffer_seconds` set came up in **PreBuffer** mode — recording begins on the operator's Start. |
-| `recording_start_failed` | Critical | Disk I/O error before the first segment landed. |
+| `recording_start_failed` | Critical | The recorder could not open the recording (`details.error_code: "replay_disk_full"`, whatever the cause), or another running flow still writes the same recording 30 s after it was asked to start (`replay_recording_in_use`, after `recording_started` or `recording_pre_buffer_started`; give one of the flows its own `recording.storage_id`). The flow runs on, unrecorded. |
 | `recording_deleted` | Info | `delete_recording` removed a recording and its clips (`details.bytes_freed`). |
 | `clip_created` | Info | `mark_in` + `mark_out` produced a new clip. |
 | `clip_deleted` | Info | Operator removed a clip. |

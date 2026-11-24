@@ -230,13 +230,11 @@ The shared-demuxer refcount is managed by the engine. When the host flow stops w
 
 Cross-flow references are scoped to the same node. To share across nodes, use one of the IP transports (SRT, RIST, RTP, ST 2110) explicitly.
 
-## ClockIdentity preflight on PES-aligned splices
+## Clock check on a program's inputs
 
-When an assembly's Switch slot is configured with `splice_mode: "pes_aligned"` and the two legs come from inputs slaved to different PTP grandmasters (or one slaved + one wallclock), splicing them at the PES boundary will produce a STC jump on the wire that receivers can't ride through. The assembler runs a **ClockIdentity preflight** on every `ActivateInput`: it compares the per-input PTP `clockIdentity` (from the input's PTP state reporter) against the assembly's master clock kind, and if the two legs disagree it refuses the PES-aligned splice and falls back to `pmt_bump` with a structured Warning `pid_bus_master_clock_mismatch` event.
+A program whose slots come from inputs on different clocks would carry time bases that drift apart. At flow start and on every plan swap the edge compares the clock identity of each slot's input within a program, and of every leg of a Switch slot. A mismatch is refused: the flow does not start, or the swap does not apply, with a Critical `pid_bus_master_clock_mismatch` event whose details name both inputs and both clocks. There is no such check on a Take.
 
-This is the layer above the codec-parameter sentinels — the sentinels catch "the two encoders produce different SPS/AudioSpecificConfig", ClockIdentity catches "the two encoders are running off different time references". Both must pass before the splice commits.
-
-The preflight has no effect on `pmt_bump` splices (the default) — those tolerate the STC jump by design.
+The identity is the PTP domain for ST 2110 and MXL inputs, the host clock for WebRTC inputs, and the input itself for every other type, so two SRT inputs never match. Programs of one MPTS are judged apart from each other. Only the flow's own inputs are judged: a Hitless slot, and a slot or leg whose input belongs to another flow, are skipped.
 
 ## Interaction with output-level PID remap (`pid_map`)
 
@@ -250,7 +248,7 @@ A running assembled flow exposes:
 - **Assembled Output section** on the flow card — one sub-table per program listing each slot's `out_pid`, `stream_type`, resolved kind, source label (or `Hitless(A/B)`), live bitrate, packets, CC errors, PCR discontinuity counters from `FlowStats.per_es[]`.
 - **Per-output PCR trust** — `p50 / p99` columns on the Outputs table, fed by `OutputStats.pcr_trust`. The sampler records `|ΔPCR_µs − Δwall_µs|` on successful sends of PCR-bearing TS packets into a rotating 4096-sample reservoir and exposes p50 / p95 / p99 / max.
 - **Flow-rollup PCR trust** — `FlowStats.pcr_trust_flow` (Samples, p50 / p95 / p99 / Max, window-p95) rendered at the bottom of the flow card.
-- **Events** — `pid_bus_*` and `pes_splice_*` codes ride as events at mixed severity: Critical for bring-up and hot-swap refusals, Warning for runtime degradation (`pid_bus_slot_stalled`, `pid_bus_stream_type_mismatch`, `pid_bus_pid_cap_reached`, `pes_splice_degraded`, `pes_splice_timeout`, `pes_splice_codec_param_mismatch`), Info for recovery (`pid_bus_slot_recovered`, `pes_splice_completed`). Each carries structured `details` (`error_code`, `input_id`, `input_type`, `program_number`, …) so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. See [Events & Alarms — PID bus / Flow Assembly](/edge/events-and-alarms/).
+- **Events** — most `pid_bus_*` codes and the `pes_splice_*` ones ride as events at mixed severity (the rest are only on a `command_ack` or in a config check's message): Critical for bring-up and hot-swap refusals, Warning for runtime degradation (`pid_bus_slot_stalled`, `pid_bus_stream_type_mismatch`, `pid_bus_pid_cap_reached`, `pes_splice_degraded`, `pes_splice_timeout`, `pes_splice_codec_param_mismatch`), Info for recovery (`pid_bus_slot_recovered`, `pes_splice_completed`). Each carries structured `details` (`error_code`, `input_id`, `input_type`, `program_number`, …) so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. See [Events & Alarms — PID bus / Flow Assembly](/edge/events-and-alarms/).
 
 ## Validation rules
 

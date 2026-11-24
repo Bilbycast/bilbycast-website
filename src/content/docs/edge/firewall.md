@@ -280,8 +280,9 @@ each line against [Configuration](/edge/configuration/).
 A port that is already taken is not a silent failure. The edge emits a Critical
 event with a stable `error_code` in `details` — `port_conflict` for `EADDRINUSE`,
 `bind_failed` for anything else — carrying `component`, `addr` and `protocol`,
-and the same code rides back on `command_ack.error_code`. Both show up on the
-manager's Events page. The manager also preflights new inputs and outputs against
+which shows up on the manager's Events page. A `create_flow`, an `update_flow`
+that starts or restarts the flow, and an `add_input` wait 600 ms for one and
+carry the same code back on `command_ack.error_code`. The manager also preflights new inputs and outputs against
 already-managed entities and rejects a collision with HTTP 422 before any
 WebSocket round-trip.
 

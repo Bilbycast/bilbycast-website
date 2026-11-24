@@ -75,7 +75,7 @@ Useful series:
 - `bilbycast_relay_bytes_forwarded_total`
 - `bilbycast_relay_peak_tunnels` / `bilbycast_relay_peak_edges`
 
-There is no throughput gauge on `/metrics`: take `rate(bilbycast_relay_bytes_forwarded_total[1m])`, or read `total_bandwidth_bps` from `GET /api/v1/stats`. Note that the metric names and the JSON field names are deliberately different spellings of the same quantities (`bilbycast_relay_edges_connected` vs `connected_edges`), so the two are not interchangeable.
+The byte counters are the QUIC tunnels' alone, totals since the relay started (up to and including v0.20.0 they fell when a tunnel went); native plain-UDP sessions have `bilbycast_relay_udp_bytes_forwarded_total` and `bilbycast_relay_udp_datagrams_forwarded_total`. There is no throughput gauge on `/metrics`: take `rate(bilbycast_relay_bytes_forwarded_total[1m])`, or read `total_bandwidth_bps` from `GET /api/v1/stats`. Note that the metric names and the JSON field names are deliberately different spellings of the same quantities (`bilbycast_relay_edges_connected` vs `connected_edges`), so the two are not interchangeable.
 
 Pair with the [Stats reference](/relay/stats-reference/) for the full series catalogue.
 
@@ -107,7 +107,7 @@ curl -H "Authorization: Bearer <token>" \
 }
 ```
 
-`total_bandwidth_bps` is computed across the most recent reporting window — it's the live throughput, not a lifetime average.
+`total_bytes_ingress`, `total_bytes_egress`, `total_bytes_forwarded`, `total_tcp_streams` and `total_udp_datagrams` count the QUIC tunnels since the relay started, the ones that have gone included; up to and including v0.20.0 they were sums over the tunnels held, and fell when one went. `total_bandwidth_bps` is the growth of `total_bytes_forwarded` since it was last taken, so it is the QUIC tunnels' live throughput, not a lifetime average, and native plain-UDP traffic is in none of these figures. See [Stats reference](/relay/stats-reference/#totals).
 
 ### `GET /api/v1/tunnels`
 

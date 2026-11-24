@@ -76,7 +76,18 @@ Past 4096 the send is non-blocking and the **newest** event is discarded — the
 | info | Output '{id}' removed from flow '{flow_id}' | Hot-remove output succeeded |
 | warning | Output '{id}' failed to start on flow '{flow_id}': {error} | Output startup failure within a running flow |
 
-**Source**: `src/engine/manager.rs`, `src/engine/input_srt.rs`
+These carry a structured `details.error_code`:
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `output_activate_failed` | The running flow refused to start or stop an output for `activate_output` (or `POST /api/v1/outputs/{id}/active`). The ack carries the same code. A refused start leaves the output's `active` flag as it was. A socket that will not open is not a refusal: the output opens it on its own task, after the ack. Flow- and output-scoped. | `{ error_code, active, error }` |
+| warning | `output_detached_without_runtime_removal` | A `remove_output` command (or the REST `DELETE` of a flow's output) found nothing to stop: the flow is disabled and not running, or it runs without a task for that output (a passive one, or one already gone). The output is detached in the config only. | `{ error_code, flow_id, output_id, reason, runtime_error }` |
+| warning | `input_update_flow_restart_failed` | An input edit needed its running flow rebuilt, and the flow could not be resolved or started with it. The edit is refused and the flow runs on the previous definition. The ack carries the same code. | `{ error_code, flow_id, input_id, error, cause_error_code }` |
+| critical | `input_update_rollback_failed` | The same, and the flow did not start on the previous definition either: **it is down**. The previous definition is kept. The ack carries the same code. | `{ error_code, flow_id, input_id, error, cause_error_code, rollback_error }` |
+| warning | `master_clock_input_removed` | A hot `remove_input` takes out the input an assembled flow's `pcr_source` named when the flow started, and which the running assembly no longer references. One it still references is refused instead (`pid_bus_input_in_use`). | `{ error_code, input_id, flow_id }` |
+| warning | `egress_pacing_auto_stale` | A hot `add_input` gave the flow its first bonded input, or a hot `remove_input` took its last, while UDP or RTP outputs with no `egress_pacing` set are running. They keep the mode they started with until the output or the flow restarts. | `{ error_code, flow_id, output_ids, running_mode, resolved_mode_now }` |
+
+**Source**: `src/engine/manager.rs`, `src/engine/flow.rs`, `src/manager/client.rs`, `src/engine/input_srt.rs`
 
 #### A/V quality & source clock (`flow`)
 
@@ -96,6 +107,20 @@ The A/V quality watcher and the PCR-ingress sampler both file under `flow`. The 
 
 **Source**: `src/engine/av_quality_watch.rs`, `src/engine/pcr_ingress_sampler.rs`
 
+#### Transcode PCR & clock rewriter (`flow`)
+
+The `transcode_pcr_*` codes come from the last stage of a TS transcode chain, scoped to the output, or to the input on an ingress transcode. The `clock_rewrite_*` codes come from an input's muxer-mode clock rewriter and are input-scoped.
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `transcode_pcr_late` | A re-encoded PES arrived behind the output PCR. The PCR delay is raised to cover it, with a PCR discontinuity. At most one per 10 s; the message is constant and the numbers are in the details. | `{ error_code, pid, late_ms, offset_ms, late_frames, since_last_report }` |
+| warning | `transcode_pcr_residency_exceeded` | The video's largest lead plus the PCR delay is past the 1 s T-STD residency, so a strict decoder may overflow its video buffer. Once per PCR epoch. `lateness_ms` is null when the video's lead grew past it later. | `{ error_code, pid, lateness_ms, offset_ms, video_residency_ms }` |
+| info | `transcode_pcr_synthesized` | Re-encoded video was due with no input PCR ever seen, or none for 1 s of the input's own video. PCR is synthesised from the video's decode times until an input PCR arrives. Once in the stage's life. | `{ error_code }` |
+| warning | `clock_rewrite_pmt_not_learned` | No PMT could be parsed for 2 s, of source PCR or of held PES. PCR and PTS pass through on the source clock until one is. | `{ error_code, pmt_pids, waited_ms }` |
+| warning | `clock_rewrite_no_pcr` | PES were held 2 s for a first PCR on the program's PCR PID and none came. They pass with their source timestamps until one does. | `{ error_code, pcr_pids, waited_ms }` |
+
+**Source**: `src/engine/ts_pcr_remux.rs`, `src/engine/ts_pts_rewriter.rs`
+
 #### Media Player Input (`flow`)
 
 | Severity | `details.error_code` | Trigger |
@@ -105,10 +130,17 @@ The A/V quality watcher and the PCR-ingress sampler both file under `flow`. The 
 | warning | `media_player_next_prepare_failed` | The **Next** target could not be opened, so the request was rejected. The player stays on the current source rather than cutting to dead air. |
 | warning | `media_player_pacer_lagging` | The `ts` / `mp4` playout pacer fell ≥ 250 ms behind its own schedule — a source whose instantaneous packet rate exceeds what the bounded hand-off queue can absorb. Latched; fires once per episode. |
 | info | `media_player_pacer_recovered` | Lateness dropped back to ≤ 100 ms, clearing the latch. |
+| critical | `media_player_source_missing` | A source's file does not exist, or the edge may not read it. |
+| critical | `media_player_source_unsupported` | The file is not one the player reads: no TS sync byte within 1 MiB, a fragmented MP4, or an I/O error of kind invalid data. |
+| critical | `media_player_source_codec_unsupported` | An `mp4` or `image` source on a build without both `media-codecs` and `fdk-aac`. |
+| critical | `media_player_source_render_failed` | Any other I/O error while the source was played. |
+| critical | `media_player_source_failed` | A source stopped with any other error. |
+
+The five `media_player_source_*` events carry `{ error_code, flow_id, input_id, source_index, source_kind, source_name, error }`, `source_kind` being `ts`, `mp4` or `image`. The player waits 2 s and goes on with its playlist.
 
 **Source**: `src/engine/input_media_player.rs`
 
-The `flow` category additionally carries the PES-splice family (`pes_splice_completed` / `_degraded` / `_timeout` / `pes_splice_codec_param_mismatch`, plus `splice_override_ignored`) and the MXL input / output lifecycle. MXL's failure identifiers ride the **message text** of the flow-failure event, not `details.error_code`, so alarm rules cannot match on them. Both families are catalogued in the [in-repo `docs/events-and-alarms.md`](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md).
+The `flow` category additionally carries the [PES-splice family](#pes-splice-flow) and the MXL input / output lifecycle. MXL's failure identifiers ride the **message text** of the flow-failure event, not `details.error_code`, so alarm rules cannot match on them; they are catalogued in the [in-repo `docs/events-and-alarms.md`](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md).
 
 ---
 
@@ -202,14 +234,20 @@ Three redundancy events carry a structured `details.error_code`:
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
-| info | RTMP publisher connected | An H.264 sequence header from the publish on air or, with none on air, from the first one heard. An audio-only publish raises none |
-| warning | RTMP publisher disconnected | The publish on air ended (it stopped, its connection closed, or it sent nothing for 300 s) or, with none on air, the first one heard did. Not raised for a publish a newer one has taken over from |
-| critical | RTMP server error: {error} | Server bind or accept failure |
+| info | RTMP publisher connected | An H.264 sequence header from the publish on air or, with none on air, from the first one heard. Every header acted on raises one: a publisher that repeats its header raises it again, and a publish that takes over raises it for the header it has sent. An audio-only publish raises none |
+| warning | RTMP publisher disconnected | The publish on air ended (it stopped, its connection closed, or it sent nothing for 300 s) or, with none on air, the first one heard did, whatever it had sent. Not raised for a publish a newer one has taken over from, or one that sent nothing |
+| critical | RTMP server error: {error} | The listener could not bind its address, for any reason but the address being in use, which raises [`port_conflict`](#bind--port-conflict) instead. A failed accept is only logged |
 
-An RTMP **output** raises two events with a structured `details.error_code` about its audio (the full output lifecycle catalogue is in the [in-repo reference](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md)):
+An RTMP **output**'s events carry a structured `details.error_code` and name the output. `dest_url` is cut to scheme, host, port and app, so it holds no credentials or stream key. A failed connect is retried with back-off, and raised again only when its code changes or after a connect succeeded, not once per retry.
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
+| info | `rtmp_output_connected` | The output connected after one of the failures below was raised. A first clean connect raises none. | `{ error_code, dest_url }` |
+| warning | `rtmp_connect_failed` | The server could not be reached (refused, reset, timed out, a socket it dropped during the handshake), or a running publish lost its connection. | `{ error_code, dest_url, detail }` |
+| critical | `rtmp_publish_rejected` | The server refused the `publish`, with an `onStatus` error code or an `_error`: most often a wrong, expired or already used stream key. | `{ error_code, dest_url, detail, server_code }`, `server_code` only when the server sent one |
+| critical | `rtmp_connect_rejected` | The server answered the `connect` with `_error`: a wrong URL or app path. | `{ error_code, dest_url, detail }` |
+| critical | `rtmp_output_gave_up` | A connect and its `max_reconnect_attempts` retries failed in a row, and the output stops trying until it is restarted. With the field unset it retries forever. | `{ error_code, dest_url, max_reconnect_attempts }` |
+| warning | `codec_needs_encode` | MPEG-2 video with no `video_encode`, or MP2 / AC-3 / E-AC-3 / AAC-LATM audio with no `audio_encode`. RTMP carries H.264 / HEVC and AAC, so that essence is dropped. Once per connection per essence. | `{ error_code, essence, source_codec, needs, flow_id }` |
 | warning | `audio_codec_unpublishable` | Message `RTMP output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which RTMP cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published`. The audio track the output is on is in a codec RTMP can neither carry nor re-encode — AC-4, Opus-in-TS, or on a build without `media-codecs` anything but AAC — which, pinned or not, happens only when the program carries no audio stream RTMP can publish. The source's audio is not published. **Once per episode**: not again while the output stays on that PID and codec, re-armed once it is on audio it can publish, kept across reconnects. Under `silent_fallback` the output lays silence meanwhile. Output-scoped. Up to and including v0.116.0 the output took the first audio stream whatever its codec and published no audio without a word. See [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](/edge/audio-gateway/#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes) | `{ error_code, audio_pid, stream_type, source_codec, flow_id }` — `source_codec` is `"AC-4"`, `"Opus"`, `"MP2"`, `"AC-3"`, `"E-AC-3"` or `"AAC-LATM"` |
 | warning | `aac_channel_layout_missing` | A PCE-signalled AAC source (channel configuration 0 — ISDB-T 1seg) whose layout no frame has carried for 5 s of its audio. The output holds that audio back, passed through or re-encoded, since the sequence header must carry the program_config_element and a re-encode's decoder needs it too. **Once per wait**, kept across reconnects, re-armed once a PCE arrives. Up to and including v0.116.0 the output published a two-byte header no decoder opens, without a word. | `{ error_code, held_secs, flow_id }` |
 
@@ -251,7 +289,7 @@ Three RTSP events carry a structured `details.error_code`. Each is raised once p
 
 ### CMAF / CMAF-LL (`cmaf`)
 
-CMAF and low-latency CMAF output lifecycle plus manifest / segment upload failures. Only the init-segment upload and the thumbnail capture are latched to one event per output; the segment, LL-chunk and manifest upload warnings fire on **every** failed PUT, so an origin that stays down produces one event per segment or manifest cycle. Rate-limit these at the alarm rule, not at the edge.
+CMAF and low-latency CMAF output lifecycle plus manifest / segment upload failures. Of the publish failures only the init-segment upload and the thumbnail capture are latched to one event per output; the segment, LL-chunk and manifest upload warnings fire on **every** failed PUT, so an origin that stays down produces one event per segment or manifest cycle. Rate-limit these at the alarm rule, not at the edge.
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
@@ -267,8 +305,12 @@ CMAF and low-latency CMAF output lifecycle plus manifest / segment upload failur
 | warning | CMAF output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which CMAF cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published | The audio track the output is on is AC-4 or Opus-in-TS (or, on a build without `media-codecs`, anything but AAC), which happens only when the program carries no audio stream CMAF can publish. **Once per episode.** Unlike most rows here it carries `error_code: "audio_codec_unpublishable"`, with `details.audio_pid`, `details.stream_type`, `details.source_codec` and `details.flow_id`; output-scoped. Up to and including v0.116.0 the output published no audio without a word. |
 | warning | CMAF output '{id}': the source's AAC signals its channel layout in a program_config_element (channel_configuration 0) and no frame in {n} s has carried one; its audio is held back rather than published with a header no decoder can open | A PCE-signalled AAC source (ISDB-T 1seg) with no frame carrying its PCE for 5 s of its audio: no audio track is built, since its `esds` must carry the PCE. **Once per wait.** Carries `error_code: "aac_channel_layout_missing"`, `details.held_secs`, `details.flow_id`. |
 | warning | CMAF output '{id}': the source's AAC configuration changed ({from} -> {to}); the init still describes the first, so players may not decode the audio until the output is restarted | A passed-through AAC source's configuration (rate, channels, object type, layout) changed under a running output — a switch to another feed. The frames keep going under the init that describes the first configuration; a restart builds the track from the new one. **Once per change.** Carries `error_code: "aac_config_changed"`, `details.from`, `details.to`, `details.flow_id`. A re-encode is not affected. Silent up to and including v0.116.0. |
+| warning | CMAF output '{id}': the source's {codec} cannot be carried in CMAF (H.264 / HEVC and AAC only) without `{block}`; {consequence} | MPEG-2 video with no `video_encode` ("nothing is published"), or MP2 / AC-3 / E-AC-3 / AAC-LATM audio with no `audio_encode` ("its audio is dropped"). **Once per output per essence.** Carries `error_code: "codec_needs_encode"`, `details.essence`, `details.source_codec`, `details.needs`, `details.flow_id`; output-scoped. |
+| warning | Clip export blocked on flow '{id}': the origin's clip queue cannot be read, so no marked clip will be cut | The clip exporter's read of the origin's `clips` list failed, other than with HTTP 400, 404 or 405. It goes on polling every 5 s. **Once per run of failures**, until a read succeeds. Carries `error_code: "clip_export_blocked"`, `details.origin`, `details.error`. |
+| warning | Clip export unsupported on flow '{id}': the origin does not serve a clip queue, so no marked clip will be cut | Six reads in a row answered HTTP 400, 404 or 405. The exporter then asks every 5 minutes. Carries `error_code: "clip_export_unsupported"`, `details.origin`, `details.error`, `details.consecutive`. |
+| warning | Clip '{name}' on flow '{id}' could not be cut: {error} | The exporter gave up on a marked clip, after three attempts or at an error no retry can help, and tells the origin so. Carries `error_code: "clip_export_failed"`, `details.clip`, `details.attempts`, `details.error`. |
 
-**Source**: `src/engine/cmaf/mod.rs`, `src/engine/cmaf/thumbnails.rs`
+**Source**: `src/engine/cmaf/mod.rs`, `src/engine/cmaf/thumbnails.rs`, `src/engine/cmaf/clips.rs`
 
 ---
 
@@ -328,8 +370,13 @@ Bind failures surface under the unified `port_conflict` / `bind_failed` categori
 | warning | WHEP server's answer accepted no H.264 video and no Opus audio, the only media this input takes / WHEP server's answer could not be applied: {error} | `error_code: "whep_answer_unusable"`. The WHEP client input's server answered with something it cannot use: `details.reason` `no_h264_or_opus` (neither track accepted) or `not_applied` (the answer does not parse, or the WebRTC stack refuses it; the stack's error in `details.error`). The pull's resource is released and the input pulls again after its backoff (1 s, doubling to 30 s). **Once per episode**, until a pull connects. Up to and including v0.116.0 a pull accepting neither track connected and published nothing, and an answer the stack refused was a log line only |
 | warning | WebRTC output '{id}': the source's AAC signals its channel layout in a program_config_element (channel_configuration 0) and no frame in {n} s has carried one; its audio is held back rather than published with a header no decoder can open | `error_code: "aac_channel_layout_missing"`, on an `audio_encode` Opus re-encode of a PCE-signalled AAC source with no frame carrying its PCE for 5 s of audio. **Once for the output**, not per viewer, re-armed once a PCE arrives. Up to and including v0.116.0 such a source was refused with a log line. Details `{ error_code, held_secs, flow_id }` |
 | warning | WebRTC output '{id}': its audio track, PID 0x{pid}, is {codec} (stream_type 0x{nn}), which WebRTC cannot carry or re-encode here ({what it carries}), and the program carries no audio track it can: the source's audio is not published | `error_code: "audio_codec_unpublishable"`. The audio track the output is on is AC-4, which nothing here decodes, or on a build without `media-codecs` anything but Opus and AAC — which happens only when the program carries no audio stream WebRTC can publish. **Once for the output**, not per WHEP viewer or WHIP connection, once per episode, and never on a `video_only` output. Under `silent_fallback` the output lays silence meanwhile; up to and including v0.116.0 it said nothing, and AC-4 frames held the silence off. Output-scoped, details `{ error_code, audio_pid, stream_type, source_codec, flow_id }` |
+| warning | WebRTC output '{id}': the source's {codec} cannot be carried over WebRTC ({H.264 / Opus} only) without {block}; its {essence} is dropped | `error_code: "codec_needs_encode"`. MPEG-2 or HEVC video with no `video_encode` (or `webrtc_compatible`), or AAC-LC, MP2, AC-3, E-AC-3 or AAC-LATM audio with no `audio_encode` on a session that negotiated audio. **Once per session per essence** (a WHEP viewer, or one WHIP connection). Output-scoped, details `{ error_code, essence, source_codec, needs, flow_id }` |
+| warning | WebRTC output '{id}': the source's {layout} is a multistream Opus layout WebRTC does not carry (one mono or stereo Opus stream only); its audio is dropped | `error_code: "opus_layout_unsupported"`. An Opus-in-TS source of more than two channels, or dual mono; `audio_encode` cannot decode it either. **Once per session.** Output-scoped, details `{ error_code, channel_config_code, flow_id }` |
+| warning | WebRTC output '{id}': the {peer} accepted no H.264 video{outcome} | `error_code: "webrtc_no_h264"`. `outcome` is `audio_only` (a WHEP viewer that took Opus is sent the audio alone), `refused` (a WHEP viewer this output cannot serve gets 400; `reason` is `nothing_to_send`, `no_opus_to_send`, `source_audio_unknown` or `video_is_bundle_tag`) or `retrying` (a WHIP endpoint: its resource is deleted and the publish retried after `retry_secs`). Output-scoped, details `{ error_code, peer, outcome, reason, retry_secs, flow_id }`, `reason` and `retry_secs` null where they do not apply |
+| warning | WHEP viewer did not connect within {n} s of its answer; its session is closed / WHEP viewer did not connect: {why} {n} s after its answer; its session is closed / WHIP publisher did not connect within {n} s of its answer; waiting for the next publisher | `error_code: "webrtc_setup_timeout"`. A peer of the edge's own WHEP or WHIP endpoint did not finish ICE and DTLS in time (a viewer has 30 s from its answer, a publisher 15 s), or a viewer's session failed before that. Flow-scoped, details `{ error_code, peer, timeout_secs }`, for a viewer also `reason` (`deadline`, `ice_failed`, `session_failed`) and `output_id` |
+| warning | WebRTC negotiation with {peer} failed: {panic} | `error_code: "webrtc_negotiation_panic"`. The WebRTC stack panicked while negotiating with this peer, whose negotiation alone fails. `peer` is `WHEP viewer`, `WHIP publisher`, `WHEP server` or `WHIP endpoint`. Flow-scoped, details `{ error_code, peer, step, panic }` |
 
-**Source**: `src/engine/input_webrtc.rs`, `src/engine/output_webrtc.rs`
+**Source**: `src/engine/input_webrtc.rs`, `src/engine/output_webrtc.rs`, `src/engine/webrtc/session.rs`
 
 ---
 
@@ -349,11 +396,13 @@ Audio encoder lifecycle for the compressed-audio egress on RTMP, HLS, and WebRTC
 | critical | output '{id}': audio_encode is set but the flow input cannot carry TS audio (PCM-only source) | `compressed_audio_input` is false (e.g. ST 2110-30, `rtp_audio` input) |
 | critical | output '{id}': audio_encode encoder spawn failed: {error} | `AudioEncoder::spawn` failed for any other reason — the in-process encoder refused to initialise for this codec / sample-rate / channel layout. |
 
-A pinned audio track that cannot be used raises a Warning under category **`flow`**, not `audio_encode`:
+These file under category **`flow`**, not `audio_encode`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
 | warning | `audio_source_pid_not_found` | `audio_encode.source_audio_pid` names a PID the output or input cannot use — absent from the PMT, not audio, or a codec it cannot decode or publish — so it fell back to another track. Raised by the TS transcode replacers, and by the RTMP, CMAF, WebRTC and HLS outputs, which honour the pin after v0.116.0 (always output-scoped there, with a message naming the track they fell back to). Once per distinct (pinned, actual) pair, re-armed when the pin reappears; a WebRTC output raises it once, not per viewer. See [Which audio track an RTMP, CMAF, WebRTC or HLS output takes](/edge/audio-gateway/#which-audio-track-an-rtmp-cmaf-webrtc-or-hls-output-takes) | `{ error_code, pinned_pid, actual_pid, actual_stream_type }` |
+| warning | `audio_transcode_source_not_found` | `audio_encode` is set on a TS output or an input, and 5 s after its start, an input switch or the loss of its track the transcoder has found nothing to re-encode: the source audio passes through unchanged. Judged once 10 sections have started on the PMT PID, or after 10 s and 1000 TS packets. Once per wait. `reason` is `no_pat`, `pmt_not_parsed`, `no_supported_es` or `codec_not_replaceable`. Input- or output-scoped. | `{ error_code, reason, pmt_pid, program_number, first_table_id, es, pinned_pid, waited_ms }` |
+| info | `audio_transcode_source_found` | The transcoder found a track to re-encode after that Warning. | `{ error_code, source_pid, source_stream_type, pmt_pid, program_number }` |
 
 **Source**: `src/engine/audio_encode.rs`, `src/engine/output_rtmp.rs`, `src/engine/output_hls.rs`, `src/engine/output_webrtc.rs`, `src/engine/transcode_engage.rs`.
 
@@ -368,8 +417,20 @@ In-process video transcoding lifecycle for TS outputs (SRT, RIST, RTP, UDP) and 
 | info | Video encoder started: output '{id}' | `TsVideoReplacer` created successfully | `{ codec }` |
 | critical | Video encoder failed: output '{id}': {error} | `TsVideoReplacer` construction rejected (missing feature, unsupported codec) | `{ error }` |
 | warning | Output/Input '{id}': the video transcoder is consuming input but producing no decoded frames | Decode-stall watchdog: ≥ 200 input frames consumed with zero decoded output (e.g. a HW decode backend that opened but fails every frame). One-shot, re-armed on recovery | `{ error_code: "video_transcode_decode_stalled", input_frames, output_frames, decode_errors, source_stream_type }` |
+| warning | Output/Input '{id}': video_encode.scan=interlaced cannot be honoured — {reason}; encoding progressive | An explicit `video_encode.scan: "interlaced"` is coding progressive: no backend in the chain opened for field coding, or the source's decoder hands out single fields (HEVC field_seq). Once per encoder open, also on RTMP and CMAF outputs | `{ error_code: "video_encode_interlace_unavailable", reason, source_stream_type }` |
+| warning | Output/Input '{id}': video_encode frame rate mismatch ({cause}): … | The TS transcoder measures the source's frame rate more than 0.1 % off the one its encoder runs at. Pictures keep the source clock, but the bitrate is off its setting by the ratio. Once per source. `cause` is `pinned`, `input_switch`, `fallback` or `cadence_change` | `{ error_code: "video_encode_fps_mismatch", cause, source_fps_num, source_fps_den, encoder_fps_num, encoder_fps_den }`, with `pinned_fps_num` and `pinned_fps_den` when the rate is pinned |
 
-**Source**: `src/engine/ts_video_replace.rs`, output modules (`output_srt.rs`, `output_rist.rs`, `output_rtp.rs`, `output_udp.rs`).
+These, and `video_transcode_decode_stalled` above, file under category **`flow`**, not `video_encode`:
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| warning | `video_transcode_source_not_found` | The same as `audio_transcode_source_not_found`, for `video_encode`. | `{ error_code, reason, pmt_pid, program_number, first_table_id, es, pinned_pid, waited_ms }` |
+| info | `video_transcode_source_found` | The transcoder found a video track to re-encode after that Warning. | `{ error_code, source_pid, source_stream_type, pmt_pid, program_number }` |
+| warning | `video_source_pid_not_found` | `video_encode.source_video_pid` names a PID that is not in the PMT, or not video the TS transcoder decodes, so it re-encodes the first it does. Once per distinct (pinned, actual) pair, re-armed when the pin reappears. Input- or output-scoped. | `{ error_code, pinned_pid, actual_pid, actual_stream_type }` |
+| warning | `st2110_video_codec_mismatch` | The PMT an ST 2110-20 / -23 output reads says H.264 and the NAL units are HEVC, or the reverse. It decodes with the detected codec. Output-scoped. | `{ error_code, declared_codec, detected_codec }` |
+| warning | `st2110_egress_decode_stalled` | An ST 2110-20 / -23 output's decoder took 200 access units and gave no frame. It retries in software, then as the other codec. Once per stall. Output-scoped. | `{ error_code, codec }` |
+
+**Source**: `src/engine/ts_video_replace.rs`, `src/engine/video_encode_util.rs`, `src/engine/transcode_engage.rs`, `src/engine/st2110_video_io.rs`, output modules (`output_srt.rs`, `output_rist.rs`, `output_rtp.rs`, `output_udp.rs`).
 
 ---
 
@@ -406,6 +467,7 @@ These tunnel events carry a structured `details.error_code`:
 | critical | `tunnel_decrypt_failure` | Once per window, when AEAD decrypt keeps failing while **zero** packets were delivered across the whole window — almost always a `tunnel_encryption_key` mismatch between the two edges. Re-arms when healthy traffic resumes. | `{ error_code, tunnel_name, decrypt_errors_window, packets_delivered_window, window_secs }` |
 | warning | `tunnel_gateway_route_failed` | The `gateway` policy route of a native-UDP relay or direct tunnel, or of a relay bond leg, could not be programmed — refused routing-table bases, no `CAP_NET_ADMIN`, a missing interface or a netlink error. The tunnel runs on over the host's own routing, which need not be via that gateway. Raised at each start; for a direct tunnel, at each connection attempt. | `{ error_code, tunnel_id, interface, source, gateway, error }` |
 | warning | `tunnel_register_refused` | A native-UDP direct-mode listener refused a register from a new caller — `reason` is `slot_held` or `unlatchable_source`. Rate-limited. Otherwise invisible: the tunnel stays `Ready` on the incumbent's traffic while the new caller is locked out. | `{ error_code, tunnel_id, reason, refused_addr, held_addr, suppressed }` |
+| warning | `tunnel_kernel_rx_drops` | The kernel dropped datagrams on a native-UDP tunnel's carrier socket before the edge read them (a receive buffer overrun). Checked every 10 s; raised once, and again only after a minute without drops. | `{ error_code, tunnel_name, dropped_window, dropped_total, window_secs }` |
 
 **Source**: `src/tunnel/manager.rs`, `src/tunnel/relay_client.rs`, `src/tunnel/udp_relay_client.rs`
 
@@ -451,6 +513,8 @@ These codes in this category carry a structured `details` payload:
 | `aac_channels_repaired` | warning | A whole config — the load, `POST /api/v1/config/reload`, `PUT /api/v1/config` or a manager `update_config` — held an AAC channel count the encoder has no mode for, which a release up to and including v0.116.0 accepted and then carried no audio: `audio_encode.channels: 7` with `aac_lc`, or a `transcode` block's `channels` of 7 or 9–16 beside `aac_lc` / `he_aac_v1` (other than 2 beside `he_aac_v2`). The count is **repaired** — 7 to 6, 9–16 to 8, HE-AAC v2 to 2 — rather than the config refused (at load that would stop the node), and the load and the reload write the repair back to `config.json`. Input- or output-scoped. An edit naming the input or output is still refused. | `{ error_code, field, codec, was, now }` |
 | `rtsp_timeout_repaired` | warning | A whole config (the same four routes) held an RTSP input whose `timeout_secs` is outside 1–300. It is **repaired** to 300, and the load and the reload write that back. An edit naming the input is refused. Input-scoped. | `{ error_code, field, was, now }` |
 | `rtsps_unsupported`, `rtsp_url_unparseable` | warning | A whole config (the same four routes) held an RTSP input whose `rtsp_url` is `rtsps://`, or cannot be read as a URL. It is kept as it is; the input does not connect and raises the Critical `rtsp` event of the same code when it starts. An edit of the input is refused until the URL is changed. Input-scoped. | `{ error_code }` |
+| `hitless_seq_aware_leg_unsequenced` | warning | A whole config (the same four routes) held a `seq_aware` Hitless slot with a leg that brings no upstream sequence number. The slot is **repaired** to `primary_preference`, and the load and the reload write that back. An edit naming the flow, the input or the assembly is refused with the same code. Flow-scoped, one per slot. A running merger raises the same code under [`flow`](#pid-bus--flow-assembly-flow). | `{ error_code, program_number, out_pid, leg, input_id, repaired_to }` |
+| `input_id_reserved` | warning | A whole config (the same four routes) held an input whose id starts with `hitless:`, which is reserved for Hitless mergers. It is kept and runs as it is; a new input with such an id is refused. Input-scoped. | `{ error_code, input_id }` |
 | `bond_rt_base_unparseable` | warning | At startup, per variable: `BILBYCAST_BOND_RT_TABLE_BASE` or `BILBYCAST_BOND_RT_PRIO_BASE` is not a whole number as written (`0xBD00`, or spaces around the number). The default base is used. Empty or blank is unset. | `{ error_code, env_var, value, status, default, accepted }` — `status` is `"unparseable"` |
 | `bond_rt_base_refused` | critical | At startup, one event for both variables: a base is a whole number outside its bounds (tables 256–4294967040; priorities 1–744 or 1001–32510). Gateway routing is off until it is fixed and the edge restarted: no orphan sweep, and no gateway leg is programmed. | `{ error_code, status, refused }` — `status` is `"refused"`, `refused[]` of `{ env_var, value, accepted }` |
 | `tuning_requires_restart` | warning | A pushed `tuning` field was accepted but is read once at node start, so it takes effect at the node's next restart rather than on the push. | `{ error_code, fields }`, where `fields` is `["tuning.probe_session_limits", "tuning.probe_4k"]` — the only two knobs affected. The other four `tuning` knobs — the two ingress de-jitter defaults and the two media-player defaults — are re-installed on the push without a node restart, but they are read when an input spawns: an input that is already running keeps its current behaviour until it respawns, so a **flow** restart is what applies them. |
@@ -477,7 +541,7 @@ Events generated while bringing up, running or hot-swapping an assembled flow (`
 | `pid_bus_mpts_pcr_source_required` | MPTS program has no effective PCR (neither program-level `pcr_source` nor flow-level fallback). | `{ program_number }` | Config validation also catches this — runtime check is a belt-and-braces guard. |
 | `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
 
-Codes that reach the event feed rather than only a Create/Update modal. The first five fire on a **running** assembled flow, with no command in flight; the last two fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up), where they additionally fail the command:
+Codes that reach the event feed rather than only a Create/Update modal. The first six fire on a **running** assembled flow, with no command in flight; the last three fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up), where they additionally fail the command:
 
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|
@@ -486,10 +550,28 @@ Codes that reach the event feed rather than only a Create/Update modal. The firs
 | `pid_bus_slot_source_closed` | warning | The slot's source input closed underneath the assembler. | `{ error_code, … }` |
 | `pid_bus_stream_type_mismatch` | warning | A slot declares one `stream_type` but the live source PID carries another. Non-fatal — the **PMT is corrected to the source codec** and the slot keeps forwarding bytes. Update the assembly config to clear the warning. | `{ error_code, program_number, out_pid, declared_stream_type, observed_stream_type, source_input_id, source_pid }` |
 | `pid_bus_pid_cap_reached` | warning | The ES bus hit its per-flow PID cap. | `{ error_code, … }` |
+| `hitless_seq_aware_leg_unsequenced` | warning | A running `seq_aware` Hitless merger got packets with no upstream sequence number from a leg, so the slot falls back to primary preference. Validation refuses such a leg; this is one that got here regardless. | `{ error_code, slot, leg, input_id, source_pid, fallback, stall_ms }` |
 | `pid_bus_master_clock_mismatch` | critical | The program's members are not co-clocked, so the assembler will not put them in one program. | `{ error_code, … }` |
 | `pid_bus_pcr_source_change_requires_restart` | critical | A hot `UpdateFlowAssembly` moved the PCR source; the change cannot be applied in place. | `{ error_code, … }` |
+| `pid_bus_assembler_unresponsive` | warning | The flow's assembler stalled for 3 s during a plan swap. `awaiting: "queue"`: it took no command, the swap is refused with this code and the flow runs its old plan. `awaiting: "applied"`: it holds the new plan and puts it on air when it resumes, so the plan stands and is saved, and the command fails with `pid_bus_assembly_unconfirmed`. | `{ error_code, awaiting, timeout_ms }` |
 
 Two further `pid_bus_*` values are `command_ack.error_code` refusals rather than events: `pid_bus_input_in_use` (a `remove_input` naming an input the running assembly plan still references — unbind the slot first) and `pid_bus_activate_input_no_switch_slots` (an `activate_input` on an assembled flow where no Switch slot carries a leg for that input, so the Take would not move the media — re-point the program via the Node Bus Swap instead). The Switch-slot authoring rules (`pid_bus_switch_empty_legs`, `_too_many_legs`, `_duplicate_leg`, `_initial_leg_unknown`, `_legs_kind_mismatch`) are config-validation rejections and appear inside the validation error message, not as a `details.error_code`.
+
+#### PES splice (`flow`)
+
+How a Take on an assembled flow's Switch slots went. Flow-scoped; `splice_override_ignored` on a passthrough flow names the input too.
+
+| Error code | Severity | Trigger | Details payload |
+|---|---|---|---|
+| `pes_splice_completed` | info | A PES-aligned splice committed on the new leg. `kind` is there for video only. | `{ error_code, kind, program_number, out_pid, to_input_id, first_b_pts }` |
+| `pes_splice_degraded` | warning | A PES-aligned splice was asked for and the slot cut with a PMT version bump instead. `reason` is `unsupported_codec`, or `no_aligned_pes_reference` when the outgoing leg has given no PTS yet. `forced` says the mode came from the command. | `{ error_code, reason, forced, stream_type, program_number, out_pid, to_input_id }` |
+| `pes_splice_timeout` | warning | The new leg gave no splice point within `splice_budget_ms` (200 ms for audio, 2000 ms for video when unset). The slot cuts with a PMT version bump. `kind` is `audio` or `video`. | `{ error_code, kind, program_number, out_pid, to_input_id }` |
+| `pes_splice_codec_param_mismatch` | warning | The new leg's AAC parameters or SPS differ from the outgoing leg's. The slot cuts with a PMT version bump. | `{ error_code, program_number, out_pid, to_input_id }` with `a_aac_params` and `b_aac_params`, or `kind: "video"` with `a_video_params` and `b_video_params` |
+| `splice_override_ignored` | warning | A per-switch `splice_mode_override` had no effect: the flow has no assembler (`flow_not_assembled`), or the switch re-pinned slot sources (`bus_route_slot_retarget`). | `{ error_code, requested_mode, reason }`, with `new_input_id` for the first |
+
+**Source**: `src/engine/ts_assembler.rs`, `src/engine/manager.rs`
+
+#### Multiviewer compositor (`flow`)
 
 The multiviewer compositor emits under the same `flow` category. It is gated on the `multiviewer` Cargo feature, which every published release artefact carries — see [Multiviewer](/edge/multiviewer/).
 
@@ -505,7 +587,7 @@ The multiviewer compositor emits under the same `flow` category. It is gated on 
 
 ### Display (`display`)
 
-The local-display output (Linux-only, `display` Cargo feature) emits events under category `display`. Every failure event sets `details.error_code` for `command_ack` correlation, plus `details.output_id` so the manager UI attributes the failure to the offending output row on a multi-output flow. Several sub-families are filed under **other** categories — the hardware-decode lifecycle and the two DRM PRIME export failures under `system_resources`, the input-switch trio and the AC-4 notice under `flow` — so filter the Events page by `error_code` rather than by category when chasing a display fault. The rows below are annotated where the category differs.
+The local-display output (Linux-only, `display` Cargo feature) emits events under category `display`. Every failure event sets `details.error_code`, plus `details.output_id` so the manager UI attributes the failure to the offending output row on a multi-output flow. Several sub-families are filed under **other** categories — the hardware-decode lifecycle and the two DRM PRIME export failures under `system_resources`, the input-switch trio and the AC-4 notice under `flow` — so filter the Events page by `error_code` rather than by category when chasing a display fault. The rows below are annotated where the category differs.
 
 | Event | Severity | Trigger |
 |---|---|---|
@@ -513,7 +595,9 @@ The local-display output (Linux-only, `display` Cargo feature) emits events unde
 | `display_stopped` | info | Cancellation token fired. Includes lifetime `frames_displayed`, `frames_dropped_late`, `audio_underruns`. |
 | `display_device_unavailable` | — | **Never implemented.** No emitter exists in `engine::output_display` or `display::kms`, and there is no udev watch or mid-flow connector re-poll anywhere in the display path — a connector that is not `Connected` is caught only inside `KmsDisplay::open`, which fails with `display_device_invalid`. A cable pulled mid-flow raises no alarm of its own: the observable symptoms are `display_flip_timeout` (warning, throttled) and then `display_frame_loss_sustained`. |
 | `display_mode_set_failed` | critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
-| `display_audio_open_failed` | critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
+| `display_master_busy` / `display_device_invalid` / `display_resolution_unsupported` | critical | The connector still could not be opened after 20 attempts, about 10 s. Raised once, after the `display_output_waiting` warning, as the code for the cause (`display_mode_set_failed` is a fourth); the output goes on retrying. `display_master_busy` is another DRM master, a compositor or display manager (stop it, e.g. `systemctl stop gdm`, or run headless); `display_resolution_unsupported` a connector with no modes; `display_device_invalid` one not found or not connected, and any unrecognised KMS error. Details carry `device`, `audio_device`, `reason: "kms_busy_persistent"`, `kms_error_message`, `attempts`. |
+| `display_audio_device_invalid` | critical | `snd_pcm_open` failed on the configured `audio_device`. |
+| `display_audio_open_failed` | critical | Any other ALSA failure: the device refused its parameters, or a write failed (`ENODEV` mid-stream, say). |
 | `display_audio_disabled_persistent_failure` | critical | **Latched.** 10 consecutive ALSA failures carrying the same error code. Audio then drains silently and video continues; the counter resets on the first successful write, so a transient xrun does not latch it. Fix the `audio_device` or the user's group permission and restart the flow. |
 | `display_output_waiting` | info / warning | Two cases. (1) Another flow's display output on this edge already holds the `(device, audio_device)` pair — this output parks as a FCFS waiter (info). (2) `KmsDisplay::open` itself failed and is being retried on a 500 ms backoff (warning, `reason: "kms_busy"`), usually because a compositor or display manager owns the DRM master — `details.kms_error_code` then reads `display_master_busy`. |
 | `display_output_acquired` | info | This output was promoted to holder of the `(device, audio_device)` pair. Always follows a `display_output_waiting`; `display_started` follows a moment later. |
@@ -546,9 +630,9 @@ The local-display output (Linux-only, `display` Cargo feature) emits events unde
 | `display_vaapi_prime_export_failed` | warning | *(category `system_resources`)* A VAAPI surface could not be exported as DRM PRIME for one frame — the frame is dropped and a demote is pending. |
 | `display_rkmpp_prime_export_failed` | warning | *(category `system_resources`)* The RKMPP twin, with one difference: the frame is **recovered** by a sysmem download and presented via CPU blit rather than dropped. |
 
-Edge-emitted `command_ack.error_code` values: `display_device_invalid` (the connector regex failed, the connector is not present in `enumerate_displays()`, or the build has no `display` feature — this is also the fallback code for any unrecognised KMS error), `display_resolution_unsupported`, `display_mode_set_failed`, `display_master_busy` (a compositor or display manager holds DRM master — stop it, e.g. `systemctl stop gdm`, or run headless), `display_audio_device_invalid`, `display_audio_open_failed`, `display_audio_disabled_persistent_failure`.
+None of these codes comes back on a `command_ack`: a display output opens its connector and audio device on its own task, after the ack.
 
-One further code is a **manager-side save-time rejection**, returned as HTTP 422 rather than on a `command_ack`: `display_device_busy`, when a second display output on the node claims a `(device, audio_device)` pair another output already holds.
+One further code is a **manager-side save-time rejection**, returned as HTTP 422: `display_device_busy`, when a second display output on the node claims a `(device, audio_device)` pair another output already holds.
 
 Full reference: [Display Output](/edge/display/).
 
@@ -556,21 +640,23 @@ Full reference: [Display Output](/edge/display/).
 
 ### Replay (`replay`)
 
-The replay server writer + playback emit events under category `replay`. The names below are `details.replay_event`. Only the failure-class events *also* set `details.error_code`, and those values carry a `replay_` prefix (`replay_writer_lagged`, `replay_disk_full`, `replay_disk_pressure`, `replay_recovery_alert`, `replay_metadata_stale`, `replay_max_bytes_below_segment`, `replay_filmstrip_setup_failed`, `replay_filmstrip_decode_failed`) — those are the values that lift onto `command_ack.error_code`.
+The replay server writer + playback emit events under category `replay`. The names below are `details.replay_event`. Only the failure-class events *also* set `details.error_code`, and those values carry a `replay_` prefix (`replay_writer_lagged`, `replay_disk_full`, `replay_recording_in_use`, `replay_segment_close_failed`, `replay_disk_pressure`, `replay_recovery_alert`, `replay_metadata_stale`, `replay_max_bytes_below_segment`, `replay_filmstrip_setup_failed`, `replay_filmstrip_decode_failed`, and the two on `playback_loop_failed`).
 
 | Event | Severity | Trigger |
 |---|---|---|
 | `recording_started` | info | A flow with `recording.enabled = true` brought up its writer. |
 | `recording_pre_buffer_started` | info | Fires **instead of** `recording_started` when `pre_buffer_seconds` is set — the pre-buffer is rolling and recording begins on operator Start. Details carry `recording_id`, `pre_buffer_seconds`. |
-| `recording_start_failed` | critical | Disk I/O error before the first segment landed. |
+| `recording_start_failed` | critical | Disk I/O error before the first segment landed (`replay_disk_full`), or another running flow still writes the same recording 30 s on (`replay_recording_in_use`, after `recording_started`; give one of them its own `recording.storage_id`). |
 | `clip_created` | info | `mark_in` + `mark_out` produced a new clip. |
 | `clip_deleted` | info | Operator removed a clip. |
 | `playback_started` | info | A `replay` input started serving a clip. |
 | `playback_stopped` | info | Playback paused or cancelled. |
 | `playback_eof` | info | Reached the end of the clip / recording with `loop_playback: false`. |
+| `playback_loop_failed` | warning | A looping `replay` input stopped: it cannot go back to the start of its range. `error_code` is `replay_segment_missing` (nothing of the range is on disk any more) or `replay_segment_not_ready` (it is still being recorded), and null for an error that names no `replay_` code. Details carry `input_id`, `error`. |
 | `writer_lagged` | critical | The writer's bounded mpsc filled — packets dropped to keep the broadcast channel non-blocking. Rate-limited to 1 per 5 s. |
 | `disk_pressure` | warning | Recording disk usage crossed 80 % of `max_bytes`. Sticky until usage falls back below 70 %. |
 | `disk_full` | critical | Out of disk space on the replay root. |
+| `segment_close_failed` | critical | A segment could not be finished and is lost, for a reason other than the disk (its staging file gone, a rename refused): `replay_segment_close_failed`. A disk failure there raises `disk_full`. Details carry `recording_id`, `segment_id`. |
 | `recovery_alert` | warning | Crash-recovery scan ran on writer init; `.tmp/` orphans removed and / or `recording.json` was corrupt. Metadata corruption surfaces **here**, flagged by `details.meta_corrupt` — there is no separate corruption event. |
 | `metadata_stale` | warning | `recording.json` write failed on segment roll. |
 | `max_bytes_below_segment` | warning | `max_bytes` smaller than one segment — retention can't keep usage under the cap. |
@@ -844,24 +930,24 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 
 | Category | Description |
 |----------|-------------|
-| `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, A/V quality + source-clock discontinuities, PES splice, MXL, multiviewer compositor) |
+| `flow` | Flow lifecycle (start/stop/fail, output add/remove, input/output CRUD, PID bus / Flow Assembly, media-player, A/V quality + source-clock discontinuities, transcode PCR + clock rewriter, transcode source found / not found, PES splice, MXL, multiviewer compositor) |
 | `bandwidth` | Per-flow bandwidth monitoring (alarm, block, recovery) |
 | `srt` | SRT input and output connection state, including each SMPTE 2022-7 leg attaching, slow to connect, a stale accept on a listener leg or a caller leg that cannot reach its peer (inputs and outputs), an input re-settling its payload format, and native SRT bonding members |
 | `redundancy` | SMPTE 2022-7 dual-leg status, including an RTP input's buffered-merger leg health and a 2022-7 SRT output's lost leg |
-| `rtmp` | RTMP publisher connections, and an RTMP output's `audio_codec_unpublishable` and `aac_channel_layout_missing` |
+| `rtmp` | RTMP publisher connections, and an RTMP output's connection lifecycle, `codec_needs_encode`, `audio_codec_unpublishable` and `aac_channel_layout_missing` |
 | `rtsp` | RTSP input state, and URLs it cannot play or may misread |
 | `hls` | HLS output failures |
-| `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures, and `audio_codec_unpublishable`, `aac_channel_layout_missing` and `aac_config_changed` |
+| `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures, `codec_needs_encode`, `audio_codec_unpublishable`, `aac_channel_layout_missing` and `aac_config_changed`, and clip-export failures |
 | `rtp` | RTP input bind and lifecycle |
 | `udp` | UDP input bind and lifecycle |
 | `rist` | RIST Simple Profile input/output connection lifecycle |
-| `webrtc` | WHIP/WHEP session lifecycle, `whep_answer_unusable`, and `audio_codec_unpublishable` and `aac_channel_layout_missing` |
+| `webrtc` | WHIP/WHEP session lifecycle, `whep_answer_unusable`, `webrtc_setup_timeout`, `webrtc_negotiation_panic`, `webrtc_no_h264`, `codec_needs_encode`, `opus_layout_unsupported`, `audio_codec_unpublishable` and `aac_channel_layout_missing` |
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
-| `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`) |
+| `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`), an interlaced encode that fell back to progressive, and a frame-rate mismatch |
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
-| `tunnel` | Tunnel connection state, and a tunnel's gateway route not programmed |
+| `tunnel` | Tunnel connection state, a tunnel's gateway route not programmed, and datagrams the kernel dropped |
 | `manager` | Manager WebSocket connection |
-| `config` | Configuration changes, deprecated environment variables, repaired or unplayable config values, gateway-routing bases, restart-required `tuning` pushes |
+| `config` | Configuration changes, deprecated environment variables, repaired or unplayable config values, reserved input ids, gateway-routing bases, restart-required `tuning` pushes |
 | `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW encoder/decoder oversubscription + the display path's HW-decode lifecycle |
 | `bond` | Bonded input/output — per-path alive/dead, bond-aggregate degraded/down/recovered, session reset, socket rebuild, interface lost, MTU-budget, leg reconnecting / diagnosis, protocol-version mismatch |
 | `media` | Bonded input/output lifecycle — bond up, exited with error, gateway routing unavailable, gateway route lost, UDP legs unencrypted |

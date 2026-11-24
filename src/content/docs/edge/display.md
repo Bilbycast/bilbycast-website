@@ -38,7 +38,7 @@ These cover KMS (Linux DRM mode-setting) and ALSA. On a strictly headless box th
 sudo usermod -aG video,render,audio <user>   # takes effect on next login
 ```
 
-Missing `audio` membership fails deceptively: video keeps rendering while every ALSA open fails with the misleading `ALSA lib confmisc.c: (snd_config_get_card) Cannot get card index for N` — that's a permission error on `/dev/snd/controlCN`, not a missing sound card. Desktop sessions often mask the problem because systemd-logind grants a temporary ACL on `/dev/snd` to the active local seat, which disappears on reboot or when only SSH sessions exist. The edge raises Critical `display_audio_open_failed` events, and after 10 consecutive failures latches `display_audio_disabled_persistent_failure` (video continues; restart the flow after fixing the permission).
+Missing `audio` membership fails deceptively: video keeps rendering while every ALSA open fails with the misleading `ALSA lib confmisc.c: (snd_config_get_card) Cannot get card index for N` — that's a permission error on `/dev/snd/controlCN`, not a missing sound card. Desktop sessions often mask the problem because systemd-logind grants a temporary ACL on `/dev/snd` to the active local seat, which disappears on reboot or when only SSH sessions exist. The edge raises Critical `display_audio_device_invalid` events, and after 10 consecutive failures latches `display_audio_disabled_persistent_failure` (video continues; restart the flow after fixing the permission).
 
 If you build the edge from source, the matching dev packages are `libdrm-dev libasound2-dev libudev-dev` and the feature is enabled by default:
 
@@ -162,7 +162,9 @@ Most of these are filed under the `display` event category with `details.output_
 | `display_started` | Info | Modeset succeeded, ALSA opened (or muted), first frame queued. |
 | `display_stopped` | Info | Cancellation token fired. Includes lifetime `frames_displayed`, `frames_dropped_late`, `audio_underruns`. |
 | `display_mode_set_failed` | Critical | `drmModeSetCrtc` returned `EINVAL` / `ENOSPC` for the chosen resolution / refresh. |
-| `display_audio_open_failed` | Critical | `snd_pcm_open` returned non-zero, or ALSA `writei` returned `ENODEV` mid-stream. |
+| `display_master_busy` / `display_device_invalid` / `display_resolution_unsupported` | Critical | The connector still could not be opened after 20 attempts, about 10 s; the output goes on retrying. The code is the cause, in that order: another DRM master (a compositor or display manager) holds it; it is not found or not connected, or the KMS error is not recognised; it has no modes. |
+| `display_audio_device_invalid` | Critical | `snd_pcm_open` failed on the configured `audio_device`. |
+| `display_audio_open_failed` | Critical | Any other ALSA failure: the device refused its parameters, or a write failed (`ENODEV` mid-stream, say). |
 | `display_subscriber_lagged` | Warning | broadcast `Lagged(n)`; rate-limited to one event / second. The decoders flush and resync on the next IDR. |
 | `display_hdr_tonemap_active` | Warning | HDR source landed on an SDR panel. The decode falls back to sysmem download + CPU LUT tonemap. Fires once per flow start. |
 | `display_atomic_unavailable` | Warning | Kernel rejected the atomic-commit ioctl. The output falls back to legacy `set_crtc` per-frame. Fires once per output start. |
@@ -179,21 +181,13 @@ Most of these are filed under the `display` event category with `details.output_
 
 This table covers the display events you meet in normal operation. The full catalogue — including the claim-registry pair, the HW-decode reset / MPEG-2 pin family, the VAAPI and RKMPP PRIME-export failures and the unsupported-pixel-format cases — is in [Edge events and alarms](/edge/events-and-alarms/).
 
-:::note[Two events you may have seen referenced do not exist]
-`display_decoder_overload` and `display_av_drift` have been described in older material, but the edge has **no emitter for either** — they cannot fire, so do not build an alarm rule on them. Read the underlying condition directly instead: late frames are on `frames_dropped_late` and the frame-loss events above, and live A/V offset is on `av_sync_offset_ms`, which the manager polls continuously rather than waiting to be told about.
+:::note[Four codes you may have seen referenced do not exist]
+`display_decoder_overload`, `display_av_drift`, `display_program_not_found` and `display_audio_track_not_found` have been described in older material, but the edge has **no emitter for any of them** — they cannot fire, so do not build an alarm rule on them. Read the underlying condition directly instead: late frames are on `frames_dropped_late` and the frame-loss events above, and live A/V offset is on `av_sync_offset_ms`, which the manager polls continuously rather than waiting to be told about.
 :::
 
-Save-time errors that surface as `command_ack.error_code` on `add_output` / `update_config`:
+None of these codes comes back as a `command_ack` error code: the output opens its connector and audio device on its own task, after the ack. A `device` or `audio_device` value of the wrong form is refused with `validation_error`. A build without the `display` feature, or not for Linux, refuses the output at start and names `display_device_invalid` in the error's text only.
 
-| `error_code` | Meaning |
-|---|---|
-| `display_device_invalid` | `device` regex failed at config-load OR connector not present in `enumerate_displays()` at runtime OR build was compiled without the `display` Cargo feature. |
-| `display_audio_device_invalid` | `audio_device` regex failed OR ALSA refused to open it. |
-| `display_resolution_unsupported` | The connector advertises no usable mode for the source, or KMS refused the chosen mode. Not driven by the deprecated `resolution` / `refresh_hz` fields. |
-| `display_program_not_found` | After 5 s, the demuxer hasn't seen the configured `program_number` in the PAT. |
-| `display_audio_track_not_found` | Configured `audio_track_index` exceeds the PMT's audio-stream count. |
-
-One code you will meet that is **not** on that list: `display_device_busy`. It comes from the manager, not the edge — adding or editing a display output whose `(device, audio_device)` pair is already used on that node is refused with HTTP 422 and `error_code: "display_device_busy"` before any command reaches the wire. The edge itself never emits it; a duplicate pair that arrives in `config.json` is accepted and queued by the claim registry instead.
+One code you will meet that is **not** in the table above: `display_device_busy`. It comes from the manager, not the edge — adding or editing a display output whose `(device, audio_device)` pair is already used on that node is refused with HTTP 422 and `error_code: "display_device_busy"` before any command reaches the wire. The edge itself never emits it; a duplicate pair that arrives in `config.json` is accepted and queued by the claim registry instead.
 
 ## Per-output stats
 

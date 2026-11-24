@@ -130,11 +130,11 @@ The `transcode_pcr_*` codes come from the last stage of a TS transcode chain, sc
 | warning | `media_player_next_prepare_failed` | The **Next** target could not be opened, so the request was rejected. The player stays on the current source rather than cutting to dead air. |
 | warning | `media_player_pacer_lagging` | The `ts` / `mp4` playout pacer fell ≥ 250 ms behind its own schedule — a source whose instantaneous packet rate exceeds what the bounded hand-off queue can absorb. Latched; fires once per episode. |
 | info | `media_player_pacer_recovered` | Lateness dropped back to ≤ 100 ms, clearing the latch. |
-| critical | `media_player_source_missing` | A source's file does not exist, or the edge may not read it. |
-| critical | `media_player_source_unsupported` | The file is not one the player reads: no TS sync byte within 1 MiB, a fragmented MP4, or an I/O error of kind invalid data. |
+| critical | `media_player_source_missing` | A `ts` source's file does not exist, or the edge may not read it. A missing `mp4` or `image` file raises `media_player_source_failed`. |
+| critical | `media_player_source_unsupported` | The file is not one the player reads: no sync byte within 1 MiB of a `ts` file, an I/O error of kind invalid data on one, or a fragmented MP4. |
 | critical | `media_player_source_codec_unsupported` | An `mp4` or `image` source on a build without both `media-codecs` and `fdk-aac`. |
-| critical | `media_player_source_render_failed` | Any other I/O error while the source was played. |
-| critical | `media_player_source_failed` | A source stopped with any other error. |
+| critical | `media_player_source_render_failed` | Any other I/O error on a `ts` source, or the pacer thread of a `ts` or `mp4` source could not be started. |
+| critical | `media_player_source_failed` | A source stopped with any other error: an `mp4` or `image` file that is missing, unreadable or does not parse or decode, for one. |
 
 The five `media_player_source_*` events carry `{ error_code, flow_id, input_id, source_index, source_kind, source_name, error }`, `source_kind` being `ts`, `mp4` or `image`. The player waits 2 s and goes on with its playlist.
 
@@ -428,7 +428,7 @@ These, and `video_transcode_decode_stalled` above, file under category **`flow`*
 | info | `video_transcode_source_found` | The transcoder found a video track to re-encode after that Warning. | `{ error_code, source_pid, source_stream_type, pmt_pid, program_number }` |
 | warning | `video_source_pid_not_found` | `video_encode.source_video_pid` names a PID that is not in the PMT, or not video the TS transcoder decodes, so it re-encodes the first it does. Once per distinct (pinned, actual) pair, re-armed when the pin reappears. Input- or output-scoped. | `{ error_code, pinned_pid, actual_pid, actual_stream_type }` |
 | warning | `st2110_video_codec_mismatch` | The PMT an ST 2110-20 / -23 output reads says H.264 and the NAL units are HEVC, or the reverse. It decodes with the detected codec. Output-scoped. | `{ error_code, declared_codec, detected_codec }` |
-| warning | `st2110_egress_decode_stalled` | An ST 2110-20 / -23 output's decoder took 200 access units and gave no frame. It retries in software, then as the other codec. Once per stall. Output-scoped. | `{ error_code, codec }` |
+| warning | `st2110_egress_decode_stalled` | An ST 2110-20 / -23 output's decoder took 200 access units and gave no frame. It is reopened once in software, then once as the other codec. Raised once per decoder opened, so up to three times in a stall neither cures. Output-scoped. | `{ error_code, codec }` |
 
 **Source**: `src/engine/ts_video_replace.rs`, `src/engine/video_encode_util.rs`, `src/engine/transcode_engage.rs`, `src/engine/st2110_video_io.rs`, output modules (`output_srt.rs`, `output_rist.rs`, `output_rtp.rs`, `output_udp.rs`).
 
@@ -630,7 +630,7 @@ The local-display output (Linux-only, `display` Cargo feature) emits events unde
 | `display_vaapi_prime_export_failed` | warning | *(category `system_resources`)* A VAAPI surface could not be exported as DRM PRIME for one frame — the frame is dropped and a demote is pending. |
 | `display_rkmpp_prime_export_failed` | warning | *(category `system_resources`)* The RKMPP twin, with one difference: the frame is **recovered** by a sysmem download and presented via CPU blit rather than dropped. |
 
-None of these codes comes back on a `command_ack`: a display output opens its connector and audio device on its own task, after the ack.
+None of these codes comes back as a `command_ack` error code: a display output opens its connector and audio device on its own task, after the ack. A build without the `display` feature, or not for Linux, refuses the output at start and names `display_device_invalid` in the error's text only.
 
 One further code is a **manager-side save-time rejection**, returned as HTTP 422: `display_device_busy`, when a second display output on the node claims a `(device, audio_device)` pair another output already holds.
 
@@ -646,7 +646,7 @@ The replay server writer + playback emit events under category `replay`. The nam
 |---|---|---|
 | `recording_started` | info | A flow with `recording.enabled = true` brought up its writer. |
 | `recording_pre_buffer_started` | info | Fires **instead of** `recording_started` when `pre_buffer_seconds` is set — the pre-buffer is rolling and recording begins on operator Start. Details carry `recording_id`, `pre_buffer_seconds`. |
-| `recording_start_failed` | critical | Disk I/O error before the first segment landed (`replay_disk_full`), or another running flow still writes the same recording 30 s on (`replay_recording_in_use`, after `recording_started`; give one of them its own `recording.storage_id`). |
+| `recording_start_failed` | critical | Disk I/O error before the first segment landed (`replay_disk_full`), or another running flow still writes the same recording 30 s on (`replay_recording_in_use`, after `recording_started` or `recording_pre_buffer_started`; give one of them its own `recording.storage_id`). |
 | `clip_created` | info | `mark_in` + `mark_out` produced a new clip. |
 | `clip_deleted` | info | Operator removed a clip. |
 | `playback_started` | info | A `replay` input started serving a clip. |

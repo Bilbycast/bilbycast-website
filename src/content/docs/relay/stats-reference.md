@@ -38,7 +38,7 @@ The per-tunnel breakdown is served separately on `GET /api/v1/tunnels`.
 
 ## Field reference
 
-This is a single flat JSON object. All counters are lock-free atomics, cumulative since process start unless noted otherwise.
+This is a single flat JSON object. The `total_bytes_*`, `total_tcp_streams` and `total_udp_datagrams` totals count since the relay started, over the **QUIC tunnels** that are or have been up: native plain-UDP sessions are not in them, and only a restart resets them. Up to and including relay v0.20.0 they were sums over the tunnels held at the time, so they fell when a tunnel went. See [Totals](#totals).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -46,17 +46,23 @@ This is a single flat JSON object. All counters are lock-free atomics, cumulativ
 | `connected_edges` | usize | Number of edges currently connected to the relay |
 | `total_tunnels` | usize | Number of tunnels currently tracked (active + pending) |
 | `active_tunnels` | usize | Number of tunnels currently bound on both legs |
-| `total_bytes_ingress` | u64 | Total bytes received from ingress edges across all tunnels |
-| `total_bytes_egress` | u64 | Total bytes sent to egress edges across all tunnels |
-| `total_bytes_forwarded` | u64 | Sum of ingress + egress bytes |
-| `total_bandwidth_bps` | u64 | Current forwarding bandwidth, derived from the byte counters over a sliding window |
-| `total_tcp_streams` | u64 | Total TCP streams forwarded since startup |
-| `active_tcp_streams` | u64 | TCP streams currently being forwarded |
-| `total_udp_datagrams` | u64 | Total UDP datagrams forwarded |
+| `total_bytes_ingress` | u64 | QUIC tunnels, since the relay started: datagram payload bytes forwarded from the edge bound `ingress`, and TCP stream bytes forwarded from the edge that opened the stream |
+| `total_bytes_egress` | u64 | The same the other way: from the edge bound `egress`, and back to the edge that opened the stream |
+| `total_bytes_forwarded` | u64 | The sum of the two |
+| `total_bandwidth_bps` | u64 | Forwarding rate of the QUIC tunnels now: the growth of `total_bytes_forwarded` since the last time the figure was taken. Native plain-UDP traffic is not in it |
+| `total_tcp_streams` | u64 | TCP streams opened through to the peer since the relay started |
+| `active_tcp_streams` | u64 | TCP streams open now on the tunnels held now |
+| `total_udp_datagrams` | u64 | QUIC datagrams forwarded since the relay started |
 | `peak_tunnels` | u64 | Maximum concurrent active tunnels observed |
 | `peak_edges` | u64 | Maximum concurrent connected edges observed |
 | `connections_total` | u64 | Total QUIC connections accepted since startup |
 | `manager` | object | Manager-link state. Omitted entirely when no manager is configured |
+
+### Totals
+
+Up to and including relay v0.20.0 each total was a sum over the tunnels, or the native plain-UDP sessions, held when it was read. It fell when one went: unbound, lost with its edges, removed by the manager or over REST, or reaped. `rate()` and `increase()` read that as a counter reset, and `total_bandwidth_bps` read 0 or low for the sample in which a tunnel ended. Later releases keep what a tunnel counted, so the totals only grow; names, types and JSON keys are unchanged.
+
+A panel or an alert that read a total as the traffic of the tunnels now up shows a total since the relay started after the upgrade. Take its `rate()`, or add up the per-tunnel series for what is held now. A tunnel's own figures go with it, and start at 0 when its id is bound again after it has gone.
 
 ## Quick examples
 
@@ -88,11 +94,11 @@ curl -s -H "Authorization: Bearer $RELAY_TOKEN" \
 
 The two endpoints overlap, but they are not a field-for-field mirror. Use the structured endpoint for one-off scripts and the Prometheus endpoint for time-series storage — with three differences to know about:
 
-- **`total_bandwidth_bps` is JSON-only.** No Prometheus family carries it. It is computed inside the stats handler as a sliding-window rate over the bytes-forwarded total, and it is not an atomic read: it takes a lock, divides the byte delta by the time since the *last* call, and then overwrites that sample. Its value therefore depends on when the endpoint was last polled, and two consecutive readers see different numbers. In Prometheus, derive it instead: `rate(bilbycast_relay_bytes_forwarded_total[1m]) * 8`.
+- **`total_bandwidth_bps` is JSON-only.** No Prometheus family carries it. It is a rate over the bytes-forwarded total of the QUIC tunnels, and it is not an atomic read: it takes a lock, divides the byte delta by the time since the *last* call, and then overwrites that sample. The manager's 1 s stats message takes it from the same sample. Its value therefore depends on when it was last taken, and two consecutive readers see different numbers. In Prometheus, derive it instead: `rate(bilbycast_relay_bytes_forwarded_total[1m]) * 8`.
 - **`manager` is not mirrored as an object.** It surfaces as two separately named gauges, `bilbycast_relay_manager_connected` and `bilbycast_relay_manager_disconnected_seconds`.
 - **The per-tunnel series are Prometheus-only.** The JSON equivalent is the separate `GET /api/v1/tunnels` response.
 
-Every other field maps to a counter or gauge of the obvious name, and those do read the same atomics.
+Every other field maps to a counter or gauge of the obvious name, and reads the same figures.
 
 ### Series catalogue
 
@@ -107,24 +113,24 @@ Every other field maps to a counter or gauge of the obvious name, and those do r
 | `bilbycast_relay_edges_connected` | gauge | Edges currently connected |
 | `bilbycast_relay_tunnels_total` | gauge | Tunnels currently tracked (active + pending) |
 | `bilbycast_relay_tunnels_active` | gauge | Tunnels currently bound on both legs |
-| `bilbycast_relay_bytes_forwarded_total` | counter | Ingress + egress bytes across all tunnels |
-| `bilbycast_relay_bytes_ingress_total` | counter | Bytes received from ingress edges |
-| `bilbycast_relay_bytes_egress_total` | counter | Bytes sent to egress edges |
-| `bilbycast_relay_tcp_streams_total` | counter | TCP streams forwarded since startup |
-| `bilbycast_relay_tcp_streams_active` | gauge | TCP streams currently being forwarded |
-| `bilbycast_relay_udp_datagrams_total` | counter | UDP datagrams forwarded over tunnels |
+| `bilbycast_relay_bytes_forwarded_total` | counter | `total_bytes_forwarded`: QUIC tunnels, both directions, since the relay started. Up to v0.20.0 it, and the next four counters, fell when a tunnel went (see [Totals](#totals)) |
+| `bilbycast_relay_bytes_ingress_total` | counter | `total_bytes_ingress` |
+| `bilbycast_relay_bytes_egress_total` | counter | `total_bytes_egress` |
+| `bilbycast_relay_tcp_streams_total` | counter | `total_tcp_streams` |
+| `bilbycast_relay_tcp_streams_active` | gauge | `active_tcp_streams`: streams open now on the tunnels held now |
+| `bilbycast_relay_udp_datagrams_total` | counter | `total_udp_datagrams`: QUIC datagrams only |
 | `bilbycast_relay_connections_total` | counter | QUIC connections accepted since startup |
 | `bilbycast_relay_peak_tunnels` | gauge | Peak simultaneous active tunnels |
 | `bilbycast_relay_peak_edges` | gauge | Peak simultaneous connected edges |
 
-**Native plain-UDP carrier** — the SRT/RIST and bond-leg plane that runs without QUIC. Always emitted; they read zero when nothing uses that plane.
+**Native plain-UDP carrier** — the SRT/RIST and bond-leg plane that runs without QUIC. Always emitted: the two gauges read zero while nothing uses that plane, the two counters until something has.
 
 | Metric | Type | Meaning |
 |---|---|---|
 | `bilbycast_relay_udp_sessions_total` | gauge | Native plain-UDP sessions (active + waiting) |
 | `bilbycast_relay_udp_sessions_active` | gauge | Sessions with both sides latched |
-| `bilbycast_relay_udp_bytes_forwarded_total` | counter | Bytes forwarded over the native plain-UDP relay |
-| `bilbycast_relay_udp_datagrams_forwarded_total` | counter | Datagrams forwarded over the native plain-UDP relay |
+| `bilbycast_relay_udp_bytes_forwarded_total` | counter | Bytes of the media datagrams that came from a registered side since the relay started, tunnel id included. Up to v0.20.0 it fell when a session went |
+| `bilbycast_relay_udp_datagrams_forwarded_total` | counter | Media datagrams forwarded since the relay started. Up to v0.20.0 it fell when a session went |
 
 **Viewer distribution** — `-distribution` builds only, and only once the subsystem has published a sample. A plain forwarder build exposes none of them, so treat their absence as "not running", not as zero.
 
@@ -134,7 +140,7 @@ Every other field maps to a counter or gauge of the obvious name, and those do r
 | `bilbycast_relay_distribution_viewers` | gauge | Connected WHEP viewers across all streams |
 | `bilbycast_relay_distribution_bytes_out_total` | counter | Media bytes fanned out to viewers |
 | `bilbycast_relay_distribution_origin_bytes` | gauge | Bytes currently held in the LL-HLS origin cache |
-| `bilbycast_relay_distribution_offpath_sessions` | counter | WHEP sessions that had a datagram refused by the media source pin — a spoofed ICE reflection attempt, or a viewer whose IP changed mid-session. Counted once per session |
+| `bilbycast_relay_distribution_offpath_sessions` | counter | WHEP sessions that had an **off-path** datagram dropped by the media source pin — a spoofed ICE reflection attempt, or a viewer whose IP changed mid-session. Counted once per session. A datagram from another of the peer's paths inside the grace is dropped too and counted in the row below instead, not here |
 | `bilbycast_relay_distribution_other_path_datagrams_total` | counter | Datagrams the media source pin dropped from another of a peer's paths (an address named in its SDP, seen before DTLS completed, or advertised by the session) inside the grace after the pin armed, which raise no alarm. WHEP, WHIP and cascade sessions alike. Past the grace such a datagram is off-path |
 | `bilbycast_relay_distribution_superseded_frames_total` | counter | Frames a live ingest published while a newer ingest held its stream, dropped. Non-zero while two publishers push one stream id |
 

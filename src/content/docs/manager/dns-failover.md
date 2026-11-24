@@ -23,7 +23,7 @@ Browsers and nodes find a manager in different ways, so a DNS flip does not affe
 That second row is the one that surprises people. An edge does not depend on DNS to survive a manager outage:
 
 - `manager.urls` holds **1–16** `wss://` entries, validated at config load — empty, over 16, non-TLS, over 2048 characters, or duplicated all refuse to start.
-- On any close or connect failure the client advances to the next entry and waits a fixed **5 s** before retrying. A failed connect also raises a Warning event on the node ("Manager connection lost, rotating to next URL"). The cursor advances whichever way the attempt ended, so a manager that accepts a connection and immediately drops it cannot starve the others.
+- On any close or connect failure the client advances to the next entry and waits a fixed **5 s** before retrying. A failed connect also raises a Warning event on the node (an edge names the kind of loss, "Manager connection lost: dial timed out"; a relay reads "Manager connection lost, rotating to next URL: …"). The cursor advances whichever way the attempt ended, so a manager that accepts a connection and immediately drops it cannot starve the others.
 - The surviving instance reads the node's stored secret from the shared Postgres and authenticates the reconnect with no operator involvement.
 
 The relay client is the same shape, same list, same 5 s.

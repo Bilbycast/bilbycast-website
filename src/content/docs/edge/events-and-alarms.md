@@ -202,8 +202,8 @@ Three redundancy events carry a structured `details.error_code`:
 
 | Severity | Message | Trigger |
 |----------|---------|---------|
-| info | RTMP publisher connected | Client connected and started publishing |
-| warning | RTMP publisher disconnected | Publisher disconnected |
+| info | RTMP publisher connected | An H.264 sequence header from the publish on air or, with none on air, from the first one heard. An audio-only publish raises none |
+| warning | RTMP publisher disconnected | The publish on air ended (it stopped, its connection closed, or it sent nothing for 300 s) or, with none on air, the first one heard did. Not raised for a publish a newer one has taken over from |
 | critical | RTMP server error: {error} | Server bind or accept failure |
 
 An RTMP **output** raises two events with a structured `details.error_code` about its audio (the full output lifecycle catalogue is in the [in-repo reference](https://github.com/Bilbycast/bilbycast-edge/blob/main/docs/events-and-alarms.md)):
@@ -225,6 +225,14 @@ An RTMP **output** raises two events with a structured `details.error_code` abou
 | warning | RTSP input disconnected: {error}. Reconnecting in {n}s | Stream lost after a successful connection |
 
 The disconnect event fires **once per connection cycle** — if the RTSP server is unreachable and the edge retries repeatedly, only the first failure emits an event. A new "connected" event followed by a new "disconnected" event will fire when the connection is established and then lost again.
+
+Three RTSP events carry a structured `details.error_code`. Each is raised once per start, flow- and input-scoped:
+
+| Severity | `details.error_code` | Trigger | Details payload |
+|---|---|---|---|
+| critical | `rtsps_unsupported` | The input started with an `rtsps://` URL; the RTSP client speaks no TLS. It does not retry until its configuration changes or the flow restarts. | `{ error_code, url }` |
+| critical | `rtsp_url_unparseable` | The same, for a URL the URL parser cannot read. Only a whole config can hold either: an edit naming the input is refused, and the config that brought it raises the `config` Warning of the same code. | `{ error_code, url }` |
+| warning | `rtsp_userinfo_misread` | `rtsp_url` has a `:` before its last `@` and the parser reads no username or password there: `rtsp://admin:1234#5@cam/live` is read as host `admin`, port 1234. The input connects to what the parser reads, without credentials from the URL. If that text holds a password, percent-encode its `#`, `/`, `?` or `@`, or use `username` and `password`. | `{ error_code, url }` |
 
 **Source**: `src/engine/input_rtsp.rs`
 
@@ -391,11 +399,12 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | critical | Tunnel '{name}' failed: {error} | Tunnel task exited with fatal error |
 | critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed |
 
-Two tunnel events carry a structured `details.error_code`:
+Three tunnel events carry a structured `details.error_code`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
 | critical | `tunnel_decrypt_failure` | Once per window, when AEAD decrypt keeps failing while **zero** packets were delivered across the whole window — almost always a `tunnel_encryption_key` mismatch between the two edges. Re-arms when healthy traffic resumes. | `{ error_code, tunnel_name, decrypt_errors_window, packets_delivered_window, window_secs }` |
+| warning | `tunnel_gateway_route_failed` | The `gateway` policy route of a native-UDP relay or direct tunnel, or of a relay bond leg, could not be programmed — refused routing-table bases, no `CAP_NET_ADMIN`, a missing interface or a netlink error. The tunnel runs on over the host's own routing, which need not be via that gateway. Raised at each start; for a direct tunnel, at each connection attempt. | `{ error_code, tunnel_id, interface, source, gateway, error }` |
 | warning | `tunnel_register_refused` | A native-UDP direct-mode listener refused a register from a new caller — `reason` is `slot_held` or `unlatchable_source`. Rate-limited. Otherwise invisible: the tunnel stays `Ready` on the incumbent's traffic while the new caller is locked out. | `{ error_code, tunnel_id, reason, refused_addr, held_addr, suppressed }` |
 
 **Source**: `src/tunnel/manager.rs`, `src/tunnel/relay_client.rs`, `src/tunnel/udp_relay_client.rs`
@@ -404,16 +413,26 @@ Two tunnel events carry a structured `details.error_code`:
 
 ### Manager Connection (`manager`)
 
-| Severity | Message | Trigger |
-|----------|---------|---------|
-| info | Connected to manager | WebSocket auth succeeded (`auth_ack` or `register_ack`) |
-| warning | Manager connection lost, rotating to next URL | A connect or session attempt returned an error — a clean WebSocket close emits no event |
-| critical | Manager authentication failed: {reason} | Auth rejected by manager |
-| info | Node authentication secret rotated and persisted | A `rotate_secret` command was applied and written to `secrets.json` |
-| warning | Node credentials could not be saved | `details.error_code` is `manager_credentials_not_saved`, and `details.during` says what: `rotate_secret` — the new secret could not be written to `secrets.json`, so the rotation was **refused** (`success: false`, `config_persist_failed`) and the manager and the edge both keep the old one (a secret `secrets.json` took is acknowledged even if `config.json` then could not be rewritten: `secrets.json` alone decides what a restart presents); `rotation_rollback` — a rotation's acknowledgement never left, and the previous secret could not be put back on disk, so a restart before the next authentication would present the new one, which the manager never stored; `fallback_accepted` — the manager accepted a fallback secret after a rotation, and it could not be written, so the edge is connected but a restart would present the secret the manager refused; `registration` — the node ID and secret the manager issued at registration could not be written to `secrets.json`, so the edge is connected and keeps them in its running config, but a restart before the next successful config save would present the spent registration token. `details.reason` carries the write error |
-| warning | manager binary frame … (too short / bad magic / unknown kind / bad header) | A media-library upload binary frame was structurally malformed and dropped. A chunk that *writes* badly is not one of these — it acks `command_ack success:false` instead |
+A connection attempt or a session that ends in an error raises one **Manager connection lost** Warning: one message per kind of loss, with `details` `{ error_code, reason, url }` (`url` without userinfo, query or fragment). A clean end of an authenticated session raises nothing. Either way the edge dials the next URL 5 s later. Up to and including v0.115.0 every kind read "Manager connection lost, rotating to next URL".
 
-**Source**: `src/manager/client.rs`
+| Severity | Message | Trigger | `details.error_code` |
+|----------|---------|---------|---|
+| info | Connected to manager | The manager answered the auth frame with `auth_ok` or `register_ack` | — |
+| warning | Manager connection lost: connection settings refused | A URL that is not `wss://` or cannot be parsed, `accept_self_signed_cert` without `BILBYCAST_ALLOW_INSECURE=1`, or a `cert_fingerprint` verifier that could not be built | `manager_link_settings` |
+| warning | Manager connection lost: could not reach the manager | DNS failed or returned nothing, every address refused the TCP connect, or TLS or the WebSocket upgrade failed (a rejected certificate, a fingerprint mismatch) | `manager_dial_failed` |
+| warning | Manager connection lost: dial timed out | The dial did not finish within 30 s; `details.reason` names the stage (DNS, TCP, TLS / upgrade) | `manager_dial_timeout` |
+| warning | Manager connection lost: handshake timed out | The auth frame not written within 10 s, no auth reply within 10 s, or no auth reply within 60 s of starting | `manager_handshake_timeout` |
+| warning | Manager connection lost: authentication refused | The manager answered `auth_error` (after the Critical below) | `manager_auth_rejected` |
+| warning | Manager connection lost: unexpected reply | The answer to the auth frame was not a valid auth reply | `manager_protocol_error` |
+| warning | Manager connection lost: connection error | A WebSocket error during auth or the session, or the connection closed during auth | `manager_connection_error` |
+| warning | Manager connection lost: manager went silent | Nothing heard for `max(90 s, 4 × the median of the last 8 ping intervals)`, each interval counted as at most 300 s. Unarmed until the session's first ping | `manager_silent` |
+| warning | Manager connection lost: manager stopped reading | One write to the manager did not complete in 300 s | `manager_write_stalled` |
+| critical | Manager authentication failed: {reason} | Auth rejected by manager | — |
+| info | Node authentication secret rotated and persisted | A `rotate_secret` command saved the new secret to `secrets.json` and its acknowledgement was written to the connection | — |
+| warning | Node credentials could not be saved | `details.during` says what: `rotate_secret` — the new secret could not be written to `secrets.json`, so the rotation was **refused** (`success: false`, `config_persist_failed`) and the manager and the edge both keep the old one (a secret `secrets.json` took is acknowledged even if `config.json` then could not be rewritten: `secrets.json` alone decides what a restart presents); `rotation_rollback` — a rotation's acknowledgement never left, and the previous secret could not be put back on disk, so a restart before the next authentication would present the new one, which the manager never stored; `fallback_accepted` — the manager accepted a fallback secret after a rotation, and it could not be written, so the edge is connected but a restart would present the secret the manager refused; `registration` — the node ID and secret the manager issued at registration could not be written to `secrets.json`, so the edge is connected and keeps them in its running config, but a restart before the next successful config save would present the spent registration token. `details.reason` carries the write error | `manager_credentials_not_saved` |
+| warning | manager binary frame … (too short / bad magic / unknown kind / bad header) | A media-library upload binary frame was structurally malformed and dropped. A chunk that *writes* badly is not one of these — it acks `command_ack success:false` instead | — |
+
+**Source**: `src/manager/client.rs`, `src/manager/link.rs`
 
 ---
 
@@ -424,15 +443,19 @@ Two tunnel events carry a structured `details.error_code`:
 | info | Configuration updated | Config applied via manager command |
 | warning | Failed to persist configuration: {error} | Config write to disk failed after update |
 
-Three codes in this category carry a structured `details` payload:
+Eight codes in this category carry a structured `details` payload:
 
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|
 | `deprecated_env_var` | warning | The node's environment (usually its systemd unit) sets a `BILBYCAST_*` variable that has moved into configuration. One event per stale variable, raised at startup — the queue flushes on the first manager auth, so it reaches the Events page even though it is raised before the WebSocket connects. This is the only signal an operator gets that a unit-file variable is doing nothing. | `{ error_code, env_var, replacement, status, value }`. `status` is `"deprecated"` (still honoured, but *below* the config field that replaced it), `"removed"` (does nothing at all) or `"unparseable"` (still read, but this host's value could not be parsed, so it was discarded and the layer below answered). |
 | `aac_channels_repaired` | warning | A whole config — the load, `POST /api/v1/config/reload`, `PUT /api/v1/config` or a manager `update_config` — held an AAC channel count the encoder has no mode for, which a release up to and including v0.116.0 accepted and then carried no audio: `audio_encode.channels: 7` with `aac_lc`, or a `transcode` block's `channels` of 7 or 9–16 beside `aac_lc` / `he_aac_v1` (other than 2 beside `he_aac_v2`). The count is **repaired** — 7 to 6, 9–16 to 8, HE-AAC v2 to 2 — rather than the config refused (at load that would stop the node), and the load and the reload write the repair back to `config.json`. Input- or output-scoped. An edit naming the input or output is still refused. | `{ error_code, field, codec, was, now }` |
+| `rtsp_timeout_repaired` | warning | A whole config (the same four routes) held an RTSP input whose `timeout_secs` is outside 1–300. It is **repaired** to 300, and the load and the reload write that back. An edit naming the input is refused. Input-scoped. | `{ error_code, field, was, now }` |
+| `rtsps_unsupported`, `rtsp_url_unparseable` | warning | A whole config (the same four routes) held an RTSP input whose `rtsp_url` is `rtsps://`, or cannot be read as a URL. It is kept as it is; the input does not connect and raises the Critical `rtsp` event of the same code when it starts. An edit of the input is refused until the URL is changed. Input-scoped. | `{ error_code }` |
+| `bond_rt_base_unparseable` | warning | At startup, per variable: `BILBYCAST_BOND_RT_TABLE_BASE` or `BILBYCAST_BOND_RT_PRIO_BASE` is not a whole number as written (`0xBD00`, or spaces around the number). The default base is used. Empty or blank is unset. | `{ error_code, env_var, value, status, default, accepted }` — `status` is `"unparseable"` |
+| `bond_rt_base_refused` | critical | At startup, one event for both variables: a base is a whole number outside its bounds (tables 256–4294967040; priorities 1–744 or 1001–32510). Gateway routing is off until it is fixed and the edge restarted: no orphan sweep, and no gateway leg is programmed. | `{ error_code, status, refused }` — `status` is `"refused"`, `refused[]` of `{ env_var, value, accepted }` |
 | `tuning_requires_restart` | warning | A pushed `tuning` field was accepted but is read once at node start, so it takes effect at the node's next restart rather than on the push. | `{ error_code, fields }`, where `fields` is `["tuning.probe_session_limits", "tuning.probe_4k"]` — the only two knobs affected. The other four `tuning` knobs — the two ingress de-jitter defaults and the two media-player defaults — are re-installed on the push without a node restart, but they are read when an input spawns: an input that is already running keeps its current behaviour until it respawns, so a **flow** restart is what applies them. |
 
-**Source**: `src/manager/client.rs`, `src/main.rs`, `src/config/env_compat.rs`
+**Source**: `src/manager/client.rs`, `src/main.rs`, `src/config/env_compat.rs`, `src/config/validation.rs`, `src/engine/bond_routing.rs`
 
 ---
 
@@ -826,7 +849,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `srt` | SRT input and output connection state, including each SMPTE 2022-7 leg attaching, slow to connect, a stale accept on a listener leg or a caller leg that cannot reach its peer (inputs and outputs), an input re-settling its payload format, and native SRT bonding members |
 | `redundancy` | SMPTE 2022-7 dual-leg status, including an RTP input's buffered-merger leg health and a 2022-7 SRT output's lost leg |
 | `rtmp` | RTMP publisher connections, and an RTMP output's `audio_codec_unpublishable` and `aac_channel_layout_missing` |
-| `rtsp` | RTSP input state |
+| `rtsp` | RTSP input state, and URLs it cannot play or may misread |
 | `hls` | HLS output failures |
 | `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures, and `audio_codec_unpublishable`, `aac_channel_layout_missing` and `aac_config_changed` |
 | `rtp` | RTP input bind and lifecycle |
@@ -836,9 +859,9 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
 | `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`) |
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
-| `tunnel` | Tunnel connection state |
+| `tunnel` | Tunnel connection state, and a tunnel's gateway route not programmed |
 | `manager` | Manager WebSocket connection |
-| `config` | Configuration changes, deprecated environment variables, restart-required `tuning` pushes |
+| `config` | Configuration changes, deprecated environment variables, repaired or unplayable config values, gateway-routing bases, restart-required `tuning` pushes |
 | `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW encoder/decoder oversubscription + the display path's HW-decode lifecycle |
 | `bond` | Bonded input/output — per-path alive/dead, bond-aggregate degraded/down/recovered, session reset, socket rebuild, interface lost, MTU-budget, leg reconnecting / diagnosis, protocol-version mismatch |
 | `media` | Bonded input/output lifecycle — bond up, exited with error, gateway routing unavailable, gateway route lost, UDP legs unencrypted |

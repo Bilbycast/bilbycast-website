@@ -38,14 +38,9 @@ bilbycast-<device>-api-gateway/
 ├── Cargo.toml
 ├── CLAUDE.md
 ├── src/
-│   ├── main.rs              # CLI, config, tokio runtime
+│   ├── main.rs              # CLI, tokio runtime, GatewayClient
 │   ├── config.rs            # TOML config parsing
-│   ├── credentials.rs       # Node credential persistence (reuse as-is)
-│   ├── ws/
-│   │   ├── mod.rs
-│   │   ├── client.rs        # WebSocket client (reuse as-is)
-│   │   ├── tls.rs           # TLS config (reuse as-is)
-│   │   └── message.rs       # WsEnvelope builders (reuse as-is)
+│   ├── upgrade_profile.rs   # Signer allowlist for remote upgrade
 │   └── <device>/
 │       ├── mod.rs
 │       ├── api_client.rs    # Device-specific API client
@@ -56,18 +51,20 @@ bilbycast-<device>-api-gateway/
 └── docs/
 ```
 
-### Reusable modules
+### What the SDK provides
 
-The `ws/` directory and `credentials.rs` are device-agnostic and can be copied directly:
+The manager-facing half is the `bilbycast-gateway-sdk` crate, a dependency in `Cargo.toml` rather than code to copy:
 
-| Module | Purpose |
+| SDK module | Purpose |
 |---|---|
-| `ws/client.rs` | Manager connection, auth (registration + reconnection), reconnect with exponential backoff, message loop, command dispatch |
-| `ws/tls.rs` | Three TLS modes: standard CA, self-signed (gated by `BILBYCAST_ALLOW_INSECURE=1`), cert pinning (SHA-256) |
-| `ws/message.rs` | `WsEnvelope` builders for `stats`, `health`, `event`, `command_ack` messages |
-| `credentials.rs` | `node_id` + `node_secret` persistence with `0600` permissions |
+| `ws_client.rs` | `GatewayClient`: manager connection, reconnect with exponential backoff and URL rotation, message loop |
+| `auth.rs` | Registration and reconnect auth, and `CredentialStore`, which keeps `node_id` + `node_secret` in a `0600` file |
+| `tls.rs` | Three TLS modes: standard CA, self-signed (gated by `BILBYCAST_ALLOW_INSECURE=1`), cert pinning (SHA-256) |
+| `dispatch.rs` | The `CommandHandler` trait; its result is packed into a `command_ack` |
+| `emit.rs` | `Emitter`: sends `stats`, `health`, `event` and `command_ack` messages |
+| `upgrade/` | Sigstore-verified remote upgrade, given your `UpgradeProfile` |
 
-When a second gateway exists, these should be extracted into a shared crate (`bilbycast-gateway-common`).
+See [Building a Gateway Sidecar](/appear-x-gateway/writing-a-gateway/) for its API.
 
 ### Device-specific modules
 
@@ -220,8 +217,7 @@ The manager-side `AppearXDriver` lives in the `device-appear-x` plugin crate (`c
 
 ## Suggested next steps
 
-When you have your second gateway working:
+Once your gateway works:
 
-- Extract `ws/`, `credentials.rs`, and any other device-agnostic helpers into a shared `bilbycast-gateway-common` crate.
 - Open a PR adding your gateway to the bilbycast manager's documented device list so operators can find it.
 - Consider contributing the manager-side driver upstream so future managers ship with built-in support for your device.

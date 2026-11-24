@@ -232,7 +232,7 @@ Three RTSP events carry a structured `details.error_code`. Each is raised once p
 |---|---|---|---|
 | critical | `rtsps_unsupported` | The input started with an `rtsps://` URL; the RTSP client speaks no TLS. It does not retry until its configuration changes or the flow restarts. | `{ error_code, url }` |
 | critical | `rtsp_url_unparseable` | The same, for a URL the URL parser cannot read. Only a whole config can hold either: an edit naming the input is refused, and the config that brought it raises the `config` Warning of the same code. | `{ error_code, url }` |
-| warning | `rtsp_userinfo_misread` | `rtsp_url` has a `:` before its last `@` and the parser reads no username or password there: `rtsp://admin:1234#5@cam/live` is read as host `admin`, port 1234. The input connects to what the parser reads, without credentials from the URL. If that text holds a password, percent-encode its `#`, `/`, `?` or `@`, or use `username` and `password`. | `{ error_code, url }` |
+| warning | `rtsp_userinfo_misread` | `rtsp_url` has a `:` between its `://` and its last `@`, and the parser reads no username or password there: `rtsp://admin:1234#5@cam/live` is read as host `admin`, port 1234. The input connects to what the parser reads, without credentials from the URL. If that text holds a password, percent-encode its `#`, `/`, `?` or `@`, or use `username` and `password`. | `{ error_code, url }` |
 
 **Source**: `src/engine/input_rtsp.rs`
 
@@ -399,7 +399,7 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | critical | Tunnel '{name}' failed: {error} | Tunnel task exited with fatal error |
 | critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed |
 
-Three tunnel events carry a structured `details.error_code`:
+These tunnel events carry a structured `details.error_code`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
@@ -413,7 +413,7 @@ Three tunnel events carry a structured `details.error_code`:
 
 ### Manager Connection (`manager`)
 
-A connection attempt or a session that ends in an error raises one **Manager connection lost** Warning: one message per kind of loss, with `details` `{ error_code, reason, url }` (`url` without userinfo, query or fragment). A clean end of an authenticated session raises nothing. Either way the edge dials the next URL 5 s later. Up to and including v0.115.0 every kind read "Manager connection lost, rotating to next URL".
+A connection attempt that fails, or a session that is lost, raises one **Manager connection lost** Warning: one message per kind of loss, with `details` `{ error_code, reason, url }` (`url` without userinfo, query or fragment). An authenticated session that ends in a close, or in a write that fails under the connection, raises nothing. Either way the edge dials the next URL 5 s later. Up to and including v0.115.0 every kind read "Manager connection lost, rotating to next URL".
 
 | Severity | Message | Trigger | `details.error_code` |
 |----------|---------|---------|---|
@@ -443,7 +443,7 @@ A connection attempt or a session that ends in an error raises one **Manager con
 | info | Configuration updated | Config applied via manager command |
 | warning | Failed to persist configuration: {error} | Config write to disk failed after update |
 
-Eight codes in this category carry a structured `details` payload:
+These codes in this category carry a structured `details` payload:
 
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|

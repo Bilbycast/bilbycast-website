@@ -128,17 +128,52 @@ Resist the urge to make per-slot / per-board layout a config section. The Appear
 
 ## Step 2 — Create the manager driver
 
-### Driver file
+A driver is a plugin crate of its own under `bilbycast-manager/crates/`, beside `device-edge`, `device-relay` and `device-appear-x`. This step is the short version; [Adding a Device Type](/manager/adding-a-device-type/) is the full one, with the trait method by method and the optional browser-side plugin.
 
-Create `bilbycast-manager/crates/manager-core/src/drivers/<device>.rs`:
+### Driver crate
+
+```text
+crates/device-<device>/
+├── Cargo.toml
+└── src/
+    └── lib.rs          # the DeviceDriver impl
+```
+
+```toml
+[package]
+name = "device-<device>"
+version.workspace = true
+edition.workspace = true
+license-file = "../../LICENSE"
+description = "My Device driver plugin for bilbycast-manager"
+
+[lints]
+workspace = true
+
+[dependencies]
+manager-core = { workspace = true }
+serde_json = { workspace = true }
+```
+
+In the workspace's root `Cargo.toml`, add `"crates/device-<device>"` to `members` and `device-<device> = { path = "crates/device-<device>" }` under `[workspace.dependencies]`.
+
+`src/lib.rs` implements `DeviceDriver`, the trait in `crates/manager-core/src/drivers/mod.rs`. All of the methods below but `ai_actions()` are required. `crates/device-appear-x/src/lib.rs` is the shipped example of a gateway-fronted device.
 
 ```rust
-use super::{
+use manager_core::drivers::{
     ActionCategory, ActionUiHints, AiActionDescriptor, AiDeviceContext,
     CommandDescriptor, DeviceDriver, DeviceMetricsSummary,
 };
 
 pub struct MyDeviceDriver;
+
+impl MyDeviceDriver {
+    pub fn new() -> Self { Self }
+}
+
+impl Default for MyDeviceDriver {
+    fn default() -> Self { Self::new() }
+}
 
 impl DeviceDriver for MyDeviceDriver {
     fn device_type(&self) -> &str { "<device>" }
@@ -179,15 +214,13 @@ Write each descriptor's `ai_prompt_example` as the params of that device-command
 
 ### Register the driver
 
-Add to `bilbycast-manager/crates/manager-server/src/main.rs`:
+Add `device-<device> = { workspace = true }` to `crates/manager-server/Cargo.toml`, and one line to `production_driver_registry()` in `crates/manager-server/src/lib.rs` (the crate's name with underscores):
 
 ```rust
-driver_registry.register(Arc::new(
-    manager_core::drivers::<device>::MyDeviceDriver::new()
-));
+registry.register(std::sync::Arc::new(device_<device>::MyDeviceDriver::new()));
 ```
 
-And add `pub mod <device>;` to `manager-core/src/drivers/mod.rs`.
+Add the device type to `EXPECTED_DEVICE_TYPES` in `crates/manager-server/tests/driver_contract.rs` too: that suite runs every registered driver against the trait and fails when the two lists differ.
 
 ## Step 3 — Test end-to-end
 

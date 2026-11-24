@@ -189,7 +189,7 @@ Two SRT events carry a structured `details.error_code`:
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
 | critical | `srt_output_peer_unreachable` | Caller mode: consecutive connect failures crossed the threshold (then every 20th attempt, ~10 min apart, so a long outage leaves a trail without flooding the feed). The output keeps retrying. On a SMPTE 2022-7 output each caller (or rendezvous) leg raises its own — message `SRT output '{id}' 2022-7 leg {n} cannot reach its peer — {n} consecutive connection attempts failed, still retrying`, counted afresh on every acquisition of the leg — a **Warning** while the other leg is attached and Critical otherwise; leg 1's count drives the output's `connect_failed` state only while leg 2 is not attached. Up to and including v0.116.0 a 2022-7 output's legs raised none, and the single-leg message carried a run of 26 spaces after its dash: update a Routine or saved filter that matched the old text exactly. | `{ error_code, output_id, remote_addr, attempts, error }`; on a 2022-7 leg also `leg`, `mode`, `other_leg` (`carrying` / `down`) |
-| critical | `srt_strict_binding_unsupported` | `interface_binding.strict: true` was requested on an SRT **or RIST** surface (input, output, or a bonding endpoint) — a Phase 1 limitation. Start is aborted. Use `strict: false` (loose source-IP binding), or pin the interface via a UDP-based protocol. The offending surface is named in the message text, not in the details — the payload carries nothing but the code. | `{ error_code }` |
+| critical | `srt_strict_binding_unsupported` | `interface_binding.strict: true` was requested on an SRT **or RIST** surface (input, output, or a bonding endpoint; on a RIST one the event's category is `rist`) — a Phase 1 limitation. Start is aborted. Use `strict: false` (loose source-IP binding), or pin the interface via a UDP-based protocol. The offending surface is named in the message text, not in the details — the payload carries nothing but the code. | `{ error_code }` |
 
 #### SRT socket-group bonding members
 
@@ -319,9 +319,10 @@ CMAF and low-latency CMAF output lifecycle plus manifest / segment upload failur
 | Severity | Message | Trigger |
 |----------|---------|---------|
 | info | RTP input listening on {addr} | UDP socket successfully bound |
-| critical | RTP input bind failed: {error} | Bind failed (port in use, permission denied) |
 
-For redundant RTP inputs, each leg emits its own bind event with a `leg` field in details.
+On a SMPTE 2022-7 input each leg raises its own event, `RTP input leg {n} listening on {addr}`, with `leg` in its details.
+
+A failed bind is not on this category: it raises `port_conflict` or `bind_failed`, with `component` `RTP input`, `RTP input leg 1` or `RTP input leg 2` (see [Bind / Port Conflict](#bind--port-conflict)).
 
 **Source**: `src/engine/input_rtp.rs`
 
@@ -332,7 +333,8 @@ For redundant RTP inputs, each leg emits its own bind event with a `leg` field i
 | Severity | Message | Trigger |
 |----------|---------|---------|
 | info | UDP input listening on {addr} | UDP socket successfully bound |
-| critical | UDP input bind failed: {error} | Bind failed (port in use, permission denied) |
+
+A failed bind raises `port_conflict` or `bind_failed`, with `component` `UDP input` (see [Bind / Port Conflict](#bind--port-conflict)).
 
 **Source**: `src/engine/input_udp.rs`
 
@@ -416,14 +418,14 @@ In-process video transcoding lifecycle for TS outputs (SRT, RIST, RTP, UDP) and 
 |----------|---------|---------|---------|
 | info | Video encoder started: output '{id}' | `TsVideoReplacer` created successfully | `{ codec }` |
 | critical | Video encoder failed: output '{id}': {error} | `TsVideoReplacer` construction rejected (missing feature, unsupported codec) | `{ error }` |
-| warning | Output/Input '{id}': the video transcoder is consuming input but producing no decoded frames | Decode-stall watchdog: ≥ 200 input frames consumed with zero decoded output (e.g. a HW decode backend that opened but fails every frame). One-shot, re-armed on recovery | `{ error_code: "video_transcode_decode_stalled", input_frames, output_frames, decode_errors, source_stream_type }` |
 | warning | Output/Input '{id}': video_encode.scan=interlaced cannot be honoured — {reason}; encoding progressive | An explicit `video_encode.scan: "interlaced"` is coding progressive: no backend in the chain opened for field coding, or the source's decoder hands out single fields (HEVC field_seq). Once per encoder open, also on RTMP and CMAF outputs | `{ error_code: "video_encode_interlace_unavailable", reason, source_stream_type }` |
 | warning | Output/Input '{id}': video_encode frame rate mismatch ({cause}): … | The TS transcoder measures the source's frame rate more than 0.1 % off the one its encoder runs at. Pictures keep the source clock, but the bitrate is off its setting by the ratio. Once per source. `cause` is `pinned`, `input_switch`, `fallback` or `cadence_change` | `{ error_code: "video_encode_fps_mismatch", cause, source_fps_num, source_fps_den, encoder_fps_num, encoder_fps_den }`, with `pinned_fps_num` and `pinned_fps_den` when the rate is pinned |
 
-These, and `video_transcode_decode_stalled` above, file under category **`flow`**, not `video_encode`:
+These file under category **`flow`**, not `video_encode`:
 
 | Severity | `details.error_code` | Trigger | Details payload |
 |---|---|---|---|
+| warning | `video_transcode_decode_stalled` | Decode-stall watchdog: the transcoder has consumed ≥ 200 input frames with no decoded output (e.g. a HW decode backend that opened but fails every frame), so what it feeds carries audio only. One-shot, re-armed on recovery. Input- or output-scoped. | `{ error_code, input_frames, output_frames, decode_errors, source_stream_type }` |
 | warning | `video_transcode_source_not_found` | The same as `audio_transcode_source_not_found`, for `video_encode`. | `{ error_code, reason, pmt_pid, program_number, first_table_id, es, pinned_pid, waited_ms }` |
 | info | `video_transcode_source_found` | The transcoder found a video track to re-encode after that Warning. | `{ error_code, source_pid, source_stream_type, pmt_pid, program_number }` |
 | warning | `video_source_pid_not_found` | `video_encode.source_video_pid` names a PID that is not in the PMT, or not video the TS transcoder decodes, so it re-encodes the first it does. Once per distinct (pinned, actual) pair, re-armed when the pin reappears. Input- or output-scoped. | `{ error_code, pinned_pid, actual_pid, actual_stream_type }` |
@@ -525,7 +527,7 @@ These codes in this category carry a structured `details` payload:
 
 ### PID Bus / Flow Assembly (`flow`)
 
-Events generated while bringing up, running or hot-swapping an assembled flow (`assembly.kind = spts | mpts`). All carry a structured `details` payload (`error_code`, `input_id`, `input_type`, `program_number`, …). **Severity is not uniform**: the bring-up and validation codes in the first table are **Critical** and the same `error_code` rides on the corresponding `command_ack.error_code` — so the manager UI can highlight the offending field on Create/Update modals without parsing the error string. The runtime slot-health codes in the second table are Warning, and `pid_bus_slot_recovered` is Info. See [Flow Assembly (PID Bus)](/edge/flow-assembly/).
+Events generated while bringing up, running or hot-swapping an assembled flow (`assembly.kind = spts | mpts`). All carry a structured `details` payload (`error_code`, `input_id`, `input_type`, `program_number`, …). **Severity is not uniform**: the bring-up and validation codes in the first table are **Critical**. An `update_flow_assembly` that fails with one answers with the same code on `command_ack.error_code`; a `create_flow`, `update_flow`, `start_flow` or `restart_flow` answers with the error text and no code. The runtime slot-health codes in the second table are Warning, and `pid_bus_slot_recovered` is Info. See [Flow Assembly (PID Bus)](/edge/flow-assembly/).
 
 | Error code | Trigger | Details payload | Remediation |
 |---|---|---|---|
@@ -541,7 +543,7 @@ Events generated while bringing up, running or hot-swapping an assembled flow (`
 | `pid_bus_mpts_pcr_source_required` | MPTS program has no effective PCR (neither program-level `pcr_source` nor flow-level fallback). | `{ program_number }` | Config validation also catches this — runtime check is a belt-and-braces guard. |
 | `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
 
-Codes that reach the event feed rather than only a Create/Update modal. The first six fire on a **running** assembled flow, with no command in flight; the last three fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up), where they additionally fail the command:
+Of the codes below, the first six fire on a **running** assembled flow, with no command in flight; the last three fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up), where they additionally fail the command:
 
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|
@@ -555,7 +557,7 @@ Codes that reach the event feed rather than only a Create/Update modal. The firs
 | `pid_bus_pcr_source_change_requires_restart` | critical | A hot `UpdateFlowAssembly` moved the PCR source; the change cannot be applied in place. | `{ error_code, … }` |
 | `pid_bus_assembler_unresponsive` | warning | The flow's assembler stalled for 3 s during a plan swap. `awaiting: "queue"`: it took no command, the swap is refused with this code and the flow runs its old plan. `awaiting: "applied"`: it holds the new plan and puts it on air when it resumes, so the plan stands and is saved, and the command fails with `pid_bus_assembly_unconfirmed`. | `{ error_code, awaiting, timeout_ms }` |
 
-Two further `pid_bus_*` values are `command_ack.error_code` refusals rather than events: `pid_bus_input_in_use` (a `remove_input` naming an input the running assembly plan still references — unbind the slot first) and `pid_bus_activate_input_no_switch_slots` (an `activate_input` on an assembled flow where no Switch slot carries a leg for that input, so the Take would not move the media — re-point the program via the Node Bus Swap instead). The Switch-slot authoring rules (`pid_bus_switch_empty_legs`, `_too_many_legs`, `_duplicate_leg`, `_initial_leg_unknown`, `_legs_kind_mismatch`) are config-validation rejections and appear inside the validation error message, not as a `details.error_code`.
+Three further `pid_bus_*` values are `command_ack.error_code` refusals rather than events: `pid_bus_assembly_swap_superseded` (an `update_flow_assembly` whose flow was restarted or stopped while the swap ran; nothing is saved), `pid_bus_input_in_use` (a `remove_input` naming an input the running assembly plan still references — unbind the slot first) and `pid_bus_activate_input_no_switch_slots` (an `activate_input` on an assembled flow where no Switch slot carries a leg for that input, so the Take would not move the media — re-point the program via the Node Bus Swap instead). The Switch-slot authoring rules (`pid_bus_switch_empty_legs`, `_too_many_legs`, `_duplicate_leg`, `_initial_leg_unknown`, `_legs_kind_mismatch`) are config-validation rejections and appear inside the validation error message, not as a `details.error_code`.
 
 #### PES splice (`flow`)
 
@@ -825,7 +827,7 @@ Tiers are recommended for monitor-only deployments — a flow with `output_ids: 
 
 ### Bind / Port Conflict
 
-Every runtime bind site on the edge emits a Critical event under either `port_conflict` (EADDRINUSE) or `bind_failed` (any other bind error) with a structured `details = { error_code, component, addr, protocol, error }`. The same `error_code` rides on `command_ack.error_code`, so the manager UI highlights the offending field on Create / Update modals without parsing the error string.
+Every runtime bind site on the edge emits a Critical event under either `port_conflict` (EADDRINUSE) or `bind_failed` (any other bind error) with a structured `details = { error_code, component, addr, protocol, error }`. A `create_flow`, an `update_flow` that starts or restarts the flow, and an `add_input` wait 600 ms for one and answer with the same `command_ack.error_code`, so the manager UI highlights the offending field on Create / Update modals without parsing the error string. A bind that fails later, or under another command (`start_flow`, say), is the event alone.
 
 | Event | Severity | Trigger |
 |---|---|---|
@@ -857,7 +859,7 @@ These do carry `details.error_code`:
 |---|---|---|---|
 | warning | `hw_encoder_oversubscribed` | Starting a flow pushed a hardware **encoder** family past the session count probed at startup. Soft — **the flow still starts**. | `{ error_code, family, role: "encoder", in_use, max_sessions, flow_id }` |
 | warning | `hw_decoder_oversubscribed` | The same, for a hardware **decoder** family (a HW-decoded display output). Soft — the flow still starts. | `{ error_code, family, role: "decoder", in_use, max_sessions, flow_id }` |
-| warning | `input_resource_critical` | A hot `add_input` was blocked because resources are critical and `critical_action: "gate_flows"` is set. | `{ error_code, flow_id, input_id }` |
+| warning | `input_resource_critical` | Refused because resources are critical and `critical_action: "gate_flows"` is set: a hot add of an input to a running flow, or an `update_input` (or `PUT /api/v1/inputs/{input_id}`) of an input whose flow is running. That edit restarts the flow, which the gate would refuse, so the flow is left alone and the edit is not saved. The ack of the `add_input` or `update_input` carries the same code. | `{ error_code, flow_id, input_id }` |
 
 The display path's two DRM PRIME export failures (`display_vaapi_prime_export_failed`, `display_rkmpp_prime_export_failed`) also file under `system_resources` — see the Display section above.
 
@@ -918,7 +920,7 @@ In addition to events sent by the edge, the manager itself generates events unde
 | warning | media_library | `media_deleted_in_use` | An operator deleted a media file that still has `media_player` inputs referencing it |
 | info | media_library | `media_upload_aborted` | An upload was cancelled mid-stream after at least 50 % had transferred |
 | critical | replay | `recording_stalled` | An armed flow's `FlowStats.recording.bytes_written` has not advanced for ≥ 10 s. Latched per (node, flow), so it fires once per stall episode; details carry `stall_threshold_secs`, `bytes_written`, `last_write_age_ms`, `recording_id` |
-| warning | event_rate_limit | `event_rate_limit_exceeded` | An edge tripped the per-node event-rate limit and the manager started shedding events |
+| warning | event_rate_limit_exceeded | Node is emitting more than 1000 events/minute; excess events dropped for the remainder of the window | An edge tripped the per-node event-rate limit and the manager started shedding events |
 
 These are generated server-side in `bilbycast-manager/crates/manager-server/src/ws/node_hub.rs` and the matching reconciliation / routine / media-library modules.
 
@@ -938,8 +940,8 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `rtsp` | RTSP input state, and URLs it cannot play or may misread |
 | `hls` | HLS output failures |
 | `cmaf` | CMAF / CMAF-LL output lifecycle and manifest / segment upload failures, `codec_needs_encode`, `audio_codec_unpublishable`, `aac_channel_layout_missing` and `aac_config_changed`, and clip-export failures |
-| `rtp` | RTP input bind and lifecycle |
-| `udp` | UDP input bind and lifecycle |
+| `rtp` | RTP input listening (a failed bind is `port_conflict` / `bind_failed`) |
+| `udp` | UDP input listening (a failed bind is `port_conflict` / `bind_failed`) |
 | `rist` | RIST Simple Profile input/output connection lifecycle |
 | `webrtc` | WHIP/WHEP session lifecycle, `whep_answer_unusable`, `webrtc_setup_timeout`, `webrtc_negotiation_panic`, `webrtc_no_h264`, `codec_needs_encode`, `opus_layout_unsupported`, `audio_codec_unpublishable` and `aac_channel_layout_missing` |
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
@@ -974,7 +976,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 |----------|------------------|----------|
 | `ptp` | info / warning / critical | Lock-state transitions carry **no `error_code`** — read `details.lock_state` (`unavailable` / `acquiring` / `locked` / `holdover` / `master` / `unknown`); severity is derived from the transition, so Locked → Unavailable is Critical while a first-time Unavailable is Info. The threshold codes are `ptp_offset_high` / `ptp_offset_recovered` and `ptp_path_delay_high` / `ptp_path_delay_recovered` (Warning on entry, Info on clear, 80 % hysteresis), plus node-scoped `ptp_grandmaster_changed` (Info) |
 | `network_leg` | info / warning | No `error_code`; four messages only — "Red leg up (first packet received)" / "Blue leg up (first packet received)" (Info) and "2022-7 active leg switched to Red" / "…to Blue" (Warning). Details `{ leg, dual_leg }` |
-| `nmos` | info / warning | NMOS controller IS-05 activations and IS-08 channel-map changes. A refused IS-05 activation carries `details.error_code = "invalid_transport_params"` (Warning) with `{ subsystem: "is-05", action, resource_id, entity_id, error }` |
+| `nmos` | info / warning / critical | NMOS controller IS-05 activations and IS-08 channel-map changes. Critical is an activation the running flow could not take (`details.action` `sender_activation_failed` or `receiver_activation_failed`), answered HTTP 500. A refused IS-05 activation carries `details.error_code = "invalid_transport_params"` (Warning) with `{ subsystem: "is-05", action, resource_id, entity_id, error }` |
 | `scte104` | info / warning | Cue-out / cue-in / cancel splice messages parsed from ANC (a `splice_cancel` is Warning, the rest Info). Details carry `opcode`, `op_id`, `splice_event_id`, `pre_roll_ms`, `protocol_version`, `did`, `sdid` |
 
 **Source**: `src/engine/st2110/ptp.rs` (`ptp`), `src/engine/st2110/redblue.rs` (`network_leg`), `src/api/nmos_is05.rs` + `src/api/nmos_is08.rs` (`nmos`), `src/engine/st2110_io.rs` (`scte104`).

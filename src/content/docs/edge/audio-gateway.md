@@ -451,10 +451,10 @@ the `srt`, `udp`, and `rtp_audio` 302M output modes).
 via FFI. Supports AAC-LC, HE-AAC v1 (SBR), HE-AAC v2 (PS), AAC-LD,
 AAC-ELD, and multichannel up to 7.1. **Fallback (the opt-in
 `aac-symphonia` feature, built in place of `fdk-aac`):**
-`symphonia-codec-aac` — AAC-LC mono/stereo only; HE-AAC and
-multichannel are rejected with an `audio_decode` Critical event. A
-build needs one of the two: with neither, it stops with a
-`compile_error!`. With both on, FDK AAC decodes.
+`symphonia-codec-aac` — AAC-LC mono/stereo only; another profile in the
+ADTS header, and multichannel, are refused with an error line in the
+edge's log and no event. A build needs one of the two: with neither, it
+stops with a `compile_error!`. With both on, FDK AAC decodes.
 
 No ffmpeg is required for this path. The decoder is part of the
 bilbycast-edge binary itself.
@@ -879,8 +879,8 @@ cases in this guide that are marked READY.
    Only on a build with the opt-in `aac-symphonia` feature in place
    of `fdk-aac` does the `symphonia-codec-aac` fallback restrict the
    input to **AAC-LC mono / stereo** — under
-   that fallback, HE-AAC v1/v2 and multichannel AAC are rejected with
-   an `audio_decode` Critical event.
+   that fallback, another profile in the ADTS header and multichannel
+   AAC are refused with an error line in the edge's log and no event.
 
 5. **L20 wire format.** L20 is accepted by the validator and the
    transcoder; it's serialized on the wire as L24 with the bottom 4

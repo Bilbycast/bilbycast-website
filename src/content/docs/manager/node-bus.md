@@ -20,7 +20,7 @@ The Node Bus Matrix flips this around:
 - Every input's program on the node shows up in the left pane as a tile, with clock identity, codecs, and live PSI staleness.
 - Every output that runs an assembled flow shows up as a row in the matrix, with one cell per program.
 - Wire a source onto a destination by clicking (or dragging) — Lawo-style orange marks pending changes; blue marks committed state.
-- Master-clock identity preflight refuses cross-PTP-domain / cross-PCR-PLL combinations *before* the WS round-trip, so an operator can't accidentally commit a mix that the edge would reject.
+- A clock check refuses a program that would play inputs on different clocks at the same time *before* it reaches the edge, naming the slots, so an operator can't accidentally commit a mix the edge would reject. Switching a whole program between two encoders is not such a mix: see [Clocks](#clocks).
 - A single Apply (N) commits every pending route atomically per flow.
 
 This is the operator workflow for **PES Switch** — see [Flow Assembly (PID Bus)](/edge/flow-assembly/#splice-strategy--splice_mode) for the splice strategies the matrix wires together.
@@ -40,7 +40,7 @@ codec pills                pending = orange, server = blue   appropriate form
 
 Every program currently visible across the node's TS-bearing inputs. Each tile carries:
 
-- **Master-clock chip** — `[ptp:N]`, `[pcr]`, or `[wall]` — so the operator sees at a glance which sources are co-clocked.
+- **Master-clock chip** — `[ptp]`, `[pcr]`, or `[wallclock]` — so the operator sees at a glance which sources are co-clocked.
 - **Per-stream pills** — codec + PID, colour-coded by kind (video / audio / subtitle / data).
 - **Staleness fade** — after 60 s without a PSI catalogue refresh, the tile dims so a stale source can't accidentally be wired live.
 
@@ -59,7 +59,7 @@ Authoring affordances inside the matrix:
 
 - **`+ Add program`** button at the bottom of every assembled-output row. Auto-picks the next free `program_number` and PMT PID; PCR source defaults to `auto`; `streams` starts empty.
 - **`+ Add slot`** button inside each program block. Auto-picks the next free `out_pid` and defaults `stream_type` to H.264.
-- **`+ Convert to assembled`** button on passthrough rows. Confirms, then POSTs a minimal SPTS shell via the full `update_flow` path (passthrough ↔ assembled can't be hot-swapped, so the flow restarts; the matrix surfaces this in the confirmation modal).
+- **`+ Convert to assembled`** button on passthrough rows. Builds the program(s) from the active input's PSI: Switch slots across the flow's inputs that carry each of the program's streams (kind and codec, in the program of the same number), pinned slots otherwise (see [Clocks](#clocks)). Confirms first, naming the inputs the program will switch between and what the others lack, then PUTs the whole flow via the full `update_flow` path (passthrough ↔ assembled can't be hot-swapped, so the flow restarts; the confirmation says so).
 - **`↩ Convert to passthrough`** button on assembled rows — the reverse. Confirms, then PUTs the *whole* flow with its `assembly` block deleted down the same full `update_flow` path: the synthesised PAT/PMT and every program / slot definition is discarded and the flow forwards its active input's bytes unchanged, so it restarts too. Any pending (unapplied) assembly staged for that flow is dropped on success, so a later Apply can't silently revert the conversion.
 
 ### Inspector pane
@@ -67,13 +67,27 @@ Authoring affordances inside the matrix:
 Context-sensitive form for the most-recently-clicked source / cell / program:
 
 - **Clicked source** — full PSI breakdown (PMT PID, PCR PID, per-stream `stream_type` + label).
-- **Clicked cell (slot)** — `splice_mode` dropdown (`pmt_bump` / `pes_aligned`) and `splice_budget_ms` for `SlotSource::Switch` slots. Stages into pending state via the same `Apply (N)` button as wiring.
-- **Clicked program** — editable `pmt_pid` and `pcr_source`.
+- **Clicked cell (slot)** — **Rewire source** (the exact program and PID) and **Switching**: legs on several of the flow's inputs, the initial leg, `splice_mode` (`pmt_bump` / `pes_aligned`) and `splice_budget_ms`. **Make switchable** stages this slot. On an edge after v0.117.0 each leg shows its PID (and the program it is of, where that is not plain), and **Make whole program switchable** stages every slot of the program on the ticked inputs, or says which input has no stream for which slot. While a plan is staged, the pane lists the slots a Take would leave behind on another clock and what applying it cuts, or can cut, to another input, and the matrix outlines those slots in red. Everything stages into pending state for the same `Apply (N)` button as wiring.
+- **Clicked program** — editable `pmt_pid` and `pcr_source` (a slot with one PID, or a Switch slot).
 - **Live lipsync trim** — hits `POST /api/v1/nodes/<id>/flows/<id>/master-clock/lipsync` immediately (live action, no pending stage), ±200 ms.
+
+## Clocks
+
+Inputs that play together in one program must run on one clock: one PTP domain (ST 2110, MXL), WebRTC / WHEP inputs, or one input, since every other input has the clock of its own source. The programs of an MPTS are independent of each other.
+
+An edge after v0.117.0 judges only what can play **at the same time**. The legs of a Switch slot are alternatives, so a program can switch between two encoders as long as all of it follows every Take: give every slot of the program legs on the same inputs and one initial leg. A program a Take would split, with a pinned slot, a Hitless slot or a Switch slot without that leg staying behind on another clock, is refused with `pid_bus_master_clock_mismatch`, by the manager before it is sent and by the edge. An edge up to v0.117.0 refuses a program whose slots name inputs on different clocks, the legs of a Switch slot included: the manager says so, and the Inspector offers legs on the slot's own clock only. The rest of this section is about an edge after v0.117.0.
+
+A Take between clocks is a cut, and holds the program for the new input's first PCR on the leg of the slot that carries the program's PCR. The Inspector proposes the PID each input sends its PCR on for that slot, and warns where an input sends it elsewhere (a PID of its own, or its audio): a Take to that input keeps the program off air until a Take to one that sends it there, with Warning `pid_bus_take_no_pcr`.
+
+The legs of one slot must be of one codec: the slot goes out under its own `stream_type` whichever leg is on air, so a Take from an H.264 leg to an HEVC one goes out mis-signalled. Converting a flow and **Make whole program switchable** leave such an input out; the Inspector warns of a leg of another codec, and of one stream going out on two slots.
+
+A slot that becomes a Switch slot starts on the input the other Switch slots of its program are on, where it has a leg on it. In a program that had none it starts on the input the flow was started on where it has a leg on it, and on its initial leg where not. No Take moves that input (one on a pinned program re-points the program), so making a program switchable can cut it back to it. The manager knows only the flow's active input, which is the same unless a Take has changed it since: the Inspector says before Apply what would be cut to the active input, or, where another program of the flow switches already, that the program can be cut.
+
+An input with one program is offered for every program of the flow: an MPTS put together from single-program encoders, each sending program 1, switches any of its programs between them, and the row says which program it is (`P1`) where the number is another. An input with several is offered for the program of its number, and for another once a slot of that program is wired to the one wanted (**Rewire source**). Converting a flow to an MPTS pairs programs by number only.
 
 ## Pending state and Apply
 
-`pendingAssemblies: Map<flow_id, FlowAssembly>` holds local edits. The toolbar shows `Apply (N)` / `Discard` whenever there is any pending route. Apply iterates each pending flow and PUTs `/api/v1/nodes/<id>/flows/<id>/assembly`; success clears the pending entry, failure surfaces inline in a toast carrying the `pid_bus_*` error code from the edge.
+`pendingAssemblies: Map<flow_id, FlowAssembly>` holds local edits. The toolbar shows `Apply (N)` / `Discard` whenever there is any pending route. Apply iterates each pending flow and PUTs `/api/v1/nodes/<id>/flows/<id>/assembly`; success clears the pending entry, failure surfaces in a toast carrying the `pid_bus_*` error code and what to do about it, and the slots a clock refusal names are outlined in the matrix until the message that names them (the toast, or the Raw JSON modal) is closed or the plan is edited again.
 
 Per-flow atomicity is the contract: every slot in a flow either lands together or none of them do. Cross-flow Apply is multi-PUT — one flow can fail while sibling flows succeed; per-flow results land in the toast.
 
@@ -104,7 +118,7 @@ Permissions are enforced server-side; the matrix UI surfaces a permission-denied
 
 ## Composes with PES Switch
 
-The matrix is the authoring surface; **PES Switch** is the on-the-wire splice strategy. Every Switch slot wired through the matrix accepts `splice_mode = pes_aligned` (audio waits for the next PES AU boundary; video waits for the next IDR; AAC ADTS / LATM and H.264 / HEVC SPS sentinels refuse on parameter mismatch and fall back to PmtBump with a structured Warning). Per-switch `splice_mode_override` on a Switcher preset action overrides each slot's config-time mode for a single Take. See [Flow Assembly — Splice strategy](/edge/flow-assembly/#splice-strategy--splice_mode).
+The matrix is the authoring surface; **PES Switch** is the on-the-wire splice strategy. Every Switch slot wired through the matrix accepts `splice_mode = pes_aligned` (audio waits for the next PES AU boundary; video waits for the next IDR; AAC ADTS / LATM and H.264 / HEVC SPS sentinels refuse on parameter mismatch and fall back to PmtBump with a structured Warning). Between inputs on different clocks every Take is a PmtBump cut whatever the mode, since their timestamps cannot be compared: a `pes_aligned` slot raises Warning `pes_splice_degraded` with reason `independent_clocks`. Per-switch `splice_mode_override` on a Switcher preset action overrides each slot's config-time mode for a single Take. See [Flow Assembly — Splice strategy](/edge/flow-assembly/#splice-strategy--splice_mode).
 
 ## Related
 

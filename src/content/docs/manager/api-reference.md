@@ -93,7 +93,7 @@ The set of valid commands and their payload schemas is specific to each device d
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/api/v1/nodes/{id}/bus` | The node-wide elementary-stream bus — every program currently visible across every input, with its per-program ES detail. Built from the `psi_catalog` blocks the node publishes on its stats frames, so an edge that publishes none simply answers with an empty list |
-| PUT    | `/api/v1/nodes/{id}/bus/routes` | Bulk slot rerouting. Body `{routes: [{flow_id, program_number, out_pid, source, stream_type?}, …]}` — non-empty, at most 64 per request (`413` beyond that). Per-flow atomic; a multi-flow swap reports per-flow results rather than failing as a whole. Requires Operate on the node |
+| PUT    | `/api/v1/nodes/{id}/bus/routes` | Bulk slot rerouting. Body `{routes: [{flow_id, program_number, out_pid, source, stream_type?}, …]}` — non-empty, at most 64 per request (`413` beyond that). Per-flow atomic; a multi-flow swap reports per-flow results rather than failing as a whole (a flow refused for its clocks carries `details`). Requires Operate on the node |
 
 See [Node Bus Matrix](/manager/node-bus/).
 
@@ -115,7 +115,7 @@ Inputs and outputs are first-class entities; flows reference them by ID. Every m
 | DELETE | `/api/v1/nodes/{id}/flows/{flow_id}/inputs/{input_id}` | Remove an input from a running flow |
 | POST   | `/api/v1/nodes/{id}/flows/{flow_id}/activate-input` | Make one input the flow's active input |
 | POST   | `/api/v1/nodes/{id}/flows/{flow_id}/outputs/{output_id}/active` | Enable or disable a single output |
-| PUT    | `/api/v1/nodes/{id}/flows/{flow_id}/assembly` | Hot-swap the PID-bus assembly plan |
+| PUT    | `/api/v1/nodes/{id}/flows/{flow_id}/assembly` | Hot-swap the PID-bus assembly plan. A plan the edge would refuse for its clocks answers `422` with `error_code: "pid_bus_master_clock_mismatch"` and `details` naming the two slots (`slot_out_pid`, `reference_out_pid`), their inputs and clocks, and `take_input_id`, the input whose Take brings them together (`null`: the flow starts on them). For an edge up to v0.117.0 `details` names one slot, its input and the input it clashes with |
 | POST   | `/api/v1/nodes/{id}/flows/{flow_id}/master-clock/lipsync` | Apply the per-flow lip-sync trim |
 | POST   | `/api/v1/nodes/{id}/flows/{flow_id}/reset-counters` | Reset the flow's stats counters |
 | GET    | `/api/v1/nodes/{id}/flows/{flow_id}/thumbnail` | Latest flow thumbnail (`…/inputs/{input_id}/thumbnail` per input) |

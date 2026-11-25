@@ -407,7 +407,7 @@ IP tunnels create encrypted point-to-point links between edge nodes, either thro
 
 Both edges connect outbound to a bilbycast-relay server. The relay pairs them by tunnel UUID and forwards traffic. End-to-end encryption ensures the relay cannot read payloads.
 
-`relay_addrs` is an ordered list: index 0 is the primary, and an optional second entry is a backup. When the primary becomes unreachable, the edge automatically fails over to the backup; when the primary recovers, an RTT-gated probe fails back. See [Redundant Relay Failover](#redundant-relay-failover).
+`relay_addrs` is an ordered list: index 0 is the primary, and an optional second entry is a backup. When the primary becomes unreachable, the edge automatically fails over to the backup; when the primary recovers, for both edges, the tunnel goes back to it. See [Redundant Relay Failover](#redundant-relay-failover).
 
 ```json
 {
@@ -466,7 +466,7 @@ One edge has a public IP. Direct QUIC connection between edges — no relay need
 | `local_addr` | string | Yes | - | For **egress**: listen address for local traffic to tunnel (e.g. `"0.0.0.0:9000"`). For **ingress**: forward destination for received traffic (e.g. `"127.0.0.1:9000"`). |
 | `relay_addrs` | string[] | Relay mode | `[]` | Ordered list of relay server QUIC addresses (e.g. `["relay1:4433", "relay2:4433"]`). Index 0 is the primary; a second entry enables automatic primary↔backup failover. Max 2 entries. Required for relay mode. |
 | `relay_addr` | string | No | `null` | **Legacy.** Single relay address. Accepted on load for backward compatibility and migrated into `relay_addrs[0]`. Prefer `relay_addrs` in new configs. |
-| `max_rtt_failback_increase_ms` | integer | No | `50` | When the active backup is in use and the primary recovers, failback is refused if the primary's measured QUIC RTT exceeds the backup's by more than this many ms. Prevents flapping back to a degraded primary. |
+| `max_rtt_failback_increase_ms` | integer | No | `50` | A tunnel that is up on its backup does not fail back to a primary whose measured QUIC RTT exceeds the backup's by more than this many ms. Prevents flapping back to a degraded primary. It is asked of this edge only, and one edge that does not fail back keeps the other on the backup. A tunnel that waits on its backup goes to such a primary only if the peer is there and has not come to the backup 16 s later. A tunnel that starts takes its primary whatever the RTT. QUIC carrier only. Maximum 5000. |
 | `tunnel_encryption_key` | string | Relay mode | `null` | End-to-end ChaCha20-Poly1305 encryption key. Hex-encoded, exactly 64 chars (32 bytes). Required for relay mode. Both edges must share the same key. **Stored in `secrets.json`.** |
 | `tunnel_bind_secret` | string | No | `null` | HMAC-SHA256 bind authentication secret. Hex-encoded, exactly 64 chars. Proves authorization to bind on the relay. **Stored in `secrets.json`.** |
 | `peer_addr` | string | Direct egress | `null` | Remote peer QUIC address (e.g. `"203.0.113.50:4433"`). Required for direct mode, egress direction. |
@@ -488,21 +488,26 @@ One edge has a public IP. Direct QUIC connection between edges — no relay need
 
 ### Redundant Relay Failover
 
-When `relay_addrs` contains a second entry, the edge provides automatic primary↔backup failover:
+When `relay_addrs` contains a second entry, the edge provides automatic primary↔backup failover. On the QUIC carrier:
 
 - **Detection.** The QUIC transport uses a 5 s keep-alive interval and a 25 s max-idle timeout, so a dead relay is detected after ~25 s of silence. This window is sized to tolerate Starlink satellite handovers and mobile cell-handoffs without flapping.
 - **Failover.** Once the primary is detected down, the edge reconnects and walks to the next relay in `relay_addrs`. Each reconnect attempt is bounded to 6 s so a dead primary cannot stall the loop behind the transport timeout. Expected end-to-end failover budget is **~30–40 s** on WAN links (both edges detect independently; the slower side sets total latency).
-- **Waiting convergence.** If the two edges initially land on different relays, the first-to-bind sees `Waiting`; after 10 s it steps forward to the next relay so the pair converges on the same one. This is while the edge connects. One whose peer leaves a tunnel that was up waits for it on the relay it is on.
-- **Failback.** A background probe (every 60 s) measures the primary's QUIC RTT. When the primary's RTT is within `max_rtt_failback_increase_ms` (default 50 ms) of the currently-active backup, traffic fails back to the primary. This RTT gate prevents returning to a degraded primary that is reachable but slow.
-- **Event visibility.** Each failover emits a Warning event to the manager with `from_relay_addr`, `to_relay_addr`, `from_idx`, `to_idx` details.
+- **Waiting for the peer.** A tunnel whose peer is not on its relay stays bound there. After 10 s it binds the other relay too, on a second connection, and stays bound on both for as long as it waits. It goes to the one that says first that both sides are there, so two edges meet wherever both can. If one edge alone has lost its path to the primary, the other follows it to the backup, and the tunnel is out for ~36–41 s. A tunnel that waits on its backup, and finds the peer on a primary that the RTT gate refuses, leaves the primary again, so that the peer comes to the backup; it goes there only if the peer is still there 16 s later, or has died there and the relay has not noticed yet (25 s). While a tunnel waits it sends the relays keep-alives and pings, and raises nothing. Once a minute it also binds its side again on each relay, which a relay reports as an unbind and a bind; a relay where no peer holds the other side counts the tunnel's bytes and uptime from zero then.
+- **Failback.** A tunnel that has been up on its backup for 60 s binds its primary too, if the primary's RTT is within `max_rtt_failback_increase_ms` (default 50 ms) of the backup's, and waits there while the backup carries the traffic, binding again once a minute too. Once the primary has said for 1 s that both sides are there, both edges move. The tunnel stays up: the local sockets stay as they are, datagrams that are still on their way by the backup are taken for 2 s, and TCP connections that are open stay on the backup until they end. The first datagrams by the new connection come some tenths of a second late (0.5 s at 20 Mbit/s with an RTT of 100 ms between edge and relay). On longer or faster paths some are lost: about 500 each way at 40 Mbit/s with 100 ms, and 1600 at 20 Mbit/s with 300 ms. An edge that cannot reach the primary, or finds it too far, keeps the other on the backup. It tries again 60 s later. If both entries are addresses of one relay, a failback takes the tunnel out for 1 s.
+- **Two connections.** Such a tunnel has a connection on each of its relays. Size the relay's `max_connections_per_ip` (64) for all the QUIC tunnels that name it, as primary or backup, from one address.
+- **Event visibility.** Each failover emits a Warning event to the manager with `from_relay_addr`, `to_relay_addr`, `from_idx`, `to_idx` details, and each failback an Info event.
 
-Tunnel-level failover is not *hitless* — expect a ~30 s gap on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against relay-server failure. A tunnel with a single `relay_addrs` entry will simply reconnect to that same address until it returns.
+This is how edges after v0.117.0 behave, and both edges of a tunnel should be. An older edge fails back alone after 60 s on the backup, whether or not its peer can come: the tunnel is out for 10 to 11 s, every 71 s, for as long as they do not meet on the primary. It also does not learn that its peer has gone from the primary, so it does not follow it, and does not come to the backup from a primary that the other finds too far.
+
+Tunnel-level failover is not *hitless* — expect a gap of 30 s or more on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against the loss of a relay or of a path to one. A tunnel with a single `relay_addrs` entry has nowhere else to look: while it connects it lets go of the relay after 10 s without its peer, and binds it again after 1 s doubling to 60 s; once it has been up it waits there.
+
+A native-UDP tunnel (`transport: "udp"`), and a relayed bond leg, goes to the next relay when its own has not answered for 25 s. It does not follow its peer, and does not fail back.
 
 ### What the Relay Tells an Edge
 
 A QUIC relay tunnel that is up is told by the relay what becomes of it, and follows with no new connection (edges after v0.117.0, with any relay release):
 
-- **The peer left or is back.** The state goes to `waiting` and to `ready` again. The edge keeps its connection and its bind.
+- **The peer left or is back.** The state goes to `waiting` and to `ready` again. The edge keeps its connection and its bind. With two relays it looks for the peer on the other one as well ([above](#redundant-relay-failover)).
 - **This edge's side was removed** (the manager's `close_tunnel`, or a delete on the relay's REST API). The state goes to `down` and the edge binds again on the same connection: after 1 s, and later and later, up to 60 s, if it keeps being removed.
 - **A bind was refused.** The edge raises `Tunnel bind rejected by relay`, and tries again on the next relay in the list, after 1 s doubling to 60 s once each has refused. So a relay with `require_bind_auth` on can come up ahead of the manager's authorisations.
 

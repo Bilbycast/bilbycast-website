@@ -138,13 +138,13 @@ Each node can be tagged with a network type to help the Manager UI suggest tunne
 
 ## Redundant Relay Failover
 
-A relay-mode tunnel can carry a primary and a backup relay. When the primary becomes unreachable, each edge independently detects the loss and reconnects via the backup; when the primary recovers and its measured path quality is acceptable, traffic fails back automatically. Events are emitted on every failover and failback so the Manager UI can surface the active leg.
+A relay-mode tunnel can carry a primary and a backup relay. When the primary becomes unreachable for an edge, that edge reconnects via the backup, and on the QUIC carrier its peer follows it there. When the primary recovers for both edges and its measured path quality is acceptable, a QUIC tunnel goes back to it and stays up through that. Events are emitted on every failover and failback so the Manager UI can surface the active leg. (Edges after v0.117.0; an older edge fails back alone and does not follow its peer.)
 
-This is not a *hitless* switchover — there is a short gap on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against relay-server failure, not network-path jitter.
+This is not a *hitless* switchover — there is a short gap on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against the loss of a relay, or of an edge's path to one, not network-path jitter.
 
 Detection windows, failover budgets, and failback thresholds are tuned for mobile/Starlink links and are documented in full in the commercial operator guide.
 
-Single-relay tunnels (no backup) will simply reconnect to the same relay until it returns — there is no alternate path.
+Single-relay tunnels (no backup) have no alternate path: the edge keeps trying the same relay until it and the peer are there.
 
 ## Security
 

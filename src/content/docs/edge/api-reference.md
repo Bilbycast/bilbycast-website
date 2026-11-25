@@ -1458,7 +1458,7 @@ List all active IP tunnels.
 }
 ```
 
-`active_relay_idx` and `active_relay_addr` only appear for running relay-mode tunnels and reflect which relay is currently carrying traffic (0 = primary). When the primary is unreachable and failover occurs, these flip to `1` / the backup address.
+`active_relay_idx` and `active_relay_addr` only appear for running relay-mode tunnels and reflect which relay is currently carrying traffic (0 = primary). When the primary is unreachable and failover occurs, or the peer is found on the backup, these flip to `1` / the backup address. A tunnel that is not `ready` shows the relay it waits on or tries. What it has bound on its other relay meanwhile, or before a failback, does not show.
 
 ### GET /api/v1/tunnels/{id}
 

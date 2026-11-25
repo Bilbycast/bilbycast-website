@@ -84,7 +84,7 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
 |  |                               |  |     DashMap<String, Conn>  |       |
 |  |   bind() -> Active|Waiting    |  |                            |       |
 |  |   unbind() -> notify peer     |  |   No shared_secret.        |       |
-|  |   get_peer_connection()       |  |   Per-IP conn cap (64),    |       |
+|  |   route() -> peer or refused  |  |   Per-IP conn cap (64),    |       |
 |  |   remove_edge() -> cleanup    |  |   per-conn tunnel cap (100)|       |
 |  +-------------------------------+  +----------------------------+       |
 |                  |                                                        |
@@ -147,7 +147,8 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
                           <---------     TunnelWaiting
 
   3a. TCP: Open bi-stream ---------->
-      Send StreamHeader              Read header, lookup peer
+      Send StreamHeader              Read header; reset if the sender
+                                       holds no side of the tunnel
                                      Open bi-stream to peer
                                      Write StreamHeader to peer
                                      tokio::join!(
@@ -156,7 +157,8 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
                                      )
 
   3b. UDP: Send datagram ----------->
-      [16B tunnel_id | payload]      Extract UUID, lookup peer
+      [16B tunnel_id | payload]      Extract UUID; drop if the sender
+                                       holds no side of the tunnel
                                      send_datagram() to peer
                                      (best-effort, drop on overflow)
 
@@ -167,6 +169,31 @@ Multiple relays can run behind a load balancer. The only auth state is pre-autho
 ```
 
 No Auth/AuthOk/AuthError exchange on the control stream. Tunnel bind authentication is inline via the `bind_token` field on `TunnelBind`. The manager pre-authorizes tunnels via WebSocket `authorize_tunnel` command before edges connect. If no authorization exists for a tunnel, unauthenticated bind is allowed (backwards compatible). The Hello/HelloAck exchange is optional — it provides version awareness but does not gate access. Unknown message types are gracefully ignored via `read_message_resilient()` (returns `ParsedMessage::Unknown` instead of a deserialization error).
+
+## Who Holds a Side, and Who Is Told
+
+A connection sends into a QUIC tunnel only while it holds one of its two sides, and only as that side. A side belongs to the connection that bound it last. A connection may have up to `max_tunnels_per_connection` (default 100) sides bound: each counts once however often it is bound, both sides of a tunnel count as two, and one taken over by a connection without its token counts on for the older one, which it can go back to (below).
+
+Bind tokens can come after the binds they are for: after a relay restart the edges are back before the manager has registered the tokens again. With `require_bind_auth: false` any bind is taken meanwhile. The relay remembers which token each connection showed, and when the tokens come:
+
+- a connection that showed the right one keeps its side, with no interruption;
+- a side taken from a connection that showed the right one, by one that did not, goes back to it at once (`relay_unproven_holder_replaced`), also when the one that took it has left, or the tunnel is empty;
+- any other holder keeps its side until an edge binds with the token. It may be an edge the manager could not reach to give it a new token, or one that has none.
+
+A connection that another took the side from with the same token does not have it again: that is the same edge on a newer connection, or a clone of it.
+
+The native-UDP plane does the same with an edge's next `Register`, so within 5 s: one that shows the registered token takes the slot from a holder that has not shown it, even while that holder's media would otherwise hold it.
+
+What becomes of a tunnel is told to its edges on streams the relay opens:
+
+| What happened | What the edge is told | What it does |
+|---|---|---|
+| its peer bound | `TunnelReady` | `ready` |
+| its peer disconnected or unbound | `TunnelDown`, reason `peer disconnected` or `peer unbound` | `waiting`; keeps its connection and its bind, and is `ready` again when the peer is back |
+| its own bind was removed (the manager's `close_tunnel`, `DELETE /api/v1/tunnels/{id}`), also if its side had been taken over | `TunnelDown`, any other reason | `down`; binds again on the same connection after 1 s, doubling to 60 s |
+| another connection bound its side | nothing | nothing: it stays `ready`, and is not heard |
+
+Edges up to v0.117.0 read these only while connecting: once up, such an edge stayed `ready` whatever became of its tunnel, and one whose side was removed did not bind it again until its connection ended or it was restarted. An unread message also used up one of the 256 streams the edge allows the relay; with none left the relay spent 5 s on each further one. Any relay release tells a newer edge, and there is no upgrade order.
 
 ## Tunnel State Machine
 
@@ -193,8 +220,9 @@ No Auth/AuthOk/AuthError exchange on the control stream. Tunnel bind authenticat
                                    +-----------+
                                    |           |
                                    |  Cleanup  |-----> TunnelDown
-                                   |           |      (sent to peer)
-                                   +-----------+
+                                   |           |      (sent to peer;
+                                   +-----------+       to both sides
+                                                       if removed)
 ```
 
 ## Data Flow: TCP Tunnel (Non-Blocking)
@@ -309,7 +337,8 @@ recovery stays end-to-end between the edges.
   | Layer 5: Tunnel Isolation                                      |
   |   - Tunnel IDs must be valid UUIDs (v4 random)                 |
   |   - Brute-force discovery infeasible (2^122 search space)      |
-  |   - Data routed only to the bound peer (ingress <-> egress)    |
+  |   - Data taken only from a connection bound to the tunnel, and |
+  |     routed only to the bound peer (ingress <-> egress)         |
   |   - No cross-tunnel data leakage possible via TunnelRouter     |
   +---------------------------------------------------------------+
   | Layer 6: Resource Protection                                   |

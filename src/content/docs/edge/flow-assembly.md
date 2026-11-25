@@ -155,7 +155,7 @@ Each Switch slot picks how `ActivateInput` lands on the wire:
 | `splice_mode` | What happens on Take | When to pick it |
 |---|---|---|
 | `pmt_bump` *(default)* | PMT version bumps mod 32 and DI=1 is armed on the next PCR for the slot's `out_pid`. Receivers re-acquire if the two sources are independent encoders of the same content. Backwards-compatible default — every pre-PES-Switch flow gets this. | When the two legs are unrelated programs (different content) or when receivers are known-tolerant. |
-| `pes_aligned` | Hold the outbound stream at the from-leg's last fully-emitted PES boundary, wait up to `splice_budget_ms` for the to-leg to produce a clean access-unit boundary, then concatenate. Audio splices wait for the next PUSI=1 PES with a monotonically-past PTS; video splices additionally require an H.264 / HEVC IDR. On budget exhaustion the path falls back to `pmt_bump` and emits `pes_splice_timeout`. | When both legs are coherent content (multi-cam program feeds, redundant encodes of the same source) and the receivers must stay glitch-free. |
+| `pes_aligned` | Hold the outbound stream at the from-leg's last fully-emitted PES boundary, wait up to `splice_budget_ms` for the to-leg to produce a clean access-unit boundary, then concatenate. Audio splices wait for the next PUSI=1 PES with a monotonically-past PTS; video splices additionally require an H.264 / HEVC IDR. On budget exhaustion the path falls back to `pmt_bump` and emits `pes_splice_timeout`. | When both legs are coherent content (multi-cam program feeds, redundant encodes of the same source) and the receivers must stay glitch-free. The two inputs must run on [one clock](#clock-check-on-a-programs-inputs): between any others the Take is a `pmt_bump` cut. |
 
 `splice_budget_ms` defaults to 200 ms for audio and 2000 ms for video (≈ one typical broadcast GoP). Range `20..=5000`.
 
@@ -232,9 +232,15 @@ Cross-flow references are scoped to the same node. To share across nodes, use on
 
 ## Clock check on a program's inputs
 
-A program whose slots come from inputs on different clocks would carry time bases that drift apart. At flow start and on every plan swap the edge compares the clock identity of each slot's input within a program, and of every leg of a Switch slot. A mismatch is refused: the flow does not start, or the swap does not apply, with a Critical `pid_bus_master_clock_mismatch` event whose details name both inputs and both clocks. There is no such check on a Take.
+A program that played two inputs on different clocks at the same time would carry time bases that drift apart. At flow start and on every plan swap the edge refuses a program in which two slots can: the flow does not start, or the swap does not apply, with a Critical `pid_bus_master_clock_mismatch` event. Its details name the two slots, the input and clock each would play, and in `take_input_id` the input whose Take would bring them together (`null` when they start together).
 
-The identity is the PTP domain for ST 2110 and MXL inputs, the host clock for WebRTC inputs, and the input itself for every other type, so two SRT inputs never match. Programs of one MPTS are judged apart from each other. Only the flow's own inputs are judged: a Hitless slot, and a slot or leg whose input belongs to another flow, are skipped.
+The legs of a Switch slot are alternatives, so they may be on different clocks. What counts is what a Take leaves on air: a Take to `x` moves every Switch slot with a leg on `x` and leaves the others. A program can switch between two encoders when all its slots are Switch slots with legs on both and start on the same one. It is refused when a slot stays behind: a slot pinned to one of the legs, a Hitless slot, a slot on another flow's input, or a Switch slot without that leg.
+
+A Take between two clocks is a `pmt_bump` cut; `pes_aligned` on the slot or on the Take raises Warning `pes_splice_degraded` with reason `independent_clocks`. The program waits for the new input's first PCR on the slot that carries the program's PCR, normally one PCR interval, so each leg of that slot must be the PID its input sends its PCR on. An input that sends it on another PID leaves the program off air until the next Take, or a plan swap that takes the program's PCR to another input, and after 2 s raises Warning `pid_bus_take_no_pcr`.
+
+The identity is the PTP domain for ST 2110 and MXL inputs, the host clock for WebRTC inputs, and the input itself for every other type, so two SRT inputs never match. Programs of one MPTS are judged apart from each other. Only the flow's own inputs have a known clock: a Hitless slot, and a slot or leg whose input belongs to another flow, is judged only beside a slot that would change clock while it stays. `add_input` of an input the running assembly already has a Switch leg on is refused the same way when a Take to it would mix clocks.
+
+Up to v0.117.0 every leg of a Switch slot was compared as if all played at once, so a program switching between two ordinary inputs did not start.
 
 ## Interaction with output-level PID remap (`pid_map`)
 

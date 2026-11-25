@@ -457,10 +457,12 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | info | Tunnel '{name}' stopped | Tunnel stopped by command or config change |
 | info | Tunnel connected to relay | QUIC connection established and TunnelReady received |
 | warning | Tunnel disconnected from relay: {reason} | QUIC connection lost or forwarder exited |
-| warning | Tunnel peer disconnected: {reason} | Relay reported peer unbound (TunnelDown) |
+| warning | Tunnel peer disconnected: {reason} | The relay says the peer is gone. The connection and this edge's bind stay, and the state is `waiting`. Never raised up to v0.117.0 |
+| warning | Tunnel removed on relay: {reason} | The relay removed this edge's side (the manager's `close_tunnel`, a delete on the relay's REST API). The state is `down`, and the edge binds again on the same connection after 1 s, doubling to 60 s |
+| info | Tunnel ready again | Both sides are bound again, with no new connection. At most four of this and the two above at once per connection, and then one every 30 s; what is held back is raised later as what it has come to. A removed side that is bound again with no peer there raises nothing until the peer is: the state is `waiting` |
 | warning | Tunnel connection to relay failed: {error} | QUIC connect or TLS error |
 | critical | Tunnel '{name}' failed: {error} | Tunnel task exited with fatal error |
-| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed |
+| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed, or no token is registered on a relay with `require_bind_auth`. Tried again after 1 s, doubling to 60 s; raised once for each relay until the tunnel has been up. Never raised up to v0.117.0, where the tunnel stayed `connecting` |
 
 These tunnel events carry a structured `details.error_code`:
 
@@ -541,9 +543,9 @@ Events generated while bringing up, running or hot-swapping an assembled flow (`
 | `pid_bus_spts_stream_type_mismatch` | A slot declares a `stream_type` that disagrees with the `audio_encode` codec the referenced input publishes. Caught in `build_assembly_plan` — **fatal, the flow refuses to start**. | `{ program_number, out_pid, input_id, declared_stream_type, expected_stream_type }` | Match the slot to the input's codec, or drop `stream_type` from the slot. Not to be confused with the runtime `pid_bus_stream_type_mismatch` below, which is a Warning and non-fatal. |
 | `pid_bus_hitless_leg_not_pid` | A `SlotSource::Hitless` leg is neither `Pid` nor `Essence`. | `{ program_number, leg: "primary" \| "backup" }` | Nested Hitless is rejected at config-save time; this fires only if a follow-up variant slips past validation. |
 | `pid_bus_mpts_pcr_source_required` | MPTS program has no effective PCR (neither program-level `pcr_source` nor flow-level fallback). | `{ program_number }` | Config validation also catches this — runtime check is a belt-and-braces guard. |
-| `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
+| `pid_bus_pcr_source_unresolved` | Configured `pcr_source` `(input_id, pid)` doesn't hit any slot in its program (or an Essence-slot's input). Any leg of a Switch slot counts, whichever it starts on. | `{ input_id, pid, program_number }` | Make sure the PCR PID is one of the PIDs you're carrying into the program. |
 
-Of the codes below, the first six fire on a **running** assembled flow, with no command in flight; the last three fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up), where they additionally fail the command:
+Of the codes below, the first seven fire on a **running** assembled flow, with no command in flight; the last three fire on a hot `UpdateFlowAssembly` (and `pid_bus_master_clock_mismatch` also during assembler bring-up and on `add_input`), where they additionally fail the command:
 
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|
@@ -552,8 +554,9 @@ Of the codes below, the first six fire on a **running** assembled flow, with no 
 | `pid_bus_slot_source_closed` | warning | The slot's source input closed underneath the assembler. | `{ error_code, … }` |
 | `pid_bus_stream_type_mismatch` | warning | A slot declares one `stream_type` but the live source PID carries another. Non-fatal — the **PMT is corrected to the source codec** and the slot keeps forwarding bytes. Update the assembly config to clear the warning. | `{ error_code, program_number, out_pid, declared_stream_type, observed_stream_type, source_input_id, source_pid }` |
 | `pid_bus_pid_cap_reached` | warning | The ES bus hit its per-flow PID cap. | `{ error_code, … }` |
+| `pid_bus_take_no_pcr` | warning | A Take moved a program to an input on another clock, and 2 s later no PCR has come on the leg of the slot that carries the program's. The program is held off air from the Take until one does, or until the next Take or a plan swap that takes its PCR to another input. Raised once per Take. | `{ error_code, program_number, out_pid, input_id, source_pid }` |
 | `hitless_seq_aware_leg_unsequenced` | warning | A running `seq_aware` Hitless merger got packets with no upstream sequence number from a leg, so the slot falls back to primary preference. Validation refuses such a leg; this is one that got here regardless. | `{ error_code, slot, leg, input_id, source_pid, fallback, stall_ms }` |
-| `pid_bus_master_clock_mismatch` | critical | The program's members are not co-clocked, so the assembler will not put them in one program. | `{ error_code, … }` |
+| `pid_bus_master_clock_mismatch` | critical | Two slots of one program can play from inputs on different clocks at the same time, at the start or after a Take ([the rule](/edge/flow-assembly/#clock-check-on-a-programs-inputs)). Also raised by an `add_input` refused for it. | `{ error_code, program_number, slot_out_pid, slot_input_id, slot_clock, reference_out_pid, reference_input_id, reference_clock, take_input_id }` |
 | `pid_bus_pcr_source_change_requires_restart` | critical | A hot `UpdateFlowAssembly` moved the PCR source; the change cannot be applied in place. | `{ error_code, … }` |
 | `pid_bus_assembler_unresponsive` | warning | The flow's assembler stalled for 3 s during a plan swap. `awaiting: "queue"`: it took no command, the swap is refused with this code and the flow runs its old plan. `awaiting: "applied"`: it holds the new plan and puts it on air when it resumes, so the plan stands and is saved, and the command fails with `pid_bus_assembly_unconfirmed`. | `{ error_code, awaiting, timeout_ms }` |
 
@@ -566,7 +569,7 @@ How a Take on an assembled flow's Switch slots went. Flow-scoped; `splice_overri
 | Error code | Severity | Trigger | Details payload |
 |---|---|---|---|
 | `pes_splice_completed` | info | A PES-aligned splice committed on the new leg. `kind` is there for video only. | `{ error_code, kind, program_number, out_pid, to_input_id, first_b_pts }` |
-| `pes_splice_degraded` | warning | A PES-aligned splice was asked for and the slot cut with a PMT version bump instead. `reason` is `unsupported_codec`, or `no_aligned_pes_reference` when the outgoing leg has given no PTS yet. `forced` says the mode came from the command. | `{ error_code, reason, forced, stream_type, program_number, out_pid, to_input_id }` |
+| `pes_splice_degraded` | warning | A PES-aligned splice was asked for and the slot cut with a PMT version bump instead. `reason` is `independent_clocks` when the two inputs are not known to run on one clock, `unsupported_codec`, or `no_aligned_pes_reference` when the outgoing leg has given no PTS yet. `forced` says the mode came from the command. | `{ error_code, reason, forced, stream_type, program_number, out_pid, to_input_id }` |
 | `pes_splice_timeout` | warning | The new leg gave no splice point within `splice_budget_ms` (200 ms for audio, 2000 ms for video when unset). The slot cuts with a PMT version bump. `kind` is `audio` or `video`. | `{ error_code, kind, program_number, out_pid, to_input_id }` |
 | `pes_splice_codec_param_mismatch` | warning | The new leg's AAC parameters or SPS differ from the outgoing leg's. The slot cuts with a PMT version bump. | `{ error_code, program_number, out_pid, to_input_id }` with `a_aac_params` and `b_aac_params`, or `kind: "video"` with `a_video_params` and `b_video_params` |
 | `splice_override_ignored` | warning | A per-switch `splice_mode_override` had no effect: the flow has no assembler (`flow_not_assembled`), or the switch re-pinned slot sources (`bus_route_slot_retarget`). | `{ error_code, requested_mode, reason }`, with `new_input_id` for the first |
@@ -947,7 +950,7 @@ The edge declares 36 event-category constants; the full authoritative catalogue 
 | `audio_encode` | Audio encoder lifecycle (in-process fdk-aac / libavcodec + `TsAudioReplacer`) |
 | `video_encode` | In-process video transcoder lifecycle (`TsVideoReplacer`), an interlaced encode that fell back to progressive, and a frame-rate mismatch |
 | `master_clock` | Source-PCR PLL lock-state transitions (fallback to wallclock, recovery) |
-| `tunnel` | Tunnel connection state, a tunnel's gateway route not programmed, and datagrams the kernel dropped |
+| `tunnel` | Tunnel connection state, what the relay says of a tunnel that is up, a tunnel's gateway route not programmed, and datagrams the kernel dropped |
 | `manager` | Manager WebSocket connection |
 | `config` | Configuration changes, deprecated environment variables, repaired or unplayable config values, reserved input ids, gateway-routing bases, restart-required `tuning` pushes |
 | `system_resources` | CPU/RAM threshold monitoring + flow-creation gating + HW encoder/decoder oversubscription + the display path's HW-decode lifecycle |

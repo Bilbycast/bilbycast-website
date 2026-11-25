@@ -52,9 +52,9 @@ The end-to-end encryption protects the **payload**, but it doesn't on its own pr
 3. The manager distributes the secret to both edges.
 4. When an edge binds to the tunnel, it computes the same HMAC and includes it in the `TunnelBind` message as `bind_token`.
 5. The relay compares the bind token to its stored authorisation **with constant-time comparison** (so timing attacks can't recover the secret bit by bit).
-6. Mismatched or missing tokens cause the bind to be rejected with a `TunnelDown` notification, which surfaces to the manager as an event. The edge tries again after 1 s, doubling to 60 s, and raises `Tunnel bind rejected by relay` each time. (Up to edge v0.117.0 it did not read the refusal, and stayed `connecting` until it was restarted.)
+6. Mismatched or missing tokens cause the bind to be rejected with a `TunnelDown` notification, which surfaces to the manager as an event. The edge tries again after 1 s, doubling to 60 s, and raises `Tunnel bind rejected by relay` once for each relay until the tunnel has been up. (Up to edge v0.117.0 it did not read the refusal, and stayed `connecting` until it was restarted.)
 
-To revoke an authorisation, the manager sends `revoke_tunnel`. What is bound or latched already stays, until `close_tunnel` or its own end: the manager sends both when a tunnel is deleted. Subsequent binds are rejected if `require_bind_auth` is on, and taken with any token or none if it is not.
+To revoke an authorisation, the manager sends `revoke_tunnel`. What is bound or latched already stays, until `close_tunnel` or its own end: the manager sends both when a tunnel is deleted. Subsequent binds are rejected if `require_bind_auth` is on, and taken with any token or none if it is not. An edge that the manager could not reach when it deleted the tunnel binds it again about a second later (edges after v0.117.0), and with `require_bind_auth` off it is taken.
 
 ### The permissive default, and what it costs
 
@@ -73,7 +73,7 @@ Two mitigations ship, and neither is a substitute for bind auth:
 When the authorisation does come, it is applied to the binds and registers that came before it. The relay remembers the token each showed:
 
 - An edge that showed the right one keeps its side, with no interruption.
-- A stranger loses a side to the edge it took it from, at once, if that edge had shown the right token and is still connected (QUIC), and to the edge's next `Register`, within 5 s (native). Each raises a Warning `relay_unproven_holder_replaced`.
+- A stranger loses a side to the edge it took it from, at once, if that edge had shown the right token and is still connected (QUIC; also when the stranger has left again), and to the edge's next `Register`, within 5 s (native). Each raises a Warning `relay_unproven_holder_replaced`.
 - A holder that has not shown the right token, while no edge that has is there, keeps the side until one comes. It is not cut off at once because an edge the manager could not reach with a new bind secret, or one that has no bind secret at all, looks the same.
 
 Up to relay v0.20.0 the tokens were not applied to what was already bound: a stranger that took a side in that window kept it for as long as it stayed connected, or on the native plane went on sending.

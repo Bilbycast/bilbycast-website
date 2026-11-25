@@ -199,9 +199,11 @@ curl -H "Authorization: Bearer <token>" \
 
 ### `DELETE /api/v1/tunnels/{id}` (admin, fail-closed)
 
-Force-tears-down a QUIC tunnel: revokes its bind authorisation **and** removes the live tunnel entry, notifying any still-bound peer with `TunnelDown`. This is an administrative escape hatch for orphaned tunnels — the normal teardown path is the manager's `close_tunnel` WebSocket command.
+Force-tears-down a QUIC tunnel: removes the live tunnel entry and notifies its edges with `TunnelDown`. With `require_bind_auth: true` it revokes the tunnel's bind authorisation first. This is an administrative escape hatch for orphaned tunnels — the normal teardown path is the manager's `close_tunnel` WebSocket command.
 
-An edge that still has the tunnel configured binds it again about a second later (edges after v0.117.0), and the tunnel is listed again. With `require_bind_auth: true` that bind is refused until the manager authorises the tunnel again, which it does when the relay reconnects to it. Delete the tunnel on the edge, or in the manager, to be rid of it.
+An edge that still has the tunnel configured binds it again about a second later (edges after v0.117.0), and the tunnel is listed again. With `require_bind_auth: true` that bind is refused until the manager authorises the tunnel again, which it does when the relay reconnects to it. Without, the authorisation stays, and goes on refusing every bind that does not show its token. Delete the tunnel on the edge, or in the manager, to be rid of it.
+
+Up to relay v0.20.0 the authorisation was always revoked. With `require_bind_auth: false` any client may then take a side of the tunnel that its edges have bound again, until the relay next connects to the manager or the tunnel is edited.
 
 **Fail-closed:** this route returns `403` unless `api_token` is configured, regardless of whether a token is presented (a destructive route must never be reachable unauthenticated). Invalid UUID → `400`; unknown tunnel → `404`.
 

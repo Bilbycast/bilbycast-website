@@ -172,13 +172,15 @@ No Auth/AuthOk/AuthError exchange on the control stream. Tunnel bind authenticat
 
 ## Who Holds a Side, and Who Is Told
 
-A connection sends into a QUIC tunnel only while it holds one of its two sides, and only as that side. A side belongs to the connection that bound it last. A connection may have up to `max_tunnels_per_connection` (default 100) sides bound: each counts once however often it is bound, both sides of a tunnel count as two, and a side that another connection has taken over counts until it is unbound or the tunnel is gone.
+A connection sends into a QUIC tunnel only while it holds one of its two sides, and only as that side. A side belongs to the connection that bound it last. A connection may have up to `max_tunnels_per_connection` (default 100) sides bound: each counts once however often it is bound, both sides of a tunnel count as two, and one taken over by a connection without its token counts on for the older one, which it can go back to (below).
 
 Bind tokens can come after the binds they are for: after a relay restart the edges are back before the manager has registered the tokens again. With `require_bind_auth: false` any bind is taken meanwhile. The relay remembers which token each connection showed, and when the tokens come:
 
 - a connection that showed the right one keeps its side, with no interruption;
-- a side taken from a connection that showed the right one, by one that did not, goes back to it at once (`relay_unproven_holder_replaced`);
+- a side taken from a connection that showed the right one, by one that did not, goes back to it at once (`relay_unproven_holder_replaced`), also when the one that took it has left, or the tunnel is empty;
 - any other holder keeps its side until an edge binds with the token. It may be an edge the manager could not reach to give it a new token, or one that has none.
+
+A connection that another took the side from with the same token does not have it again: that is the same edge on a newer connection, or a clone of it.
 
 The native-UDP plane does the same with an edge's next `Register`, so within 5 s: one that shows the registered token takes the slot from a holder that has not shown it, even while that holder's media would otherwise hold it.
 
@@ -188,7 +190,7 @@ What becomes of a tunnel is told to its edges on streams the relay opens:
 |---|---|---|
 | its peer bound | `TunnelReady` | `ready` |
 | its peer disconnected or unbound | `TunnelDown`, reason `peer disconnected` or `peer unbound` | `waiting`; keeps its connection and its bind, and is `ready` again when the peer is back |
-| its own side was removed (the manager's `close_tunnel`, `DELETE /api/v1/tunnels/{id}`) | `TunnelDown`, any other reason | `down`; binds again on the same connection after 1 s, doubling to 60 s |
+| its own bind was removed (the manager's `close_tunnel`, `DELETE /api/v1/tunnels/{id}`), also if its side had been taken over | `TunnelDown`, any other reason | `down`; binds again on the same connection after 1 s, doubling to 60 s |
 | another connection bound its side | nothing | nothing: it stays `ready`, and is not heard |
 
 Edges up to v0.117.0 read these only while connecting: once up, such an edge stayed `ready` whatever became of its tunnel, and one whose side was removed did not bind it again until its connection ended or it was restarted. An unread message also used up one of the 256 streams the edge allows the relay; with none left the relay spent 5 s on each further one. Any relay release tells a newer edge, and there is no upgrade order.

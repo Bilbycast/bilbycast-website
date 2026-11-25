@@ -459,10 +459,10 @@ PLL lock-state transitions for flows whose master clock runs the source-PCR PLL 
 | warning | Tunnel disconnected from relay: {reason} | QUIC connection lost or forwarder exited |
 | warning | Tunnel peer disconnected: {reason} | The relay says the peer is gone. The connection and this edge's bind stay, and the state is `waiting`. Never raised up to v0.117.0 |
 | warning | Tunnel removed on relay: {reason} | The relay removed this edge's side (the manager's `close_tunnel`, a delete on the relay's REST API). The state is `down`, and the edge binds again on the same connection after 1 s, doubling to 60 s |
-| info | Tunnel ready again | The peer is back, or the removed side is bound again, with no new connection. At most four of this and the two above at once per connection, and then one every 30 s; the last says how the tunnel stands |
+| info | Tunnel ready again | Both sides are bound again, with no new connection. At most four of this and the two above at once per connection, and then one every 30 s; what is held back is raised later as what it has come to. A removed side that is bound again with no peer there raises nothing until the peer is: the state is `waiting` |
 | warning | Tunnel connection to relay failed: {error} | QUIC connect or TLS error |
 | critical | Tunnel '{name}' failed: {error} | Tunnel task exited with fatal error |
-| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed, or no token is registered on a relay with `require_bind_auth`. Tried again after 1 s, doubling to 60 s. Never raised up to v0.117.0, where the tunnel stayed `connecting` |
+| critical | Tunnel bind rejected by relay: {reason} | HMAC bind token verification failed, or no token is registered on a relay with `require_bind_auth`. Tried again after 1 s, doubling to 60 s; raised once for each relay until the tunnel has been up. Never raised up to v0.117.0, where the tunnel stayed `connecting` |
 
 These tunnel events carry a structured `details.error_code`:
 

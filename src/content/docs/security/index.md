@@ -116,6 +116,7 @@ All sensitive data is encrypted before storage using **AES-256-GCM**:
 | Visual-editor draft base configs | `base_config_enc` | AES-256-GCM | `kek:config-history` |
 | Visual-editor deployment configs | `desired_config_enc` | AES-256-GCM | `kek:config-history` |
 | AI Configurator thread messages | `content_json_enc` | AES-256-GCM | `kek:ai-thread` |
+| Viewer-distribution relay keys (one per relay) | `key_enc` | AES-256-GCM | `kek:tunnel` |
 | Registration tokens | `registration_token` | HMAC-SHA256 hash (one-way) | `hmac:registration-token` |
 
 The three `kek:config-history` blobs each hold a captured node configuration, which carries flow credentials (SRT passphrases, RTSP/RTMP credentials) inside the blob — that is what the domain is for.

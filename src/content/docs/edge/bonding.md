@@ -310,7 +310,7 @@ source-IP binding plus `ip rule` policy routing instead).
 | Subfield | Meaning |
 |---|---|
 | `tunnel_id` | Required UUID. Both ends must carry the same value — it is what the relay pairs the ingress and egress halves by |
-| `relay_addrs` | Required, ≥ 1 dialable `host:port` — the relay's **native-UDP carrier** port (`4434` by default), not its QUIC port. No duplicates. Extra entries are an ordered failover list the bridge rotates through when a relay goes dead |
+| `relay_addrs` | Required, ≥ 1 dialable `host:port` — the relay's **native-UDP carrier** port (`4434` by default), not its QUIC port. No duplicates. Primary first; only the first two are used. With a backup the leg meets its far end on whichever relay both reach, follows it there, and returns to the primary with it, as a native-UDP tunnel does ([configuration](/edge/configuration/#native-udp-tunnels-and-relayed-bond-legs)), with the 50 ms RTT gate, and each move raises `bond_leg_relay_moved`. Up to v0.117.0, and with relays up to v0.20.0, the leg moves only when its relay stops answering and never back |
 | `tunnel_bind_secret` | Optional 64-hex (32-byte) secret → HMAC-SHA256 bind token in the `Register`, the same auth a native SRT/RIST relay tunnel uses |
 | `tunnel_encryption_key` | Optional 64-hex (32-byte) per-leg tunnel AEAD key — see the encryption rule below |
 | `interface` | Optional NIC pin (1–15 chars) for the leg's outbound relay socket. Same `SO_BINDTODEVICE` → `IP_UNICAST_IF` mechanism as the UDP leg |

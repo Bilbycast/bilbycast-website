@@ -50,6 +50,7 @@ You name the session; the manager names the feed. The **stream id** is derived f
 
 - The proxy rendition's name is **derived, never stored**: `{stream_id}-proxy`. The player, the edge's second output and the relay's token widening each derive it independently, so a stored fourth answer would be one that could disagree with the other three.
 - A stream id is **globally unique**, and that is load-bearing rather than tidy. The relay's origin store is keyed by name and never parses what it holds, so two sessions on one name do not conflict — they interleave, each overwriting the other's manifest, and the result plays as corruption. Two fixtures with the same name is an ordinary thing to want, so the form suffixes (`team-a-vs-team-b-2`) rather than refusing, and shows you the suffix.
+- A session also **claims its stream id on its relay for its group**, with the `-proxy` rendition, as a viewer link does. A name another group holds on that relay, or one live there that nobody holds, is refused (`409 stream_name_owned`, `stream_name_cooling`, `stream_unclaimed_live`); only the relay's owner group claims a live name nobody holds, or assigns it. See [One key per relay, and one group per stream name](/relay/viewer-distribution/#one-key-per-relay-and-one-group-per-stream-name).
 - The indirect collision is caught at **Start**, not at Create: a session whose stream id is `show-proxy` alongside another whose id is `show` is accepted at Create and refused with `stream_collision` at the moment both would be active, because that is the only instant the collision exists. The form steers around it for sessions you can see — the suffixing above treats a derived `-proxy` name as taken too — so what reaches Start is an API caller, or a session in a group you cannot see.
 
 ## The seek-back window
@@ -112,9 +113,10 @@ The origin token gate is **node-wide**. The first active session on a relay turn
 It does **not** reverse when the session stops. A relay the manager has taken responsibility for stays gated, because turning the gate off would briefly open every stream still on disk. Give those consumers a viewer token, or move them to a relay with no DVR sessions.
 :::
 
-Two more behaviours you will meet:
+Three more behaviours you will meet:
 
 - **A relay that restarts comes back holding nothing.** Per-stream overrides are runtime state, not persisted to the relay's own config, so a session that ended while the relay was down cannot come back holding that stream's disk. The manager discards what it believed the relay was holding on reconnect and pushes again.
+- **A session's ingest tokens follow its relay's key.** Each relay signs with a key of its own. When the relay's owner rotates it, running sessions are renewed at once (new ingest tokens on both renditions, a few seconds' gap in each), and during the move off the old shared key they are renewed 15 minutes before its deadline. A session whose edge cannot be reached then is retried every minute (`distribution_dvr_ingest_renew_failed` on the edge).
 - **A push that does not land is reported once, on the transition.** `dvr_retention_push_failed` fires when a relay first refuses or is unreachable, and `dvr_retention_push_recovered` closes it. Alarming every pass would bury the event under 1 440 copies a day.
 
 ## The two renditions
@@ -187,7 +189,7 @@ Right for a one-off guest: no account, revocable, carrying its own entitlement.
 | **Uses** | Counted and timestamped for observability only, never a limit. "Has this link ever been used?" is what makes an unused grant safe to revoke |
 
 :::caution[Revoking a link is not immediate — it takes up to three hours]
-The relay's viewer token is a stateless HMAC with no revocation path, which is the right shape for something checked on every segment request and the wrong shape for "this person may watch this feed". So the long-lived, revocable thing is the grant, and the short-lived, un-revocable thing is what it is exchanged for at the moment of use.
+The relay's viewer token is a stateless HMAC with no revocation path short of rotating the relay's key (which ends every token for that relay), which is the right shape for something checked on every segment request and the wrong shape for "this person may watch this feed". So the long-lived, revocable thing is the grant, and the short-lived, un-revocable thing is what it is exchanged for at the moment of use.
 
 **A viewing link's token TTL is three hours, and that is its revocation latency.** Revoking a grant refuses new viewers at once, but a token already issued stays valid for up to that long, and nothing can recall it. The response to a revoke says so in those terms. (Portal tokens are different — 30 minutes, renewed by the player, so a withdrawn entitlement bites within about 20 minutes; see [One viewing session per login](#one-viewing-session-per-login).)
 :::

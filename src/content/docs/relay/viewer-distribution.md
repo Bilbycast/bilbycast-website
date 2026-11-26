@@ -99,14 +99,19 @@ The **Readiness** panel at the top of the form is a live checklist (secure
 context, routable public IP, token secret, relay online) so you can see whether
 viewers will actually be able to connect before you walk away.
 
-Click **Save + push to relay**. The manager generates a shared token secret (or
-use the one on the Settings page), stores your config, and pushes it to the
-relay. The relay applies it live and remembers it across restarts — you never
+Click **Save + push to relay**. The manager stores your config and pushes it to
+the relay with the key it signs that relay's tokens with, a key of the relay's
+own ([One key per relay](#one-key-per-relay-and-one-group-per-stream-name)). The relay applies it live and remembers it across restarts — you never
 edit the relay's `config.json`. If the relay is momentarily offline the config
 is stored and applied automatically on reconnect (the result line tells you
 which happened). A **Get a viewer link** helper on the same page mints a
 shareable `…/watch/{stream}` link and shows you its expiry so you don't hand out
 a link that stops working before the event.
+
+The public IP, base URL, portal URL and token gates apply to every group that
+uses the relay, so only the relay's owner group sets them; a group with a
+**Manage** share on another group's relay sees them read-only and configures
+only its own cascades.
 
 This tab does not own the whole distribution config. The origin token gate and
 the origin's retention policy have no control here — they are pushed by the
@@ -187,9 +192,9 @@ The relay's HTTP listener is plain HTTP by design and expects a
 TLS-terminating proxy in front — and every default proxy access-log format
 (nginx `$request`, Apache `%r`, HAProxy, ALB, CloudFront) records the full
 request line, query string included. Viewer tokens are stateless with **no
-revocation path** and the manager's default TTL is **6 hours**, so a token
-lifted from a proxy log or from browser history is replayable against a live
-feed for that long. Mint a short `ttl_secs` for query-form links, use the
+revocation path** short of rotating the relay's key, and the manager's default
+TTL is **6 hours**, so a token lifted from a proxy log or from browser history
+is replayable against a live feed for that long. Mint a short `ttl_secs` for query-form links, use the
 `Authorization: Bearer` form for programmatic clients, and strip `token` from
 the query in your proxy's log format if you can.
 :::
@@ -200,6 +205,58 @@ before signing each renewal — so for a portal viewer the short expiry is
 revocation latency rather than a countdown. It does not give a manager-minted
 link token a revocation path; that one stays replayable for its full TTL. See
 [The viewer portal](#the-viewer-portal).
+
+### One key per relay, and one group per stream name
+
+Each distribution relay verifies viewer and ingest tokens with a key of its own,
+which the manager generates for that relay and sends to it alone (manager
+releases after v0.92.0). A token minted for one relay works on no other, and a
+relay box holds nothing that signs for another relay; whoever controls a relay
+box can still sign for every stream on that relay.
+
+A stream name on a relay is one group's. A viewer link, a DVR session and a
+cascade claim the name, with its `-proxy` rendition, for the group they are made
+for, and names are compared lower-cased with every trailing `-proxy` stripped.
+The manager refuses a name another group holds (`409 stream_name_owned`), one
+another group released while tokens it handed out may still work
+(`409 stream_name_cooling`), and a name live on the relay that nobody holds
+(`409 stream_unclaimed_live`): only the relay's owner group claims that, or
+assigns it to another group. A relay after v0.20.0 names the streams live on its
+WHEP hub in its health; on an older one any name nobody holds may be live, so
+there only the owner claims a new name. The owner sees and assigns the names on
+the relay's **Configure → Distribution** tab.
+
+**Rotating the key.** The relay's owner can rotate its key on the same tab
+(**Rotate key**), once the move off the old shared key below has started. Every
+token signed with the old key stops working on that relay. A DVR grant link and
+a portal login mint a fresh one on the next open, so a reload recovers; a link
+from *Get a viewer link*, a WHIP output filled from the relay, a hand-configured
+HLS / CMAF upload and a cascade pulling from the relay need a new token. Running
+DVR sessions are renewed by themselves, with a few seconds' gap in each
+rendition. Rotate when a group loses access to the relay or a credential minted
+for it has leaked.
+
+**Moving off the old shared key.** Up to manager v0.92.0 one installation-wide
+key signed for every relay. The move off it starts by itself once every manager
+instance runs a later release and every viewer-distribution relay runs one that
+keeps the old key beside its own (after v0.20.0, capability `token-keyring`).
+Until then every relay verifies with the shared key as before, and **Settings →
+Viewer Distribution Keys** names each relay the move waits for; a super admin
+can start it there without a relay that is gone for good, which leaves that
+relay on the shared key until it is cut over at the deadline. A relay that
+existed when it started keeps accepting the shared key until a deadline (a day
+where another group could have read or used it, else 30 days), so links and
+encoders minted before keep working until then, and a super admin follows the
+move, and can move the deadline, on the same page. Before the deadline, re-fill
+each WHIP output (*Distribute via a bilbycast relay → Fill from relay*) and save
+it, and re-mint shared links and cascade tokens; DVR sessions renew their own
+ingest credentials 15 minutes ahead. A relay from before per-relay keys keeps
+working on the shared key and is cut over to its own at the deadline. **Upgrade
+every manager instance, then the edges, then the relays**: the manager waits for
+the relays before it moves any key, and edges go before relays so that a relay
+restart never comes under an older edge, which can split a native-UDP tunnel
+with a backup relay. Once the move has started do not run an older manager
+against that database: it pushes the shared key over every relay's own.
 
 ## Browser DVR player
 

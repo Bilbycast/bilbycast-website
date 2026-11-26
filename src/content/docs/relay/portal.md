@@ -1151,8 +1151,9 @@ rather than an inline block.
 ## What a viewing token admits
 
 A viewer token is an HMAC over `(scope, streams, expiry)`, signed by the manager
-with the distribution `token_secret` — one secret, pushed to every distribution
-relay it configures. There is no per-viewer state on the relay,
+with the relay's `token_secret` — a key of that relay's own, pushed to that relay
+alone ([one key per relay](/relay/viewer-distribution/#one-key-per-relay-and-one-group-per-stream-name)).
+There is no per-viewer state on the relay,
 so **the list of streams travels inside the token**:
 
 | Form | Shape |

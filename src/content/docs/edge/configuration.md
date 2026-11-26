@@ -501,7 +501,20 @@ This is how edges after v0.117.0 behave, and both edges of a tunnel should be. A
 
 Tunnel-level failover is not *hitless* — expect a gap of 30 s or more on the tunneled flow during failover. For hitless redundancy within a flow, use SMPTE 2022-7 dual-leg or SRT bonding end-to-end; tunnel-level redundancy only protects against the loss of a relay or of a path to one. A tunnel with a single `relay_addrs` entry has nowhere else to look: while it connects it lets go of the relay after 10 s without its peer, and binds it again after 1 s doubling to 60 s; once it has been up it waits there.
 
-A native-UDP tunnel (`transport: "udp"`), and a relayed bond leg, goes to the next relay when its own has not answered for 25 s. It does not follow its peer, and does not fail back.
+#### Native-UDP tunnels and relayed bond legs
+
+A native-UDP tunnel (`transport: "udp"`) or a relayed bond leg with two relays meets its peer on whichever relay both reach, follows it there, and returns to the primary with it, on edges after v0.117.0 with relays after v0.20.0. It holds a socket on each relay it needs, sends its media on one and reads them all, so what the peer sends by either relay arrives. The loopback socket the local SRT/RIST endpoint talks to, and its port, stay the same through every move.
+
+- **What the relay says.** Each socket registers every 5 s (every second for its first 5 s, for a minute after a refused datagram, and while an answer is late). A relay after v0.20.0 answers each Register with whether the tunnel's other side has been heard there in the last 16 s, and for how long both sides have been heard without a break.
+- **Following.** The edge opens its other relay once the peer has been away from the active relay for 10 s, or that relay has not answered for 10 s, and moves there once the trouble has lasted 8 s and both sides are heard on the other relay. One edge's path to the primary cut puts both on the backup within 35 s.
+- **Holding.** A relay restart of a few seconds, or a 30–75 s outage of one edge's uplink, moves nothing, and media is back within 6 s. A refused datagram (nothing listening while a relay restarts) moves nothing: it only brings the next Register forward.
+- **Failing back.** On the backup the edge keeps a registration on the primary, flagged as standing by. Once both sides have been heard on the primary for 60 s and the RTT gate passes (`max_rtt_failback_increase_ms`; 50 ms on a bond leg), both move back, within about 70 s of the path's return, and nothing is lost as they cross.
+- **Sessions.** While it looks for its peer or stands by, a tunnel holds a session on both of its relays, and each counts against that relay's `max_connections_per_ip`. A relay shows a pair standing by on both sides as `standby`.
+- **Events.** The tunnel reads `waiting` while its relay does not hear the peer (`Tunnel peer disconnected: peer not heard by relay`, then `Tunnel ready again`). Each move raises the Warning `Tunnel failed over to {primary|backup} relay {addr}` with `reason` `relay_silent` or `peer_elsewhere`, and each failback the Info `Tunnel failing back to primary relay {addr}`; a relayed bond leg raises `bond_leg_relay_moved` instead.
+
+**Older releases.** With a relay up to v0.20.0 the edge moves only after 25 s of silence, does not follow its peer and does not fail back, so an outage of about 20 s or more on one edge's path can leave the pair on two relays for good. An edge up to v0.117.0 moves on 25 s of silence or on one refused datagram, and never follows; an upgraded peer follows it within about 35 s of each move, and the pair stays where the older edge went.
+
+**Upgrade order.** Every manager instance, then the edges, then the relays one at a time: the order of the release that brings this. The edges go before the relays because a relay restart under an older edge is what splits a pair, and an upgraded edge rides one out against either relay release. The manager goes before the edges for output on/off, and can go before the relays because it moves a viewer-distribution relay onto a key of its own only once every such relay says it keeps the old key beside its own ([one key per relay](/relay/viewer-distribution/#one-key-per-relay-and-one-group-per-stream-name)): it waits for them.
 
 ### What the Relay Tells an Edge
 
@@ -511,7 +524,7 @@ A QUIC relay tunnel that is up is told by the relay what becomes of it, and foll
 - **This edge's side was removed** (the manager's `close_tunnel`, or a delete on the relay's REST API). The state goes to `down` and the edge binds again on the same connection: after 1 s, and later and later, up to 60 s, if it keeps being removed.
 - **A bind was refused.** The edge raises `Tunnel bind rejected by relay`, and tries again on the next relay in the list, after 1 s doubling to 60 s once each has refused. So a relay with `require_bind_auth` on can come up ahead of the manager's authorisations.
 
-Native-UDP and direct tunnels have no such messages: on the native plane the edge registers again every 5 s whatever the relay holds, and a direct tunnel's connection is its peer.
+A native-UDP relay tunnel learns the same from the answer to each of its Registers, from a relay after v0.20.0: whether the peer has been heard there in the last 16 s, and for how long both sides have been. Its state is `waiting` while the peer is not heard there or the relay does not answer (`Tunnel peer disconnected: peer not heard by relay`, or `relay not heard`), and `ready` again when both are (`Tunnel ready again`). An older relay says only that both sides were latched once, so with one the tunnel is `ready` from then on. The edge registers again every 5 s whatever the relay holds, so a side the relay has cleared is latched again by its next Register. A direct tunnel's connection is its peer.
 
 ---
 

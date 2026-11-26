@@ -238,17 +238,25 @@ for it has leaked.
 
 **Moving off the old shared key.** Up to manager v0.92.0 one installation-wide
 key signed for every relay. The move off it starts by itself once every manager
-instance runs a later release. A relay that existed then keeps accepting the
-shared key until a deadline (a day where another group could have read or used
-it, else 30 days), so links and encoders minted before keep working until then,
-and a super admin follows the move, and can move the deadline, on **Settings →
-Viewer Distribution Keys**. Before the deadline, re-fill each WHIP output
-(*Distribute via a bilbycast relay → Fill from relay*) and save it, and re-mint
-shared links and cascade tokens; DVR sessions renew their own ingest credentials
-15 minutes ahead. A relay from before per-relay keys keeps working on the shared
-key and is cut over to its own at the deadline. **Upgrade the relays first, then
-every manager instance**, and once the move has started do not run an older
-manager against that database: it pushes the shared key over every relay's own.
+instance runs a later release and every viewer-distribution relay runs one that
+keeps the old key beside its own (after v0.20.0, capability `token-keyring`).
+Until then every relay verifies with the shared key as before, and **Settings →
+Viewer Distribution Keys** names each relay the move waits for; a super admin
+can start it there without a relay that is gone for good, which leaves that
+relay on the shared key until it is cut over at the deadline. A relay that
+existed when it started keeps accepting the shared key until a deadline (a day
+where another group could have read or used it, else 30 days), so links and
+encoders minted before keep working until then, and a super admin follows the
+move, and can move the deadline, on the same page. Before the deadline, re-fill
+each WHIP output (*Distribute via a bilbycast relay → Fill from relay*) and save
+it, and re-mint shared links and cascade tokens; DVR sessions renew their own
+ingest credentials 15 minutes ahead. A relay from before per-relay keys keeps
+working on the shared key and is cut over to its own at the deadline. **Upgrade
+every manager instance, then the edges, then the relays**: the manager waits for
+the relays before it moves any key, and edges go before relays so that a relay
+restart never comes under an older edge, which can split a native-UDP tunnel
+with a backup relay. Once the move has started do not run an older manager
+against that database: it pushes the shared key over every relay's own.
 
 ## Browser DVR player
 
